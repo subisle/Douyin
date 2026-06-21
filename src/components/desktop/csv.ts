@@ -60,10 +60,11 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
       complete: (results) => {
         const rows: ParsedRow[] = [];
         for (const row of results.data) {
+          // 支持 主播ID（大uid）和 抖音号（短号）两种格式
           const anchorIdRaw = String(
-            row["抖音号"] ?? row["anchor_id"] ?? row["抖音ID"] ?? ""
+            row["主播ID"] ?? row["抖音号"] ?? row["anchor_id"] ?? row["抖音ID"] ?? ""
           ).trim();
-          const anchorName = String(row["昵称"] ?? row["anchor_name"] ?? row["主播"] ?? "").trim();
+          const anchorName = String(row["主播名"] ?? row["昵称"] ?? row["anchor_name"] ?? row["主播"] ?? "").trim();
           const value =
             kind === "wave"
               ? parseWaveValue(row["音浪"] ?? row["wave_value"])
@@ -78,14 +79,18 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
   });
 }
 
-/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → 前8位匹配） */
+/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → 前8位匹配 → douyinNo 匹配） */
 export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary {
   const byId = new Map<string, AnchorRow>();
   const byFirst8 = new Map<string, AnchorRow>();
+  const byDouyinNo = new Map<string, AnchorRow>();
   for (const a of anchors) {
     if (a.anchorId) {
       byId.set(a.anchorId, a);
       byFirst8.set(a.anchorId.substring(0, 8), a);
+    }
+    if (a.douyinNo) {
+      byDouyinNo.set(a.douyinNo, a);
     }
   }
 
@@ -98,8 +103,10 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
       skipped++;
       continue;
     }
-    const anchor =
-      byId.get(r.anchorIdRaw) || byFirst8.get(r.anchorIdRaw.substring(0, 8));
+    let anchor =
+      byId.get(r.anchorIdRaw) ||
+      byFirst8.get(r.anchorIdRaw.substring(0, 8)) ||
+      byDouyinNo.get(r.anchorIdRaw);
     if (anchor) {
       matched.push({
         anchorId: anchor.anchorId,
