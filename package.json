@@ -1,0 +1,45 @@
+{
+  "name": "douyin",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "electron": "electron .",
+    "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
+    "electron:build": "cross-env ELECTRON=true next build"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^17.4.2",
+    "lucide-react": "^0.513.0",
+    "mysql2": "^3.22.5",
+    "next": "^15.3.4",
+    "papaparse": "^5.5.3",
+    "radix-ui": "^1.6.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "3.8.0",
+    "tailwind-merge": "^3.3.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "^42.4.1",
+    "eslint": "^9",
+    "eslint-config-next": "^15.3.4",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "wait-on": "^9.0.10"
+  }
+}

@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+out/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+.playwright-mcp/
+.shots/
+test-results/
+playwright-report/
+
+# Build info
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Captcha images (large binary files)
+*.png.captcha
+
+# Electron
+electron/dist/
