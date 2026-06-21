@@ -1,19 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { DashboardPage } from "./dashboard-page";
 import { AnchorsPage } from "./anchors-page";
 import { FamilyTreePage } from "./family-tree-page";
-import { ImportPage } from "./import-page";
-import { ExportPage } from "./export-page";
+import { DataPage } from "./data-page";
+import { FlowingFlagCard } from "./flowing-flag-card";
 import { type PageId } from "./types";
 
 export function DesktopShell() {
   const [currentPage, setCurrentPage] = useState<PageId>("datacenter");
   const [collapsed, setCollapsed] = useState(false);
+
+  // 监听来自仪表盘快捷按钮的导航事件
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (e.detail && e.detail !== currentPage) {
+        setCurrentPage(e.detail);
+      }
+    };
+    window.addEventListener("app:navigate", handler as EventListener);
+    return () => window.removeEventListener("app:navigate", handler as EventListener);
+  }, [currentPage]);
 
   return (
     <div className="relative flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
@@ -42,11 +53,11 @@ export function DesktopShell() {
                 <AnchorsPage />
               ) : currentPage === "family-tree" ? (
                 <FamilyTreePage />
-              ) : currentPage === "import" ? (
-                <ImportPage />
-              ) : (
-                <ExportPage />
-              )}
+              ) : currentPage === "data" ? (
+                <DataPage />
+              ) : currentPage === "flag" ? (
+                <FlowingFlagCard />
+              ) : null}
             </main>
           </ScrollArea>
         </div>

@@ -37,16 +37,29 @@ function parseWaveValue(value: unknown): number {
   return isNaN(n) ? NaN : n;
 }
 
-/** 时长分钟：支持 "2:30:45"(时:分:秒) / "150分钟" / "150" */
+/** 时长分钟：支持 "2:30:45"(时:分:秒) / "150分钟" / "150" / "37小时16分钟5秒" / "1小时30分" */
 function parseDuration(value: unknown): number {
   if (typeof value === "number") return value;
   const str = String(value ?? "").trim();
   if (!str) return NaN;
+
+  // 中文格式：X小时Y分钟Z秒
+  const cnMatch = str.match(/(?:(\d+)\s*小时)?(?:(\d+)\s*分[钟]?)?(?:(\d+)\s*秒)?/);
+  if (cnMatch && (cnMatch[1] || cnMatch[2] || cnMatch[3])) {
+    const h = parseInt(cnMatch[1] || "0", 10);
+    const m = parseInt(cnMatch[2] || "0", 10);
+    const s = parseInt(cnMatch[3] || "0", 10);
+    return h * 60 + m + Math.round(s / 60);
+  }
+
+  // 时:分:秒 格式
   if (str.includes(":")) {
     const parts = str.split(":").map((p) => parseInt(p, 10) || 0);
     if (parts.length === 3) return parts[0] * 60 + parts[1] + Math.round(parts[2] / 60);
     if (parts.length === 2) return parts[0] * 60 + parts[1];
   }
+
+  // 纯数字或 "150分钟"
   const n = parseInt(str.replace(/[^\d]/g, ""), 10);
   return isNaN(n) ? NaN : n;
 }
@@ -59,17 +72,32 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
       skipEmptyLines: true,
       complete: (results) => {
         const rows: ParsedRow[] = [];
+        // 列名映射：按优先级尝试多种可能的列名（大小写不敏感）
+        const findCol = (...names: string[]) => {
+          for (const key of Object.keys(results.data[0] ?? {})) {
+            const k = key.trim();
+            if (names.some((n) => k.toLowerCase() === n.toLowerCase())) return key;
+          }
+          return undefined;
+        };
+
         for (const row of results.data) {
-          // 支持 主播ID（大uid）和 抖音号（短号）两种格式
-          const anchorIdRaw = String(
-            row["主播ID"] ?? row["抖音号"] ?? row["anchor_id"] ?? row["抖音ID"] ?? ""
-          ).trim();
-          const anchorName = String(row["主播名"] ?? row["昵称"] ?? row["anchor_name"] ?? row["主播"] ?? "").trim();
+          // 主播 ID：支持「主播id / 主播ID / 抖音号 / 抖音ID / anchor_id / uid」
+          const idCol = findCol("主播id", "主播ID", "抖音号", "抖音ID", "anchor_id", "uid");
+          const anchorIdRaw = String(row[idCol ?? ""] ?? "").trim();
+          // 名称（仅用于展示，不影响匹配）
+          const nameCol = findCol("主播名", "昵称", "主播", "anchor_name", "name");
+          const anchorName = String(row[nameCol ?? ""] ?? "").trim();
+          // 数值列：音浪或时长
+          const valCol = kind === "wave"
+            ? findCol("音浪", "wave_value", "wave", "总音浪")
+            : findCol("时长", "duration", "duration_minutes", "直播时长", "开播有效时长", "有效时长", "开播时长");
           const value =
             kind === "wave"
-              ? parseWaveValue(row["音浪"] ?? row["wave_value"])
-              : parseDuration(row["时长"] ?? row["duration"] ?? row["duration_minutes"]);
-          const rank = parseInt(String(row["排名"] ?? row["rank"] ?? "0"), 10) || 0;
+              ? parseWaveValue(row[valCol ?? ""] ?? "")
+              : parseDuration(row[valCol ?? ""] ?? "");
+          const rankCol = findCol("排名", "rank");
+          const rank = parseInt(String(row[rankCol ?? ""] ?? "0"), 10) || 0;
           rows.push({ anchorIdRaw, anchorName, value, rank });
         }
         resolve(rows);
@@ -79,11 +107,12 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
   });
 }
 
-/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → 前8位匹配 → douyinNo 匹配） */
+/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → 前8位匹配 → douyinNo 匹配 → 名称匹配） */
 export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary {
   const byId = new Map<string, AnchorRow>();
   const byFirst8 = new Map<string, AnchorRow>();
   const byDouyinNo = new Map<string, AnchorRow>();
+  const byName = new Map<string, AnchorRow>();
   for (const a of anchors) {
     if (a.anchorId) {
       byId.set(a.anchorId, a);
@@ -92,6 +121,9 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
     if (a.douyinNo) {
       byDouyinNo.set(a.douyinNo, a);
     }
+    if (a.name) {
+      byName.set(a.name.trim(), a);
+    }
   }
 
   const matched: MatchedRow[] = [];
@@ -99,14 +131,27 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
   let skipped = 0;
 
   for (const r of rows) {
-    if (!r.anchorIdRaw || isNaN(r.value)) {
+    // 清理原始值：去除空格、引号
+    const rawId = r.anchorIdRaw.replace(/["'\s]/g, "");
+    if (!rawId || isNaN(r.value)) {
       skipped++;
       continue;
     }
-    let anchor =
-      byId.get(r.anchorIdRaw) ||
-      byFirst8.get(r.anchorIdRaw.substring(0, 8)) ||
-      byDouyinNo.get(r.anchorIdRaw);
+    let anchor:
+      | AnchorRow
+      | undefined =
+      byId.get(rawId) ||
+      byFirst8.get(rawId.substring(0, 8)) ||
+      byDouyinNo.get(rawId) ||
+      byName.get(r.anchorName.trim());
+    if (!anchor && r.anchorName.trim()) {
+      // 模糊名称匹配：包含关系
+      anchor = anchors.find(
+        (a) =>
+          a.name.includes(r.anchorName.trim()) ||
+          r.anchorName.trim().includes(a.name)
+      );
+    }
     if (anchor) {
       matched.push({
         anchorId: anchor.anchorId,
@@ -116,7 +161,7 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
       });
     } else {
       unmatched.push({
-        anchorIdRaw: r.anchorIdRaw,
+        anchorIdRaw: rawId,
         anchorName: r.anchorName,
         value: r.value,
       });

@@ -3,16 +3,16 @@ import {
   LayoutDashboard,
   Network,
   Users,
-  Upload,
-  Download,
+  Database,
+  Flag,
 } from "lucide-react";
 
 export type PageId =
   | "datacenter"
   | "family-tree"
   | "anchors"
-  | "import"
-  | "export";
+  | "data"
+  | "flag";
 
 export interface NavItem {
   id: PageId;
@@ -41,15 +41,15 @@ export const NAV_ITEMS: NavItem[] = [
     description: "主播档案管理",
   },
   {
-    id: "import",
-    label: "导入数据",
-    icon: Upload,
-    description: "导入音浪 / 时长",
+    id: "data",
+    label: "导入导出",
+    icon: Database,
+    description: "数据导入与 CSV 导出",
   },
   {
-    id: "export",
-    label: "导出数据",
-    icon: Download,
-    description: "导出 CSV 报表",
+    id: "flag",
+    label: "流动红旗",
+    icon: Flag,
+    description: "师徒小组音浪时长对比",
   },
 ];

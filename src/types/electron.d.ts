@@ -88,6 +88,55 @@ declare global {
       date?: string
     ) => Promise<IpcResult<Record<string, string | number>[]>>;
     exportAnchors: () => Promise<IpcResult<Record<string, string | number>[]>>;
+    addAnchor: (payload: {
+      name: string;
+      gender: string;
+      anchorId: string;
+      anchorName?: string;
+      douyinNo?: string;
+    }) => Promise<IpcResult<{ id: number }>>;
+    mergeAccounts: (payload: {
+      primaryPersonId: number;
+      secondaryPersonId: number;
+    }) => Promise<IpcResult<{ moved: number }>>;
+    getWaveTrendTotal: () => Promise<IpcResult<TrendPoint[]>>;
+    getAnchorCountTrend: () => Promise<IpcResult<TrendPoint[]>>;
+    updateAnchorName: (payload: {
+      personId: number;
+      name: string;
+    }) => Promise<IpcResult<{ ok: boolean }>>;
+    getAnchorWaveTrend: (
+      anchorId: string
+    ) => Promise<IpcResult<{ date: string; total: number; rank: number }[]>>;
+    getAnchorsWaveTrend: (
+      anchorIds: string[]
+    ) => Promise<
+      IpcResult<
+        {
+          anchorId: string;
+          name: string;
+          data: { date: string; total: number; rank: number }[];
+        }[]
+      >
+    >;
+    getFlowingFlag: (
+      personId: number
+    ) => Promise<
+      IpcResult<{
+        master: { id: number; name: string } | null;
+        members: {
+          id: number;
+          name: string;
+          gender: string;
+          anchorId: string;
+          wave: number;
+          duration: number;
+        }[];
+        avgWave: number;
+        avgDuration: number;
+        count: number;
+      }>
+    >;
   }
 
   interface Window {

@@ -24,4 +24,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   exportWave: (date) => ipcRenderer.invoke("data:exportWave", date),
   exportDuration: (date) => ipcRenderer.invoke("data:exportDuration", date),
   exportAnchors: () => ipcRenderer.invoke("data:exportAnchors"),
+  addAnchor: (payload) => ipcRenderer.invoke("data:addAnchor", payload),
+  mergeAccounts: (payload) => ipcRenderer.invoke("data:mergeAccounts", payload),
+  getWaveTrendTotal: () => ipcRenderer.invoke("data:getWaveTrendTotal"),
+  getAnchorCountTrend: () => ipcRenderer.invoke("data:getAnchorCountTrend"),
+  updateAnchorName: (payload) => ipcRenderer.invoke("data:updateAnchorName", payload),
+  getAnchorWaveTrend: (anchorId) => ipcRenderer.invoke("data:getAnchorWaveTrend", anchorId),
+  getAnchorsWaveTrend: (anchorIds) => ipcRenderer.invoke("data:getAnchorsWaveTrend", anchorIds),
+  getFlowingFlag: (personId) => ipcRenderer.invoke("data:getFlowingFlag", personId),
 });

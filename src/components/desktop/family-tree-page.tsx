@@ -248,13 +248,6 @@ function LineageCard({ root }: { root: TreeNode }) {
 }
 
 function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
-  const genLabel =
-    node.generation == null
-      ? null
-      : node.generation === 0
-        ? "祖师"
-        : `${node.generation}代`;
-
   return (
     <div className="flex size-full select-none flex-col items-center justify-center gap-0.5 text-center">
       <div className="flex items-center gap-1">
@@ -273,9 +266,6 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
         </span>
       </div>
       <div className="flex items-center gap-1 leading-none">
-        {genLabel && (
-          <span className="text-[10px] text-muted-foreground">{genLabel}</span>
-        )}
         {node.children.length > 0 && (
           <span className="text-[10px] text-muted-foreground">
             · {node.children.length}徒

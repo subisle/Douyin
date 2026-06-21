@@ -15,9 +15,9 @@ function getPool() {
     pool = mysql.createPool({
       host: process.env.DB_HOST || "mysql7.sqlpub.com",
       port: Number(process.env.DB_PORT) || 3312,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
+      user: process.env.DB_USER || "douyinxs",
+      password: process.env.DB_PASSWORD || "WABZfpfGGlPSxlrs",
+      database: process.env.DB_NAME || "douyinxs",
       waitForConnections: true,
       connectionLimit: 5,
       connectTimeout: 10000,
@@ -337,6 +337,311 @@ async function exportAnchors() {
   }));
 }
 
+/**
+ * 添加主播：同时创建 person 和主账号。
+ */
+async function addAnchor({ name, gender, anchorId, anchorName, douyinNo }) {
+  if (!name || !anchorId) throw new Error("主播姓名和抖音ID不能为空");
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [pRes] = await conn.query(
+      "INSERT INTO persons (name, gender, master_id, generation, created_at, updated_at) VALUES (?, ?, NULL, NULL, NOW(), NOW())",
+      [name, gender || ""]
+    );
+    const personId = pRes.insertId;
+    await conn.query(
+      "INSERT INTO accounts (person_id, anchor_id, anchor_name, douyin_no, is_primary, created_at) VALUES (?, ?, ?, ?, 1, NOW())",
+      [personId, anchorId, anchorName || name, douyinNo || ""]
+    );
+    await conn.commit();
+    return { id: personId };
+  } catch (err) {
+    await conn.rollback();
+    if (err.code === "ER_DUP_ENTRY") throw new Error("抖音ID已存在");
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 合并账号：把 secondary 主播的所有账号迁移到 primary 主播名下，并删除 secondary 的 person 记录。
+ */
+async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
+  if (!primaryPersonId || !secondaryPersonId) throw new Error("请选择要合并的两个主播");
+  if (Number(primaryPersonId) === Number(secondaryPersonId)) throw new Error("不能合并同一个主播");
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [secAccounts] = await conn.query(
+      "SELECT id FROM accounts WHERE person_id = ?",
+      [secondaryPersonId]
+    );
+    if (secAccounts.length === 0) throw new Error("被合并的主播没有账号");
+    for (const acc of secAccounts) {
+      await conn.query(
+        "UPDATE accounts SET person_id = ?, is_primary = 0 WHERE id = ?",
+        [primaryPersonId, acc.id]
+      );
+    }
+    // 确保主账号仍然存在
+    const [primaryAccounts] = await conn.query(
+      "SELECT id FROM accounts WHERE person_id = ? ORDER BY id LIMIT 1",
+      [primaryPersonId]
+    );
+    if (primaryAccounts.length > 0) {
+      await conn.query(
+        "UPDATE accounts SET is_primary = 1 WHERE id = ?",
+        [primaryAccounts[0].id]
+      );
+    }
+    await conn.query("DELETE FROM persons WHERE id = ?", [secondaryPersonId]);
+    await conn.commit();
+    return { moved: secAccounts.length };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 总音浪趋势：每个导入日的全部音浪总和（不分性别）。
+ */
+async function getWaveTrendTotal() {
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT w.import_date AS date, COALESCE(SUM(w.wave_value),0) AS total
+       FROM wave_snapshots w
+      GROUP BY w.import_date
+      ORDER BY w.import_date ASC`
+  );
+  const fmt = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  return rows.map((r) => ({ date: fmt(r.date), total: Number(r.total) || 0 }));
+}
+
+/**
+ * 主播人数趋势：每个导入日有音浪数据的主播数（去重）。
+ */
+async function getAnchorCountTrend() {
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT w.import_date AS date, COUNT(DISTINCT w.anchor_id) AS cnt
+       FROM wave_snapshots w
+      GROUP BY w.import_date
+      ORDER BY w.import_date ASC`
+  );
+  const fmt = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  return rows.map((r) => ({ date: fmt(r.date), total: Number(r.cnt) || 0 }));
+}
+
+/**
+ * 更新主播姓名（同时更新 persons.name 和 accounts.anchor_name）。
+ */
+async function updateAnchorName({ personId, name }) {
+  if (!personId || !name) throw new Error("参数不完整");
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query(
+      "UPDATE persons SET name = ?, updated_at = NOW() WHERE id = ?",
+      [name.trim(), personId]
+    );
+    await conn.query(
+      "UPDATE accounts SET anchor_name = ? WHERE person_id = ? AND is_primary = 1",
+      [name.trim(), personId]
+    );
+    await conn.commit();
+    return { ok: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 单个主播音浪趋势：按 anchor_id 查询每个导入日的音浪值。
+ * anchorId 可选，不传则返回空。
+ */
+async function getAnchorWaveTrend(anchorId) {
+  if (!anchorId) return [];
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT import_date AS date, wave_value AS total, \`rank\`
+       FROM wave_snapshots
+      WHERE anchor_id = ?
+      ORDER BY import_date ASC`,
+    [anchorId]
+  );
+  const fmt = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  return rows.map((r) => ({
+    date: fmt(r.date),
+    total: Number(r.total) || 0,
+    rank: Number(r.rank) || 0,
+  }));
+}
+
+/**
+ * 多个主播音浪趋势：按 anchor_id 列表查询每个导入日每个主播的音浪值。
+ * 返回 [{ anchorId, name, data: [{date, total, rank}] }]
+ */
+async function getAnchorsWaveTrend(anchorIds) {
+  if (!anchorIds || anchorIds.length === 0) return [];
+  const db = getPool();
+  const placeholders = anchorIds.map(() => "?").join(",");
+  const [rows] = await db.query(
+    `SELECT w.anchor_id, COALESCE(a.anchor_name, p.name) AS name,
+            w.import_date AS date, w.wave_value AS total, w.\`rank\`
+       FROM wave_snapshots w
+       LEFT JOIN accounts a ON a.anchor_id = w.anchor_id
+       LEFT JOIN persons p ON p.id = a.person_id
+      WHERE w.anchor_id IN (${placeholders})
+      ORDER BY w.import_date ASC`,
+    anchorIds
+  );
+  const fmt = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.anchor_id;
+    if (!map.has(key)) {
+      map.set(key, { anchorId: key, name: r.name || key, data: [] });
+    }
+    map.get(key).data.push({
+      date: fmt(r.date),
+      total: Number(r.total) || 0,
+      rank: Number(r.rank) || 0,
+    });
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * 流动红旗：给定一个 personId（师傅），返回他 + 他所有徒弟的最新音浪和时长快照平均值。
+ * 返回 { master: {id,name}, members: [{id,name,anchorId,wave,duration}], avgWave, avgDuration, count }
+ */
+async function getFlowingFlag(personId) {
+  const db = getPool();
+
+  // 1. 查师傅本人 + 他所有徒弟（仅男团，gender = 'male'）
+  const [persons] = await db.query(
+    `SELECT id, name, gender FROM persons
+      WHERE (id = ? OR master_id = ?) AND gender = 'male'
+      ORDER BY (id = ?) DESC, id ASC`,
+    [personId, personId, personId]
+  );
+
+  if (!persons || persons.length === 0) {
+    return {
+      master: null,
+      members: [],
+      avgWave: 0,
+      avgDuration: 0,
+      count: 0,
+    };
+  }
+
+  // 2. 查这些人对应的 accounts（anchor_id）
+  const personIds = persons.map((p) => p.id);
+  const placeholders = personIds.map(() => "?").join(",");
+  const [accounts] = await db.query(
+    `SELECT id, person_id, anchor_id, anchor_name FROM accounts
+      WHERE person_id IN (${placeholders})`,
+    personIds
+  );
+
+  const anchorByPerson = new Map(); // personId -> { anchorId, anchorName }
+  for (const a of accounts) {
+    anchorByPerson.set(a.person_id, {
+      anchorId: a.anchor_id,
+      anchorName: a.anchor_name,
+    });
+  }
+
+  // 3. 查最新一批音浪快照
+  const anchorIds = Array.from(anchorByPerson.values())
+    .map((a) => a.anchorId)
+    .filter(Boolean);
+  let waveMap = new Map(); // anchorId -> wave_value
+  let durationMap = new Map(); // anchorId -> duration_minutes
+
+  if (anchorIds.length > 0) {
+    const aPlaceholders = anchorIds.map(() => "?").join(",");
+
+    // 最新导入日期
+    const [latestDate] = await db.query(
+      `SELECT MAX(import_date) AS latest FROM wave_snapshots WHERE anchor_id IN (${aPlaceholders})`,
+      anchorIds
+    );
+    const latestWaveDate = latestDate[0]?.latest;
+
+    if (latestWaveDate) {
+      const [waveRows] = await db.query(
+        `SELECT anchor_id, wave_value FROM wave_snapshots
+          WHERE anchor_id IN (${aPlaceholders}) AND import_date = ?`,
+        [...anchorIds, latestWaveDate]
+      );
+      for (const r of waveRows) {
+        waveMap.set(r.anchor_id, Number(r.wave_value) || 0);
+      }
+    }
+
+    // 最新时长快照
+    const [latestDurDate] = await db.query(
+      `SELECT MAX(import_date) AS latest FROM duration_snapshots WHERE anchor_id IN (${aPlaceholders})`,
+      anchorIds
+    );
+    const latestDurDateRaw = latestDurDate[0]?.latest;
+
+    if (latestDurDateRaw) {
+      const [durRows] = await db.query(
+        `SELECT anchor_id, duration_minutes FROM duration_snapshots
+          WHERE anchor_id IN (${aPlaceholders}) AND import_date = ?`,
+        [...anchorIds, latestDurDateRaw]
+      );
+      for (const r of durRows) {
+        durationMap.set(r.anchor_id, Number(r.duration_minutes) || 0);
+      }
+    }
+  }
+
+  // 4. 组装成员数据
+  const members = persons.map((p) => {
+    const acc = anchorByPerson.get(p.id);
+    const anchorId = acc?.anchorId || "";
+    return {
+      id: p.id,
+      name: p.name,
+      gender: p.gender,
+      anchorId,
+      wave: anchorId ? (waveMap.get(anchorId) ?? 0) : 0,
+      duration: anchorId ? (durationMap.get(anchorId) ?? 0) : 0,
+    };
+  });
+
+  const count = members.length;
+  const totalWave = members.reduce((s, m) => s + m.wave, 0);
+  const totalDuration = members.reduce((s, m) => s + m.duration, 0);
+
+  return {
+    master: { id: personId, name: persons[0]?.name || "" },
+    members,
+    avgWave: count > 0 ? Math.round(totalWave / count) : 0,
+    avgDuration: count > 0 ? Math.round(totalDuration / count) : 0,
+    count,
+  };
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -349,4 +654,12 @@ module.exports = {
   exportWaveSnapshots,
   exportDurationSnapshots,
   exportAnchors,
+  addAnchor,
+  mergeAccounts,
+  getWaveTrendTotal,
+  getAnchorCountTrend,
+  updateAnchorName,
+  getAnchorWaveTrend,
+  getAnchorsWaveTrend,
+  getFlowingFlag,
 };

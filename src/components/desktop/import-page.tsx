@@ -106,13 +106,11 @@ export function ImportPage() {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* 配置区 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">导入设置</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-5">
+      <div className="space-y-5">
+        <h3 className="text-lg font-semibold">数据导入</h3>
+        <div className="flex flex-wrap items-end gap-4">
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">数据类型</label>
             <div className="flex gap-2">
@@ -124,7 +122,7 @@ export function ImportPage() {
                     reset();
                   }}
                   className={cn(
-                    "rounded-full px-5 py-1.5 text-sm font-medium transition-colors",
+                    "rounded-full px-6 py-2 text-sm font-medium transition-colors",
                     kind === k
                       ? "bg-primary text-primary-foreground shadow-sm"
                       : "border border-border bg-card text-muted-foreground hover:text-foreground"
@@ -150,7 +148,7 @@ export function ImportPage() {
             <label className="text-sm font-medium text-foreground">
               CSV 文件
               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                需含列：抖音号、昵称、{kind === "wave" ? "音浪、排名" : "时长"}
+                需含列：主播id（或 抖音号/抖音ID）、{kind === "wave" ? "音浪" : "时长"}
               </span>
             </label>
             <input
@@ -165,19 +163,21 @@ export function ImportPage() {
             />
             <Button
               variant="outline"
+              size="lg"
               onClick={() => fileRef.current?.click()}
               disabled={parsing}
+              className="gap-2 min-w-[180px]"
             >
               {parsing ? (
-                <Loader2 className="size-4 animate-spin" />
+                <Loader2 className="size-5 animate-spin" />
               ) : (
-                <FileUp className="size-4" />
+                <FileUp className="size-5" />
               )}
               {fileName || "选择 CSV 文件"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {error && (
         <Card className="border-destructive/40">
@@ -204,36 +204,38 @@ export function ImportPage() {
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">匹配预览</CardTitle>
               <div className="flex gap-2">
-                <Badge className="bg-chart-2/15 text-chart-2 hover:bg-chart-2/15">
+                <Badge className="bg-chart-2/15 text-chart-2 hover:bg-chart-2/15 text-sm px-3 py-1">
                   匹配 {summary.matched.length}
                 </Badge>
                 {summary.unmatched.length > 0 && (
-                  <Badge variant="destructive">
+                  <Badge variant="destructive" className="text-sm px-3 py-1">
                     未匹配 {summary.unmatched.length}
                   </Badge>
                 )}
                 {summary.skipped > 0 && (
-                  <Badge variant="outline">跳过 {summary.skipped}</Badge>
+                  <Badge variant="outline" className="text-sm px-3 py-1">跳过 {summary.skipped}</Badge>
                 )}
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-5">
             <PreviewTable kind={kind} summary={summary} />
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4 pt-2">
               <Button
                 onClick={onSubmit}
                 disabled={submitting || summary.matched.length === 0}
+                size="lg"
+                className="gap-2 min-w-[160px]"
               >
                 {submitting ? (
-                  <Loader2 className="size-4 animate-spin" />
+                  <Loader2 className="size-5 animate-spin" />
                 ) : (
-                  <Upload className="size-4" />
+                  <Upload className="size-5" />
                 )}
                 确认导入 {summary.matched.length} 条
               </Button>
-              <Button variant="ghost" onClick={reset} disabled={submitting}>
+              <Button variant="outline" size="lg" onClick={reset} disabled={submitting}>
                 取消
               </Button>
             </div>

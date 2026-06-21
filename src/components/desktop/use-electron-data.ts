@@ -62,5 +62,12 @@ export function useElectronData<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonce, ...deps]);
 
+  // 监听全局刷新事件
+  useEffect(() => {
+    const handler = () => reload();
+    window.addEventListener("app:refresh", handler);
+    return () => window.removeEventListener("app:refresh", handler);
+  }, [reload]);
+
   return { data, loading, error, unavailable, reload };
 }

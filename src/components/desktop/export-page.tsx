@@ -65,44 +65,42 @@ export function ExportPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">导出数据</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
-          {OPTIONS.map((opt) => {
-            const Icon = opt.icon;
-            return (
-              <div
-                key={opt.kind}
-                className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-4"
-              >
-                <div className="flex size-10 items-center justify-center rounded-xl bg-secondary text-secondary-foreground">
-                  <Icon className="size-5" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium text-foreground">{opt.label}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{opt.desc}</p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onExport(opt)}
-                  disabled={busy !== null}
-                >
-                  {busy === opt.kind ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Download className="size-4" />
-                  )}
-                  导出 CSV
-                </Button>
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold">数据导出</h3>
+
+      <div className="grid gap-5 sm:grid-cols-3">
+        {OPTIONS.map((opt) => {
+          const Icon = opt.icon;
+          return (
+            <div
+              key={opt.kind}
+              className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-card p-6 text-center"
+            >
+              <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
+                <Icon className="size-7" />
               </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+              <div>
+                <p className="font-semibold text-foreground">{opt.label}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{opt.desc}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => onExport(opt)}
+                disabled={busy !== null}
+                className="w-full gap-2"
+              >
+                {busy === opt.kind ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : (
+                  <Download className="size-5" />
+                )}
+                导出 CSV
+              </Button>
+            </div>
+          );
+        })}
+      </div>
 
       {msg && (
         <Card className="border-chart-2/40">

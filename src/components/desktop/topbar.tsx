@@ -5,9 +5,7 @@ import {
   GitMerge,
   Minus,
   RefreshCw,
-  Shield,
   Square,
-  Upload,
   UserPlus,
   X,
 } from "lucide-react";
@@ -57,23 +55,29 @@ export function Topbar({ currentPage }: TopbarProps) {
       <div className="app-no-drag flex items-center gap-3">
         {currentPage === "anchors" && (
           <div className="hidden items-center gap-2 md:flex">
-            <Button size="sm" className="rounded-full">
+            <Button
+              size="sm"
+              className="rounded-full"
+              onClick={() => window.dispatchEvent(new CustomEvent("anchors:openAdd"))}
+            >
               <UserPlus className="size-4" />
               添加主播
             </Button>
-            <Button size="sm" variant="outline" className="rounded-full">
-              <Upload className="size-4" />
-              批量导入
-            </Button>
-            <Button size="sm" variant="outline" className="rounded-full">
-              <Shield className="size-4" />
-              PK名单
-            </Button>
-            <Button size="sm" variant="outline" className="rounded-full">
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => window.dispatchEvent(new CustomEvent("anchors:openMerge"))}
+            >
               <GitMerge className="size-4" />
               账号合并
             </Button>
-            <Button size="sm" variant="outline" className="rounded-full">
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => window.dispatchEvent(new CustomEvent("app:refresh"))}
+            >
               <RefreshCw className="size-4" />
               同步数据
             </Button>

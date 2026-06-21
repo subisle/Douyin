@@ -106,3 +106,29 @@ ipcMain.handle(
   wrap((date) => db.exportDurationSnapshots(date))
 );
 ipcMain.handle("data:exportAnchors", wrap(() => db.exportAnchors()));
+ipcMain.handle("data:addAnchor", wrap((payload) => db.addAnchor(payload)));
+ipcMain.handle(
+  "data:mergeAccounts",
+  wrap((payload) => db.mergeAccounts(payload))
+);
+ipcMain.handle("data:getWaveTrendTotal", wrap(() => db.getWaveTrendTotal()));
+ipcMain.handle(
+  "data:getAnchorCountTrend",
+  wrap(() => db.getAnchorCountTrend())
+);
+ipcMain.handle(
+  "data:updateAnchorName",
+  wrap((payload) => db.updateAnchorName(payload))
+);
+ipcMain.handle(
+  "data:getAnchorWaveTrend",
+  wrap((anchorId) => db.getAnchorWaveTrend(anchorId))
+);
+ipcMain.handle(
+  "data:getAnchorsWaveTrend",
+  wrap((anchorIds) => db.getAnchorsWaveTrend(anchorIds))
+);
+ipcMain.handle(
+  "data:getFlowingFlag",
+  wrap((personId) => db.getFlowingFlag(personId))
+);
