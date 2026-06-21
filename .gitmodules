@@ -1,0 +1,4 @@
+[submodule "DouyinLang"]
+	path = DouyinLang
+	url = https://github.com/subisle/DouyinLang.git
+	branch = Desktop
