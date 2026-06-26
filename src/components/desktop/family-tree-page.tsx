@@ -1,20 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Crown } from "lucide-react";
+import { Crown, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useElectronData } from "./use-electron-data";
 import type { FamilyNode } from "@/types/electron";
+import { exportElementAsImage } from "./export-image";
 import {
   BrowserModeState,
   EmptyState,
   ErrorState,
   LoadingState,
 } from "./states";
-
-type GenderView = "male" | "female";
 
 interface TreeNode extends FamilyNode {
   children: TreeNode[];
@@ -98,7 +97,6 @@ export function FamilyTreePage() {
   const { data, loading, error, unavailable, reload } = useElectronData((api) =>
     api.getFamilyTree()
   );
-  const [view, setView] = useState<GenderView>("male");
 
   const tree = useMemo(() => (data ? buildTree(data) : []), [data]);
   const lineages = tree.filter((n) => n.children.length > 0);
@@ -108,16 +106,15 @@ export function FamilyTreePage() {
   if (error || !data)
     return <Wrap><ErrorState message={error ?? "加载失败"} onRetry={reload} /></Wrap>;
 
-  const root = lineages.find((n) => n.gender === view);
+  const root = lineages.find((n) => n.gender === "male");
 
   return (
     <div className="space-y-4">
-      <GenderSwitch view={view} onChange={setView} />
       {root ? (
         <LineageCard key={root.id} root={root} />
       ) : (
         <Wrap>
-          <EmptyState label={`暂无${view === "male" ? "男" : "女"}队族谱`} />
+          <EmptyState label="暂无男队族谱" />
         </Wrap>
       )}
     </div>
@@ -132,41 +129,12 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
-function GenderSwitch({
-  view,
-  onChange,
-}: {
-  view: GenderView;
-  onChange: (v: GenderView) => void;
-}) {
-  const tabs: { id: GenderView; label: string }[] = [
-    { id: "male", label: "男队" },
-    { id: "female", label: "女队" },
-  ];
-  return (
-    <div className="inline-flex rounded-full border border-border bg-card p-1">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          onClick={() => onChange(t.id)}
-          className={cn(
-            "rounded-full px-5 py-1.5 text-sm font-medium transition-colors",
-            view === t.id
-              ? "bg-primary text-primary-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function LineageCard({ root }: { root: TreeNode }) {
   const { placed, edges, width, height } = useMemo(() => layout(root), [root]);
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+  const [exporting, setExporting] = useState(false);
 
   // 自动缩放：让整棵树宽度刚好放进容器，窗口变化时自动重算
   useEffect(() => {
@@ -183,22 +151,49 @@ function LineageCard({ root }: { root: TreeNode }) {
     return () => ro.disconnect();
   }, [width]);
 
+  const handleExport = async () => {
+    if (!contentRef.current || exporting) return;
+    setExporting(true);
+    try {
+      await exportElementAsImage(contentRef.current, `族谱-${root.name}.png`, {
+        width,
+        height,
+        style: { transform: "none" },
+      });
+    } catch (e) {
+      console.error("导出失败", e);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Crown className="size-4 text-primary" />
-          {root.name} 一脉
-          <Badge variant="secondary" className="ml-1">
-            {root.descendantCount} 名后辈
-          </Badge>
-        </CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Crown className="size-4 text-primary" />
+            {root.name} 一脉
+            <Badge variant="secondary" className="ml-1">
+              {root.descendantCount} 名后辈
+            </Badge>
+          </CardTitle>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+          >
+            <Download className="size-4" />
+            {exporting ? "导出中…" : "导出图片"}
+          </button>
+        </div>
       </CardHeader>
       <CardContent>
         <div ref={containerRef} className="w-full overflow-hidden">
           {/* 缩放后占位高度，避免底部留白 */}
           <div style={{ height: height * scale }}>
             <div
+              ref={contentRef}
               className="relative origin-top-left bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:22px_22px]"
               style={{
                 width,

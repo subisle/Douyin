@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Network,
   Users,
+  FileText,
   Database,
   Flag,
 } from "lucide-react";
@@ -42,9 +43,9 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "data",
-    label: "导入导出",
+    label: "数据与报告",
     icon: Database,
-    description: "数据导入与 CSV 导出",
+    description: "每日报告、导入与导出",
   },
   {
     id: "flag",

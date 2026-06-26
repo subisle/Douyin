@@ -107,9 +107,18 @@ ipcMain.handle(
 );
 ipcMain.handle("data:exportAnchors", wrap(() => db.exportAnchors()));
 ipcMain.handle("data:addAnchor", wrap((payload) => db.addAnchor(payload)));
+ipcMain.handle("data:batchImportAnchors", wrap((rows) => db.batchImportAnchors(rows)));
 ipcMain.handle(
   "data:mergeAccounts",
   wrap((payload) => db.mergeAccounts(payload))
+);
+ipcMain.handle(
+  "data:deleteAnchors",
+  wrap((personIds) => db.deleteAnchors(personIds))
+);
+ipcMain.handle(
+  "data:findDuplicateAnchors",
+  wrap(() => db.findDuplicateAnchors())
 );
 ipcMain.handle("data:getWaveTrendTotal", wrap(() => db.getWaveTrendTotal()));
 ipcMain.handle(
@@ -131,4 +140,21 @@ ipcMain.handle(
 ipcMain.handle(
   "data:getFlowingFlag",
   wrap((personId) => db.getFlowingFlag(personId))
+);
+ipcMain.handle(
+  "data:getFlagGroups",
+  wrap((period) => db.getFlagGroups(period))
+);
+ipcMain.handle(
+  "data:settleFlagScores",
+  wrap((period) => db.settleFlagScores(period))
+);
+ipcMain.handle("data:getTierRules", wrap(() => db.getTierRules()));
+ipcMain.handle(
+  "data:saveTierRules",
+  wrap((rules) => db.saveTierRules(rules))
+);
+ipcMain.handle(
+  "data:getDailyWaveReport",
+  wrap((date, gender) => db.getDailyWaveReport(date, gender))
 );

@@ -367,6 +367,54 @@ async function addAnchor({ name, gender, anchorId, anchorName, douyinNo }) {
 }
 
 /**
+ * 批量导入主播：从 CSV 解析出的主播列表批量创建 person + account。
+ * 已存在的 anchor_id 自动跳过，返回创建/跳过计数。
+ */
+async function batchImportAnchors(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return { created: 0, skipped: 0 };
+  const db = getPool();
+  const conn = await db.getConnection();
+  let created = 0;
+  let skipped = 0;
+  try {
+    await conn.beginTransaction();
+    for (const row of rows) {
+      const anchorId = String(row.anchorId ?? "").trim();
+      const name = String(row.name ?? "").trim();
+      const douyinNo = String(row.douyinNo ?? "").trim();
+      if (!anchorId || !name) {
+        skipped++;
+        continue;
+      }
+      try {
+        const [pRes] = await conn.query(
+          "INSERT INTO persons (name, gender, master_id, generation, created_at, updated_at) VALUES (?, ?, NULL, NULL, NOW(), NOW())",
+          [name, row.gender || ""]
+        );
+        await conn.query(
+          "INSERT INTO accounts (person_id, anchor_id, anchor_name, douyin_no, is_primary, created_at) VALUES (?, ?, ?, ?, 1, NOW())",
+          [pRes.insertId, anchorId, name, douyinNo]
+        );
+        created++;
+      } catch (err) {
+        if (err.code === "ER_DUP_ENTRY") {
+          skipped++;
+        } else {
+          throw err;
+        }
+      }
+    }
+    await conn.commit();
+    return { created, skipped };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
  * 合并账号：把 secondary 主播的所有账号迁移到 primary 主播名下，并删除 secondary 的 person 记录。
  */
 async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
@@ -407,6 +455,118 @@ async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
   } finally {
     conn.release();
   }
+}
+
+/**
+ * 批量删除主播：删除 persons + 关联 accounts + wave/duration 快照。
+ * personIds: number[]
+ */
+async function deleteAnchors(personIds) {
+  if (!Array.isArray(personIds) || personIds.length === 0)
+    return { deleted: 0 };
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const ph = personIds.map(() => "?").join(",");
+
+    // 查出这些 person 关联的所有 anchor_id
+    const [accRows] = await conn.query(
+      `SELECT DISTINCT anchor_id FROM accounts WHERE person_id IN (${ph}) AND anchor_id IS NOT NULL AND anchor_id != ''`,
+      personIds
+    );
+    const anchorIds = accRows.map((r) => r.anchor_id);
+
+    // 删除快照
+    if (anchorIds.length > 0) {
+      const aPh = anchorIds.map(() => "?").join(",");
+      await conn.query(
+        `DELETE FROM wave_snapshots WHERE anchor_id IN (${aPh})`,
+        anchorIds
+      );
+      await conn.query(
+        `DELETE FROM duration_snapshots WHERE anchor_id IN (${aPh})`,
+        anchorIds
+      );
+    }
+
+    // 删除 accounts
+    await conn.query(
+      `DELETE FROM accounts WHERE person_id IN (${ph})`,
+      personIds
+    );
+    // 删除 persons
+    const [res] = await conn.query(
+      `DELETE FROM persons WHERE id IN (${ph})`,
+      personIds
+    );
+    await conn.commit();
+    return { deleted: res.affectedRows };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 查找重复主播：按姓名（不区分大小写）分组，返回有重复的组。
+ * 每组包含同名的人员列表（含账号信息），供用户选择合并或删除。
+ */
+async function findDuplicateAnchors() {
+  const db = getPool();
+  // 按小写姓名分组，找出 >1 的
+  const [persons] = await db.query(
+    `SELECT id, name, gender, master_id, generation, created_at
+       FROM persons
+      ORDER BY name ASC, id ASC`
+  );
+  const [accounts] = await db.query(
+    `SELECT id, person_id, anchor_id, douyin_no, anchor_name, is_primary
+       FROM accounts ORDER BY person_id, id`
+  );
+  const accByPerson = new Map();
+  for (const a of accounts) {
+    if (!accByPerson.has(a.person_id)) accByPerson.set(a.person_id, []);
+    accByPerson.get(a.person_id).push(a);
+  }
+
+  // 按小写名分组
+  const groups = new Map();
+  for (const p of persons) {
+    const key = (p.name || "").trim().toLowerCase();
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+
+  const duplicates = [];
+  for (const [, list] of groups) {
+    if (list.length < 2) continue;
+    duplicates.push({
+      name: list[0].name,
+      count: list.length,
+      persons: list.map((p) => {
+        const accs = accByPerson.get(p.id) || [];
+        const primary = accs.find((a) => a.is_primary === 1) || accs[0];
+        return {
+          id: p.id,
+          name: p.name,
+          gender: p.gender || "",
+          generation: p.generation ?? null,
+          masterId: p.master_id ?? null,
+          createdAt: p.created_at || null,
+          anchorId: primary ? primary.anchor_id || "" : "",
+          douyinNo: primary ? primary.douyin_no || "" : "",
+          accountCount: accs.length,
+        };
+      }),
+    });
+  }
+  // 按人数降序
+  duplicates.sort((a, b) => b.count - a.count);
+  return duplicates;
 }
 
 /**
@@ -605,12 +765,12 @@ async function getFlowingFlag(personId) {
 
     if (latestDurDateRaw) {
       const [durRows] = await db.query(
-        `SELECT anchor_id, duration_minutes FROM duration_snapshots
+        `SELECT anchor_id, total_minutes FROM duration_snapshots
           WHERE anchor_id IN (${aPlaceholders}) AND import_date = ?`,
         [...anchorIds, latestDurDateRaw]
       );
       for (const r of durRows) {
-        durationMap.set(r.anchor_id, Number(r.duration_minutes) || 0);
+        durationMap.set(r.anchor_id, Number(r.total_minutes) || 0);
       }
     }
   }
@@ -636,9 +796,414 @@ async function getFlowingFlag(personId) {
   return {
     master: { id: personId, name: persons[0]?.name || "" },
     members,
-    avgWave: count > 0 ? Math.round(totalWave / count) : 0,
-    avgDuration: count > 0 ? Math.round(totalDuration / count) : 0,
+    avgWave: count > 0 ? totalWave / count : 0,
+    avgDuration: count > 0 ? totalDuration / count : 0,
     count,
+  };
+}
+
+/**
+* 结算指定月份各组流动红旗分数。
+ * period 格式 'YYYY-MM'。对每个男性师傅分组，取该月所有批次快照的音浪/时长累计，
+ * 计算各组人均月度音浪(avg_wave)与人均月度时长(avg_duration)。
+ * 评分：分数 = 人均音浪/100 + 人均时长(分钟)/60，不归一化、不四舍五入。
+ * 时长按小时计入（抖音官方月度标准28小时≈28分）。最高 score 的组标记 is_winner=1。
+ * 写入 flag_scores 和 flag_winners。
+ */
+async function settleFlagScores(period) {
+  if (!/^\d{4}-\d{2}$/.test(period)) {
+    throw new Error("period 格式应为 YYYY-MM");
+  }
+  const db = getPool();
+
+  // 0. 建表（幂等，保证未跑 init-db 也能用）
+  await db.query(`CREATE TABLE IF NOT EXISTS flag_scores (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    master_id INT NOT NULL,
+    period VARCHAR(7) NOT NULL,
+    score DECIMAL(16,2) DEFAULT 0,
+    avg_wave DECIMAL(16,2) DEFAULT 0,
+    avg_duration DECIMAL(16,2) DEFAULT 0,
+    member_count INT DEFAULT 0,
+    is_winner TINYINT(1) DEFAULT 0,
+    settled_at DATETIME DEFAULT NULL,
+    UNIQUE KEY uk_flag (master_id, period)
+  )`);
+  // 流动红旗每月得主表（独立存储，便于历史回溯）
+  await db.query(`CREATE TABLE IF NOT EXISTS flag_winners (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    period VARCHAR(7) NOT NULL,
+    master_id INT NOT NULL,
+    master_name VARCHAR(64) NOT NULL,
+    score DECIMAL(16,2) DEFAULT 0,
+    avg_wave DECIMAL(16,2) DEFAULT 0,
+    avg_duration DECIMAL(16,2) DEFAULT 0,
+    member_count INT DEFAULT 0,
+    settled_at DATETIME DEFAULT NULL,
+    UNIQUE KEY uk_period (period)
+  )`);
+  // 兼容旧表结构：如果列是 BIGINT/INT 则改为 DECIMAL
+  try {
+    await db.query(`ALTER TABLE flag_scores MODIFY COLUMN score DECIMAL(16,2) DEFAULT 0`);
+    await db.query(`ALTER TABLE flag_scores MODIFY COLUMN avg_wave DECIMAL(16,2) DEFAULT 0`);
+    await db.query(`ALTER TABLE flag_scores MODIFY COLUMN avg_duration DECIMAL(16,2) DEFAULT 0`);
+    await db.query(`ALTER TABLE flag_winners MODIFY COLUMN score DECIMAL(16,2) DEFAULT 0`);
+    await db.query(`ALTER TABLE flag_winners MODIFY COLUMN avg_wave DECIMAL(16,2) DEFAULT 0`);
+    await db.query(`ALTER TABLE flag_winners MODIFY COLUMN avg_duration DECIMAL(16,2) DEFAULT 0`);
+  } catch (_e) { /* 列已是 DECIMAL 或表不存在，忽略 */ }
+
+  // 1. 找出所有有徒弟的男性师傅（分组）
+  const [persons] = await db.query(
+    `SELECT id, name, gender, master_id FROM persons WHERE gender = 'male' ORDER BY id`
+  );
+  const masterIds = new Set();
+  for (const p of persons) {
+    if (p.master_id) masterIds.add(p.master_id);
+  }
+  const masters = persons.filter((p) => masterIds.has(p.id));
+
+  // 2. 该月份的日期范围
+  const [y, m] = period.split("-").map(Number);
+  const monthStart = `${period}-01`;
+  const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10); // 月末
+
+  // 3. 逐组计算
+  const results = [];
+  for (const master of masters) {
+    // 组成员 = 师傅本人 + 其男徒弟
+    const [members] = await db.query(
+      `SELECT id, name FROM persons WHERE (id = ? OR master_id = ?) AND gender = 'male' ORDER BY (id = ?) DESC, id ASC`,
+      [master.id, master.id, master.id]
+    );
+    const memberIds = members.map((p) => p.id);
+
+    // 查 anchor_id
+    const ph = memberIds.map(() => "?").join(",");
+    const [accounts] = await db.query(
+      `SELECT person_id, anchor_id FROM accounts WHERE person_id IN (${ph})`,
+      memberIds
+    );
+    const anchorIds = accounts
+      .map((a) => a.anchor_id)
+      .filter(Boolean);
+    const personByAnchor = new Map();
+    for (const a of accounts) {
+      if (a.anchor_id) personByAnchor.set(a.anchor_id, a.person_id);
+    }
+
+    let avgWave = 0;
+    let avgDuration = 0;
+
+    if (anchorIds.length > 0) {
+      const aPh = anchorIds.map(() => "?").join(",");
+
+      // 该月所有批次的音浪累计（wave_value 为当日值，按月求和得月度总音浪）
+      const [waveRows] = await db.query(
+        `SELECT anchor_id, COALESCE(SUM(wave_value),0) AS w FROM wave_snapshots
+          WHERE anchor_id IN (${aPh}) AND import_date BETWEEN ? AND ?
+          GROUP BY anchor_id`,
+        [...anchorIds, monthStart, monthEnd]
+      );
+      let waveSum = 0;
+      for (const r of waveRows) {
+        waveSum += Number(r.w) || 0;
+      }
+
+      // 该月所有批次的时长累计
+      const [durRows] = await db.query(
+        `SELECT anchor_id, COALESCE(SUM(total_minutes),0) AS d FROM duration_snapshots
+          WHERE anchor_id IN (${aPh}) AND import_date BETWEEN ? AND ?
+          GROUP BY anchor_id`,
+        [...anchorIds, monthStart, monthEnd]
+      );
+      let durSum = 0;
+      for (const r of durRows) {
+        durSum += Number(r.d) || 0;
+      }
+
+      // 用组内人数（含师傅）做平均，不四舍五入
+      const denom = memberIds.length;
+      avgWave = denom ? waveSum / denom : 0;
+      avgDuration = denom ? durSum / denom : 0;
+    }
+
+    results.push({
+      masterId: master.id,
+      masterName: master.name,
+      memberCount: memberIds.length,
+      avgWave,
+      avgDuration,
+    });
+  }
+
+  // 4. 写入 flag_scores（先清空该 period，再批量写入）
+  await db.query(`DELETE FROM flag_scores WHERE period = ?`, [period]);
+  await db.query(`DELETE FROM flag_winners WHERE period = ?`, [period]);
+
+  // 5. 评分：分数 = 人均音浪/100 + 人均时长(分钟)/60，不归一化、不四舍五入。
+  //    时长按小时计入（28小时标准≈28分），winner 为最高 score 的组。
+  let winner = null;
+  if (results.length > 0) {
+    const now = new Date();
+    // 先算每组 score
+    for (const r of results) {
+      r.score = r.avgWave / 100 + r.avgDuration / 60;
+    }
+    // 找最高 score
+    const maxScore = Math.max(...results.map((r) => r.score), 0);
+    for (const r of results) {
+      const isWinner = maxScore > 0 && r.score === maxScore;
+      await db.query(
+        `INSERT INTO flag_scores (master_id, period, score, avg_wave, avg_duration, member_count, is_winner, settled_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [r.masterId, period, r.score, r.avgWave, r.avgDuration, r.memberCount, isWinner ? 1 : 0, now]
+      );
+    }
+
+    // 记录每月得主
+    const winnerRow = results.find((r) => maxScore > 0 && r.score === maxScore) || null;
+    if (winnerRow) {
+      await db.query(
+        `INSERT INTO flag_winners (period, master_id, master_name, score, avg_wave, avg_duration, member_count, settled_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          period,
+          winnerRow.masterId,
+          winnerRow.masterName,
+          winnerRow.score,
+          winnerRow.avgWave,
+          winnerRow.avgDuration,
+          winnerRow.memberCount,
+          now,
+        ]
+      );
+      winner = {
+        masterId: winnerRow.masterId,
+        masterName: winnerRow.masterName,
+        score: 100,
+      };
+    }
+  }
+
+  return { period, groups: results.length, winner };
+}
+
+/**
+ * 读取某月已结算的分组概览，按分数降序。
+ */
+async function getFlagGroups(period) {
+  if (!/^\d{4}-\d{2}$/.test(period)) {
+    throw new Error("period 格式应为 YYYY-MM");
+  }
+  const db = getPool();
+
+  const [rows] = await db.query(
+    `SELECT fs.master_id, fs.score, fs.avg_wave, fs.avg_duration, fs.member_count, fs.is_winner,
+            p.name AS master_name
+      FROM flag_scores fs
+      LEFT JOIN persons p ON p.id = fs.master_id
+      WHERE fs.period = ?
+      ORDER BY fs.score DESC, fs.master_id ASC`,
+    [period]
+  );
+
+  return rows.map((r) => ({
+    masterId: r.master_id,
+    masterName: r.master_name || "",
+    memberCount: Number(r.member_count) || 0,
+    score: Number(r.score) || 0,
+    avgWave: Number(r.avg_wave) || 0,
+    avgDuration: Number(r.avg_duration) || 0,
+    isWinner: Number(r.is_winner) === 1,
+  }));
+}
+
+/**
+ * 读取某月小红旗得主（独立表 flag_winners）。
+ * 若该月未结算或无得主，返回 null。
+ */
+async function getFlagWinner(period) {
+  if (!/^\d{4}-\d{2}$/.test(period)) {
+    throw new Error("period 格式应为 YYYY-MM");
+  }
+  const db = getPool();
+  await db.query(`CREATE TABLE IF NOT EXISTS flag_winners (
+    period VARCHAR(7) PRIMARY KEY,
+    master_id INT NOT NULL,
+    master_name VARCHAR(64) NOT NULL,
+    score DECIMAL(16,2) DEFAULT 0,
+    awarded_at DATETIME DEFAULT NULL
+  )`);
+  const [rows] = await db.query(
+    `SELECT fw.period, fw.master_id, fw.master_name, fw.score, fw.awarded_at,
+            p.name AS current_name
+       FROM flag_winners fw
+       LEFT JOIN persons p ON p.id = fw.master_id
+      WHERE fw.period = ?
+      LIMIT 1`,
+    [period]
+  );
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    period: r.period,
+    masterId: r.master_id,
+    masterName: r.current_name || r.master_name || "",
+    score: Number(r.score) || 0,
+    awardedAt: r.awarded_at || null,
+  };
+}
+
+/**
+ * 获取所有等级规则，按 sort_order DESC（高等级在前）。
+ */
+async function getTierRules() {
+  const db = getPool();
+  await db.query(`CREATE TABLE IF NOT EXISTS tier_rules (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    label VARCHAR(8) NOT NULL,
+    min_wave BIGINT NOT NULL,
+    sort_order INT DEFAULT 0,
+    UNIQUE KEY uk_label (label)
+  )`);
+  const [rows] = await db.query(
+    "SELECT id, label, min_wave, sort_order FROM tier_rules ORDER BY sort_order DESC, min_wave DESC"
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    label: r.label,
+    minWave: Number(r.min_wave) || 0,
+    sortOrder: Number(r.sort_order) || 0,
+  }));
+}
+
+/**
+ * 批量保存等级规则（先清空再插入）。
+ */
+async function saveTierRules(rules) {
+  const db = getPool();
+  await db.query("DELETE FROM tier_rules");
+  for (let i = 0; i < rules.length; i++) {
+    const r = rules[i];
+    await db.query(
+      "INSERT INTO tier_rules (label, min_wave, sort_order) VALUES (?, ?, ?)",
+      [r.label, r.minWave, rules.length - i]
+    );
+  }
+  return { saved: rules.length };
+}
+
+/**
+ * 每日音浪报告：按日期+性别展示当日音浪排行。
+ * 返回 { date, gender, rows: [{rank, name, anchorId, dailyWave, totalWave, dailyDuration, totalDuration, tier, isLive}], summary }
+ */
+async function getDailyWaveReport(date, gender) {
+  const db = getPool();
+
+  // 建表兜底
+  await db.query(`CREATE TABLE IF NOT EXISTS tier_rules (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    label VARCHAR(8) NOT NULL,
+    min_wave BIGINT NOT NULL,
+    sort_order INT DEFAULT 0,
+    UNIQUE KEY uk_label (label)
+  )`);
+
+  // 等级规则
+  const [tierRows] = await db.query(
+    "SELECT label, min_wave FROM tier_rules ORDER BY min_wave DESC"
+  );
+  const tiers = tierRows.map((r) => ({ label: r.label, minWave: Number(r.min_wave) || 0 }));
+
+  // 查所有指定性别主播
+  const [persons] = await db.query(
+    `SELECT p.id, p.name, a.anchor_id
+       FROM persons p
+       JOIN accounts a ON a.person_id = p.id
+      WHERE p.gender = ? AND a.anchor_id IS NOT NULL AND a.anchor_id != ''
+      ORDER BY p.id`,
+    [gender]
+  );
+
+  if (persons.length === 0) {
+    return { date, gender, rows: [], summary: { total: 0, notLiveCount: 0, notLiveNames: [] } };
+  }
+
+  const anchorIds = persons.map((p) => p.anchor_id);
+  const ph = anchorIds.map(() => "?").join(",");
+
+  // 累计总音浪
+  const [totalRows] = await db.query(
+    `SELECT anchor_id, COALESCE(SUM(wave_value),0) AS total FROM wave_snapshots
+      WHERE anchor_id IN (${ph}) GROUP BY anchor_id`,
+    anchorIds
+  );
+  const totalMap = new Map(totalRows.map((r) => [r.anchor_id, Number(r.total) || 0]));
+
+  // 当日音浪
+  const [dailyRows] = await db.query(
+    `SELECT anchor_id, wave_value FROM wave_snapshots
+      WHERE anchor_id IN (${ph}) AND import_date = ?`,
+    [...anchorIds, date]
+  );
+  const dailyMap = new Map(dailyRows.map((r) => [r.anchor_id, Number(r.wave_value) || 0]));
+
+  // 当日直播时长
+  const [dailyDurRows] = await db.query(
+    `SELECT anchor_id, total_minutes FROM duration_snapshots
+      WHERE anchor_id IN (${ph}) AND import_date = ?`,
+    [...anchorIds, date]
+  );
+  const dailyDurMap = new Map(dailyDurRows.map((r) => [r.anchor_id, Number(r.total_minutes) || 0]));
+
+  // 累计总时长
+  const [totalDurRows] = await db.query(
+    `SELECT anchor_id, COALESCE(SUM(total_minutes),0) AS total FROM duration_snapshots
+      WHERE anchor_id IN (${ph}) GROUP BY anchor_id`,
+    anchorIds
+  );
+  const totalDurMap = new Map(totalDurRows.map((r) => [r.anchor_id, Number(r.total) || 0]));
+
+  // 组装
+  let rows = persons.map((p) => {
+    const totalWave = totalMap.get(p.anchor_id) || 0;
+    const isLive = dailyMap.has(p.anchor_id);
+    const dailyWave = dailyMap.get(p.anchor_id) || 0;
+    const dailyDuration = dailyDurMap.get(p.anchor_id) || 0;
+    const totalDuration = totalDurMap.get(p.anchor_id) || 0;
+    // 匹配等级
+    const tier = tiers.find((t) => totalWave >= t.minWave)?.label || "";
+    return {
+      rank: 0,
+      name: p.name || "",
+      anchorId: p.anchor_id,
+      dailyWave,
+      totalWave,
+      dailyDuration,
+      totalDuration,
+      tier,
+      isLive,
+    };
+  });
+
+  // 排序：当日音浪降序，未开播排最后
+  rows.sort((a, b) => {
+    if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
+    return b.dailyWave - a.dailyWave;
+  });
+  rows.forEach((r, i) => (r.rank = i + 1));
+
+  const notLiveNames = rows.filter((r) => !r.isLive).map((r) => r.name);
+
+  return {
+    date,
+    gender,
+    rows,
+    summary: {
+      total: rows.length,
+      notLiveCount: notLiveNames.length,
+      notLiveNames,
+    },
   };
 }
 
@@ -655,11 +1220,19 @@ module.exports = {
   exportDurationSnapshots,
   exportAnchors,
   addAnchor,
+  batchImportAnchors,
   mergeAccounts,
+  deleteAnchors,
+  findDuplicateAnchors,
   getWaveTrendTotal,
   getAnchorCountTrend,
   updateAnchorName,
   getAnchorWaveTrend,
   getAnchorsWaveTrend,
   getFlowingFlag,
+  settleFlagScores,
+  getFlagGroups,
+  getTierRules,
+  saveTierRules,
+  getDailyWaveReport,
 };

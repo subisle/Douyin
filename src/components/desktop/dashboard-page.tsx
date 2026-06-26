@@ -2,10 +2,6 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   XAxis,
   YAxis,
@@ -35,8 +31,9 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { useElectronData } from "./use-electron-data";
+import type { DataState } from "./use-electron-data";
 import { formatWave, formatDuration, formatNumber } from "./format";
-import type { TrendPoint, AnchorRow } from "@/types/electron";
+import type { TrendPoint, AnchorRow, WaveTrendByGender } from "@/types/electron";
 import {
   BrowserModeState,
   EmptyState,
@@ -46,10 +43,6 @@ import {
 
 const totalWaveConfig = {
   total: { label: "总音浪", color: "var(--chart-3)" },
-} satisfies ChartConfig;
-
-const anchorCountConfig = {
-  total: { label: "主播人数", color: "var(--chart-4)" },
 } satisfies ChartConfig;
 
 const maleConfig = {
@@ -74,7 +67,7 @@ const PERSON_COLORS = [
   "#60a5fa",
 ];
 
-type TrendTab = "male" | "female" | "total" | "count";
+type TrendTab = "person" | "total" | "male" | "female";
 
 type PersonTrendData = {
   anchorId: string;
@@ -86,9 +79,9 @@ export function DashboardPage() {
   const summary = useElectronData((api) => api.getDashboardSummary());
   const genderTrend = useElectronData((api) => api.getWaveTrendByGender());
   const totalTrend = useElectronData((api) => api.getWaveTrendTotal());
-  const countTrend = useElectronData((api) => api.getAnchorCountTrend());
   const anchorsRes = useElectronData((api) => api.getAnchors());
-  const [trendTab, setTrendTab] = useState<TrendTab>("total");
+  const rankingRes = useElectronData((api) => api.getWaveRanking(5));
+  const [trendTab, setTrendTab] = useState<TrendTab>("person");
 
   // 多人趋势状态
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -131,14 +124,31 @@ export function DashboardPage() {
     );
   }, [anchorsRes.data]);
 
-  // 当主播列表加载完成后，默认选前5个
+  // 当主播列表加载完成后，默认选音浪榜前5（保证有数据），榜单为空时回退到列表前5
   useEffect(() => {
-    if (sortedAnchors.length > 0 && selectedIds.length === 0) {
+    if (selectedIds.length > 0) return;
+    const topIds = (rankingRes.data ?? [])
+      .map((r) => r.anchorId)
+      .filter(Boolean)
+      .slice(0, 5);
+    if (topIds.length > 0) {
+      setSelectedIds(topIds);
+      fetchPersonTrends(topIds);
+      return;
+    }
+    // 榜单加载完成但为空（无音浪数据）时，回退到主播列表前5
+    if (!rankingRes.loading && sortedAnchors.length > 0) {
       const first5 = sortedAnchors.slice(0, 5).map((a) => a.anchorId);
       setSelectedIds(first5);
       fetchPersonTrends(first5);
     }
-  }, [sortedAnchors, selectedIds.length, fetchPersonTrends]);
+  }, [
+    rankingRes.data,
+    rankingRes.loading,
+    sortedAnchors,
+    selectedIds.length,
+    fetchPersonTrends,
+  ]);
 
   const toggleAnchor = (anchor: AnchorRow) => {
     setSelectedIds((prev) => {
@@ -306,13 +316,14 @@ export function DashboardPage() {
         </Button>
       </div>
 
-      {/* ====== 人员音浪趋势（多选） ====== */}
+      {/* ====== 趋势图（人员对比 / 总音浪 / 男 / 女） ====== */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <CardTitle className="text-base">人员音浪趋势</CardTitle>
-            {/* 主播多选下拉 */}
-            <div className="relative">
+            <TrendTabs value={trendTab} onChange={setTrendTab} />
+            {/* 主播多选下拉（仅人员对比标签显示） */}
+            {trendTab === "person" && (
+              <div className="relative">
               <button
                 onClick={() => setDropdownOpen((v) => !v)}
                 className="app-no-drag flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-accent"
@@ -422,16 +433,18 @@ export function DashboardPage() {
                   </div>
                 </>
               )}
-            </div>
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
-          {personLoading ? (
-            <LoadingState label="加载人员趋势…" />
-          ) : personError ? (
-            <ErrorState
-              message={personError}
-              onRetry={() => fetchPersonTrends(selectedIds)}
+          {trendTab === "person" ? (
+            personLoading ? (
+              <LoadingState label="加载人员趋势…" />
+            ) : personError ? (
+              <ErrorState
+                message={personError}
+                onRetry={() => fetchPersonTrends(selectedIds)}
             />
           ) : !personTrends ||
             personTrends.length === 0 ||
@@ -520,91 +533,16 @@ export function DashboardPage() {
                 </ResponsiveContainer>
               </div>
             </>
+              )
+          ) : (
+            <SummaryTrend
+              tab={trendTab}
+              totalTrend={totalTrend}
+              genderTrend={genderTrend}
+            />
           )}
         </CardContent>
       </Card>
-
-      {/* ====== 汇总趋势图区域（下方） ====== */}
-      {genderTrend.error || totalTrend.error || countTrend.error ? (
-        <Card>
-          <CardContent>
-            <ErrorState
-              message={
-                genderTrend.error ||
-                totalTrend.error ||
-                countTrend.error ||
-                "趋势加载失败"
-              }
-              onRetry={() => {
-                genderTrend.reload();
-                totalTrend.reload();
-                countTrend.reload();
-              }}
-            />
-          </CardContent>
-        </Card>
-      ) : (
-        <>
-          <div className="flex items-center gap-2">
-            <TrendTabs value={trendTab} onChange={setTrendTab} />
-            <Badge variant="secondary" className="ml-auto">
-              {trendTab === "total"
-                ? `累计 ${formatWave(
-                    totalTrend.data?.reduce((s, p) => s + p.total, 0) ?? 0
-                  )}`
-                : trendTab === "count"
-                  ? `最新 ${formatNumber(
-                      countTrend.data?.at(-1)?.total ?? 0
-                    )} 人`
-                  : `累计 ${formatWave(
-                      (trendTab === "male"
-                        ? genderTrend.data?.male
-                        : genderTrend.data?.female
-                      )?.reduce((s, p) => s + p.total, 0) ?? 0
-                    )}`}
-            </Badge>
-          </div>
-
-          {trendTab === "total" && (
-            <TrendChart
-              title="总音浪趋势"
-              accent="text-chart-3"
-              loading={totalTrend.loading}
-              data={totalTrend.data ?? []}
-              config={totalWaveConfig}
-              color="var(--color-total)"
-            />
-          )}
-          {trendTab === "count" && (
-            <CountChart
-              title="活跃主播人数趋势"
-              loading={countTrend.loading}
-              data={countTrend.data ?? []}
-              config={anchorCountConfig}
-            />
-          )}
-          {trendTab === "male" && (
-            <TrendChart
-              title="男主播音浪趋势"
-              accent="text-chart-1"
-              loading={genderTrend.loading}
-              data={genderTrend.data?.male ?? []}
-              config={maleConfig}
-              color="var(--color-total)"
-            />
-          )}
-          {trendTab === "female" && (
-            <TrendChart
-              title="女主播音浪趋势"
-              accent="text-chart-2"
-              loading={genderTrend.loading}
-              data={genderTrend.data?.female ?? []}
-              config={femaleConfig}
-              color="var(--color-total)"
-            />
-          )}
-        </>
-      )}
     </div>
   );
 }
@@ -618,8 +556,8 @@ function TrendTabs({
   onChange: (v: TrendTab) => void;
 }) {
   const tabs: { id: TrendTab; label: string }[] = [
+    { id: "person", label: "人员对比" },
     { id: "total", label: "总音浪" },
-    { id: "count", label: "人数趋势" },
     { id: "male", label: "男主播" },
     { id: "female", label: "女主播" },
   ];
@@ -642,143 +580,105 @@ function TrendTabs({
   );
 }
 
-/** 面积图（音浪） */
+/** 汇总趋势（总音浪 / 男 / 女）—— 内嵌于合并后的趋势卡片 */
+function SummaryTrend({
+  tab,
+  totalTrend,
+  genderTrend,
+}: {
+  tab: TrendTab;
+  totalTrend: DataState<TrendPoint[]>;
+  genderTrend: DataState<WaveTrendByGender>;
+}) {
+  if (totalTrend.error || genderTrend.error) {
+    return (
+      <ErrorState
+        message={totalTrend.error || genderTrend.error || "趋势加载失败"}
+        onRetry={() => {
+          totalTrend.reload();
+          genderTrend.reload();
+        }}
+      />
+    );
+  }
+
+  const cfg =
+    tab === "total"
+      ? { data: totalTrend.data ?? [], config: totalWaveConfig }
+      : tab === "male"
+        ? { data: genderTrend.data?.male ?? [], config: maleConfig }
+        : { data: genderTrend.data?.female ?? [], config: femaleConfig };
+
+  const loading = tab === "total" ? totalTrend.loading : genderTrend.loading;
+  const cumulative = cfg.data.reduce((s, p) => s + p.total, 0);
+
+  return (
+    <>
+      <div className="mb-3 flex items-center">
+        <Badge variant="secondary" className="ml-auto">
+          累计 {formatWave(cumulative)}
+        </Badge>
+      </div>
+      <TrendChart
+        loading={loading}
+        data={cfg.data}
+        config={cfg.config}
+        color="var(--color-total)"
+      />
+    </>
+  );
+}
+
+/** 曲线图（音浪） */
 function TrendChart({
-  title,
-  accent,
   loading,
   data,
   config,
   color,
 }: {
-  title: string;
-  accent: string;
   loading: boolean;
   data: TrendPoint[];
   config: ChartConfig;
   color: string;
 }) {
+  if (loading) return <LoadingState label="加载趋势…" />;
+  if (data.length === 0)
+    return <EmptyState label="暂无数据（请先导入音浪快照）" />;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className={`text-base ${accent}`}>{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <LoadingState label="加载趋势…" />
-        ) : data.length === 0 ? (
-          <EmptyState label="暂无数据（请先导入音浪快照）" />
-        ) : (
-          <ChartContainer
-            config={config}
-            className="aspect-auto h-[300px] w-full"
-          >
-            <AreaChart data={data} margin={{ left: 4, right: 12, top: 8 }}>
-              <defs>
-                <linearGradient id={`fill-${title}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={color} stopOpacity={0.5} />
-                  <stop offset="95%" stopColor={color} stopOpacity={0.05} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid vertical={false} strokeDasharray="3 3" />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                minTickGap={24}
-                tickFormatter={(v: string) => v.slice(5)}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                width={56}
-                tickFormatter={(v: number) => formatWave(v)}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    labelFormatter={(label) => `日期 ${label}`}
-                    formatter={(value) => formatWave(Number(value))}
-                  />
-                }
-              />
-              <Area
-                dataKey="total"
-                type="monotone"
-                stroke={color}
-                strokeWidth={2}
-                fill={`url(#fill-${title})`}
-              />
-            </AreaChart>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-/** 柱状图（人数） */
-function CountChart({
-  title,
-  loading,
-  data,
-  config,
-}: {
-  title: string;
-  loading: boolean;
-  data: TrendPoint[];
-  config: ChartConfig;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base text-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <LoadingState label="加载趋势…" />
-        ) : data.length === 0 ? (
-          <EmptyState label="暂无数据（请先导入音浪快照）" />
-        ) : (
-          <ChartContainer
-            config={config}
-            className="aspect-auto h-[300px] w-full"
-          >
-            <BarChart data={data} margin={{ left: 4, right: 12, top: 8 }}>
-              <CartesianGrid vertical={false} strokeDasharray="3 3" />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                minTickGap={24}
-                tickFormatter={(v: string) => v.slice(5)}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                width={40}
-                allowDecimals={false}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    labelFormatter={(label) => `日期 ${label}`}
-                    formatter={(value) => `${value} 人`}
-                  />
-                }
-              />
-              <Bar
-                dataKey="total"
-                fill="var(--color-total)"
-                radius={[4, 4, 0, 0]}
-                maxBarSize={48}
-              />
-            </BarChart>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
+    <ChartContainer config={config} className="aspect-auto h-[360px] w-full">
+      <LineChart data={data} margin={{ left: 4, right: 12, top: 8, bottom: 0 }}>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" />
+        <XAxis
+          dataKey="date"
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          minTickGap={24}
+          tickFormatter={(v: string) => v.slice(5)}
+        />
+        <YAxis
+          tickLine={false}
+          axisLine={false}
+          width={56}
+          tickFormatter={(v: number) => formatWave(v)}
+        />
+        <ChartTooltip
+          content={
+            <ChartTooltipContent
+              labelFormatter={(label) => `日期 ${label}`}
+              formatter={(value) => formatWave(Number(value))}
+            />
+          }
+        />
+        <Line
+          dataKey="total"
+          type="monotone"
+          stroke={color}
+          strokeWidth={2}
+          dot={{ r: 3, fill: color }}
+          activeDot={{ r: 5 }}
+        />
+      </LineChart>
+    </ChartContainer>
   );
 }

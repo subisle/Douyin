@@ -61,6 +61,74 @@ export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string };
 
+export interface FlagGroup {
+  masterId: number;
+  masterName: string;
+  memberCount: number;
+  score: number;
+  avgWave: number;
+  avgDuration: number;
+  isWinner: boolean;
+}
+
+export interface FlagSettleResult {
+  period: string;
+  groups: number;
+  winner: {
+    masterId: number;
+    masterName: string;
+    score: number;
+  } | null;
+}
+
+export interface TierRule {
+  id: number;
+  label: string;
+  minWave: number;
+  sortOrder: number;
+}
+
+export interface DailyReportRow {
+  rank: number;
+  name: string;
+  anchorId: string;
+  dailyWave: number;
+  totalWave: number;
+  dailyDuration: number;
+  totalDuration: number;
+  tier: string;
+  isLive: boolean;
+}
+
+export interface DailyReportData {
+  date: string;
+  gender: string;
+  rows: DailyReportRow[];
+  summary: {
+    total: number;
+    notLiveCount: number;
+    notLiveNames: string[];
+  };
+}
+
+export interface DuplicateAnchorPerson {
+  id: number;
+  name: string;
+  gender: string;
+  generation: number | null;
+  masterId: number | null;
+  createdAt: string | null;
+  anchorId: string;
+  douyinNo: string;
+  accountCount: number;
+}
+
+export interface DuplicateAnchorGroup {
+  name: string;
+  count: number;
+  persons: DuplicateAnchorPerson[];
+}
+
 declare global {
   interface ElectronAPI {
     windowMinimize: () => Promise<void>;
@@ -95,10 +163,17 @@ declare global {
       anchorName?: string;
       douyinNo?: string;
     }) => Promise<IpcResult<{ id: number }>>;
+    batchImportAnchors: (
+      rows: { anchorId: string; name: string; douyinNo: string; gender: string }[]
+    ) => Promise<IpcResult<{ created: number; skipped: number }>>;
     mergeAccounts: (payload: {
       primaryPersonId: number;
       secondaryPersonId: number;
     }) => Promise<IpcResult<{ moved: number }>>;
+    deleteAnchors: (
+      personIds: number[]
+    ) => Promise<IpcResult<{ deleted: number }>>;
+    findDuplicateAnchors: () => Promise<IpcResult<DuplicateAnchorGroup[]>>;
     getWaveTrendTotal: () => Promise<IpcResult<TrendPoint[]>>;
     getAnchorCountTrend: () => Promise<IpcResult<TrendPoint[]>>;
     updateAnchorName: (payload: {
@@ -137,6 +212,16 @@ declare global {
         count: number;
       }>
     >;
+    getFlagGroups: (period: string) => Promise<IpcResult<FlagGroup[]>>;
+    settleFlagScores: (period: string) => Promise<IpcResult<FlagSettleResult>>;
+    getTierRules: () => Promise<IpcResult<TierRule[]>>;
+    saveTierRules: (
+      rules: { label: string; minWave: number }[]
+    ) => Promise<IpcResult<{ saved: number }>>;
+    getDailyWaveReport: (
+      date: string,
+      gender: string
+    ) => Promise<IpcResult<DailyReportData>>;
   }
 
   interface Window {

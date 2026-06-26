@@ -1,318 +1,218 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, Users, Waves, Clock, Search } from "lucide-react";
-import { useElectronData } from "./use-electron-data";
+import { Users, Waves, Clock, Flag, Sparkles, RefreshCw, Download } from "lucide-react";
 import { formatWave, formatDuration, formatNumber } from "./format";
-import type { FamilyNode } from "@/types/electron";
+import type { FlagGroup } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
+import { exportElementAsImage } from "./export-image";
 
-type FlowingFlagData = {
-  master: { id: number; name: string } | null;
-  members: {
-    id: number;
-    name: string;
-    gender: string;
-    anchorId: string;
-    wave: number;
-    duration: number;
-  }[];
-  avgWave: number;
-  avgDuration: number;
-  count: number;
-};
+function currentPeriod(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 export function FlowingFlagCard() {
-  const treeRes = useElectronData((api) => api.getFamilyTree());
-  const [selectedMasterId, setSelectedMasterId] = useState<number | null>(null);
-  const [flagData, setFlagData] = useState<FlowingFlagData | null>(null);
+  const [period, setPeriod] = useState<string>(currentPeriod());
+  const [groups, setGroups] = useState<FlagGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [settling, setSettling] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  // 找出有徒弟的人（被别人当 masterId 的人）
-  const masters = useMemo(() => {
-    if (!treeRes.data) return [];
-    const masterIds = new Set<number>();
-    for (const node of treeRes.data) {
-      if (node.masterId) masterIds.add(node.masterId);
-    }
-    // 返回有徒弟的师傅，带徒弟数量
-    return treeRes.data
-      .filter((n) => masterIds.has(n.id) && n.gender === "male")
-      .map((n) => {
-        const apprenticeCount = treeRes.data!.filter(
-          (a) => a.masterId === n.id
-        ).length;
-        return { ...n, apprenticeCount };
-      })
-      .sort((a, b) => b.apprenticeCount - a.apprenticeCount);
-  }, [treeRes.data]);
-
-  // 默认选第一个师傅
-  useEffect(() => {
-    if (masters.length > 0 && selectedMasterId === null) {
-      setSelectedMasterId(masters[0].id);
-    }
-  }, [masters, selectedMasterId]);
-
-  const fetchFlag = useCallback(async (personId: number) => {
+  const fetchGroups = useCallback(async (p: string) => {
     const api = window.electronAPI;
-    if (!api) return;
+    if (!api) {
+      setUnavailable(true);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getFlowingFlag(personId);
+      const res = await api.getFlagGroups(p);
       if (res.success) {
-        setFlagData(res.data);
+        setGroups(res.data);
       } else {
         setError(res.error || "加载失败");
-        setFlagData(null);
+        setGroups([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setFlagData(null);
+      setGroups([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (selectedMasterId !== null) {
-      fetchFlag(selectedMasterId);
+    fetchGroups(period);
+  }, [period, fetchGroups]);
+
+  const onSettle = useCallback(async () => {
+    const api = window.electronAPI;
+    if (!api) return;
+    setSettling(true);
+    setError(null);
+    try {
+      const res = await api.settleFlagScores(period);
+      if (res.success) {
+        await fetchGroups(period);
+      } else {
+        setError(res.error || "结算失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSettling(false);
     }
-  }, [selectedMasterId, fetchFlag]);
+  }, [period, fetchGroups]);
 
-  const selectedMaster = useMemo(() => {
-    if (!masters || selectedMasterId === null) return null;
-    return masters.find((m) => m.id === selectedMasterId) || null;
-  }, [masters, selectedMasterId]);
-
-  const filteredMasters = useMemo(() => {
-    if (!searchQuery.trim()) return masters;
-    const q = searchQuery.trim().toLowerCase();
-    return masters.filter((m) => m.name.toLowerCase().includes(q));
-  }, [masters, searchQuery]);
-
-  const onSelectMaster = (master: FamilyNode & { apprenticeCount: number }) => {
-    setSelectedMasterId(master.id);
-    setDropdownOpen(false);
-    setSearchQuery("");
+  const handleExport = async () => {
+    if (!contentRef.current || exporting) return;
+    setExporting(true);
+    try {
+      await exportElementAsImage(contentRef.current, `流动红旗-${period}.png`);
+    } catch (e) {
+      console.error("导出失败", e);
+    } finally {
+      setExporting(false);
+    }
   };
 
-  if (treeRes.loading) {
+  const winner = groups.find((g) => g.isWinner) || null;
+
+  if (unavailable) {
     return (
       <Card>
         <CardContent>
-          <LoadingState label="加载族谱数据…" />
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            请用桌面端打开查看流动红旗数据。
+          </p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <CardTitle className="text-base">🚩 流动红旗</CardTitle>
-            {selectedMaster && (
-              <Badge variant="secondary">
-                {selectedMaster.name} + {selectedMaster.apprenticeCount} 徒弟
-              </Badge>
-            )}
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Flag className="size-5 text-primary" />
+              <CardTitle className="text-base">流动红旗</CardTitle>
+              {winner && (
+                <Badge className="bg-primary/15 text-primary hover:bg-primary/15">
+                  <Sparkles className="mr-1 size-3" />
+                  本月得主：{winner.masterName}
+                </Badge>
+              )}
+            </div>
+            <div className="app-no-drag flex items-center gap-2">
+              <input
+                type="month"
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+              <button
+                onClick={onSettle}
+                disabled={settling}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
+              >
+                <RefreshCw className={`size-4 ${settling ? "animate-spin" : ""}`} />
+                {settling ? "结算中…" : "结算本月"}
+              </button>
+              <button
+                onClick={handleExport}
+                disabled={exporting || groups.length === 0}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+              >
+                <Download className="size-4" />
+                {exporting ? "导出中…" : "导出图片"}
+              </button>
+            </div>
           </div>
-          {/* 师傅选择下拉 */}
-          <div className="relative">
-            <button
-              onClick={() => setDropdownOpen((v) => !v)}
-              className="app-no-drag flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-accent"
-            >
-              <span className="max-w-[160px] truncate">
-                {selectedMaster ? selectedMaster.name : "选择师傅"}
-              </span>
-              <ChevronDown className="size-4 text-muted-foreground" />
-            </button>
-            {dropdownOpen && (
-              <>
+        </CardHeader>
+        <CardContent>
+          <div ref={contentRef}>
+          {loading ? (
+            <LoadingState label="加载流动红旗数据…" />
+          ) : error ? (
+            <ErrorState
+              message={error}
+              onRetry={() => fetchGroups(period)}
+            />
+          ) : groups.length === 0 ? (
+            <EmptyState label="本月尚未结算，点击「结算本月」生成分组排名" />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+              {groups.map((g, i) => (
                 <div
-                  className="fixed inset-0 z-10"
-                  onClick={() => {
-                    setDropdownOpen(false);
-                    setSearchQuery("");
-                  }}
-                />
-                <div className="app-no-drag absolute right-0 top-full z-20 mt-1 w-72 rounded-xl border border-border bg-popover shadow-2xl">
-                  <div className="border-b border-border p-2">
-                    <div className="flex items-center gap-2 rounded-lg bg-background px-3 py-1.5">
-                      <Search className="size-4 text-muted-foreground" />
-                      <input
-                        autoFocus
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="搜索师傅名…"
-                        className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                      />
+                  key={g.masterId}
+                  className={`relative overflow-hidden rounded-xl border p-4 transition ${
+                    g.isWinner
+                      ? "border-amber-400/60 bg-amber-50/40 dark:bg-amber-950/10"
+                      : "border-border bg-card hover:bg-accent/30"
+                  }`}
+                >
+                  {g.isWinner && (
+                    <div className="absolute right-0 top-0 flex items-center gap-1 rounded-bl-xl bg-amber-400/90 px-2.5 py-1 text-xs font-bold text-amber-950">
+                      🚩 红旗
+                    </div>
+                  )}
+                  {/* 排名 */}
+                  <div className="mb-2 flex items-center gap-2">
+                    <span
+                      className={`flex size-7 items-center justify-center rounded-full text-xs font-bold ${
+                        i === 0
+                          ? "bg-amber-400/20 text-amber-600"
+                          : i === 1
+                            ? "bg-slate-400/20 text-slate-500"
+                            : i === 2
+                              ? "bg-orange-400/20 text-orange-600"
+                              : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {i + 1}
+                    </span>
+                    <span className="text-base font-semibold text-foreground">
+                      {g.masterName}
+                    </span>
+                    <Badge variant="outline" className="ml-auto">
+                      <Users className="mr-1 size-3" />
+                      {g.memberCount} 徒弟
+                    </Badge>
+                  </div>
+                  {/* 分数 */}
+                  <div className="mb-3">
+                    <span className="text-xs text-muted-foreground">本月分数</span>
+                    <p className="text-2xl font-bold text-primary">
+                      {formatNumber(g.score)}
+                    </p>
+                  </div>
+                  {/* 音浪 / 时长 */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Waves className="size-3.5 text-primary" />
+                      <span>均音浪 {formatWave(g.avgWave)}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <Clock className="size-3.5 text-chart-2" />
+                      <span>均时长 {formatDuration(g.avgDuration)}</span>
                     </div>
                   </div>
-                  <div className="max-h-60 overflow-auto p-1">
-                    {filteredMasters.map((m) => (
-                      <button
-                        key={m.id}
-                        onClick={() => onSelectMaster(m)}
-                        className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent ${
-                          m.id === selectedMasterId
-                            ? "bg-accent/50 font-medium"
-                            : ""
-                        }`}
-                      >
-                        <span className="truncate">{m.name}</span>
-                        <Badge variant="outline" className="ml-2 shrink-0">
-                          {m.apprenticeCount} 徒弟
-                        </Badge>
-                      </button>
-                    ))}
-                    {filteredMasters.length === 0 && (
-                      <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                        未找到匹配师傅
-                      </div>
-                    )}
-                  </div>
                 </div>
-              </>
-            )}
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {loading ? (
-          <LoadingState label="加载流动红旗数据…" />
-        ) : error ? (
-          <ErrorState message={error} onRetry={() => selectedMasterId !== null && fetchFlag(selectedMasterId)} />
-        ) : !flagData || flagData.count === 0 ? (
-          <EmptyState label="暂无数据" />
-        ) : (
-          <div className="space-y-4">
-            {/* 平均值卡片 */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-xl border border-border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    总人数
-                  </span>
-                  <Users className="size-4 text-muted-foreground" />
-                </div>
-                <p className="mt-1 text-xl font-bold text-foreground">
-                  {flagData.count}
-                </p>
-              </div>
-              <div className="rounded-xl border border-border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    平均音浪
-                  </span>
-                  <Waves className="size-4 text-primary" />
-                </div>
-                <p className="mt-1 text-xl font-bold text-primary">
-                  {formatWave(flagData.avgWave)}
-                </p>
-              </div>
-              <div className="rounded-xl border border-border bg-card p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    平均时长
-                  </span>
-                  <Clock className="size-4 text-chart-2" />
-                </div>
-                <p className="mt-1 text-xl font-bold text-chart-2">
-                  {formatDuration(flagData.avgDuration)}
-                </p>
-              </div>
+              ))}
             </div>
-
-            {/* 成员明细表 */}
-            <div className="overflow-hidden rounded-xl border border-border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      #
-                    </th>
-                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      姓名
-                    </th>
-                    <th className="px-4 py-2 text-left font-medium text-muted-foreground">
-                      身份
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-muted-foreground">
-                      音浪
-                    </th>
-                    <th className="px-4 py-2 text-right font-medium text-muted-foreground">
-                      时长
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {flagData.members.map((m, i) => {
-                    const isMaster = m.id === flagData.master?.id;
-                    return (
-                      <tr
-                        key={m.id}
-                        className="border-t border-border hover:bg-muted/30"
-                      >
-                        <td className="px-4 py-2 text-muted-foreground">
-                          {i + 1}
-                        </td>
-                        <td className="px-4 py-2 font-medium">
-                          {m.name}
-                          {m.gender === "male" ? (
-                            <Badge className="bg-chart-2/15 text-chart-2 hover:bg-chart-2/15 ml-2">
-                              男
-                            </Badge>
-                          ) : m.gender === "female" ? (
-                            <Badge className="bg-chart-1/15 text-chart-1 hover:bg-chart-1/15 ml-2">
-                              女
-                            </Badge>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-2">
-                          <Badge
-                            variant={isMaster ? "default" : "secondary"}
-                          >
-                            {isMaster ? "师傅" : "徒弟"}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {formatWave(m.wave)}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums">
-                          {formatDuration(m.duration)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot className="bg-muted/50">
-                  <tr className="border-t border-border font-medium">
-                    <td className="px-4 py-2" colSpan={3}>
-                      平均值
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-primary">
-                      {formatWave(flagData.avgWave)}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-chart-2">
-                      {formatDuration(flagData.avgDuration)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
+          )}
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

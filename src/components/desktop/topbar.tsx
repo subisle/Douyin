@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  FileUp,
   GitMerge,
   Minus,
   RefreshCw,
@@ -71,6 +72,15 @@ export function Topbar({ currentPage }: TopbarProps) {
             >
               <GitMerge className="size-4" />
               账号合并
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => window.dispatchEvent(new CustomEvent("anchors:openImport"))}
+            >
+              <FileUp className="size-4" />
+              从文件导入
             </Button>
             <Button
               size="sm"

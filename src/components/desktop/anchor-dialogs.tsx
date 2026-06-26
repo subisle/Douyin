@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { FileUp, Loader2, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AnchorRow } from "@/types/electron";
+import { parseAnchorsCsv, type AnchorImportRow } from "./csv";
 
 interface ModalProps {
   open: boolean;
@@ -303,5 +305,328 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
         </Button>
       </div>
     </Modal>
+  );
+}
+
+interface ImportAnchorsDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+  anchors: AnchorRow[];
+}
+
+export function ImportAnchorsDialog({ open, onClose, onSuccess, anchors }: ImportAnchorsDialogProps) {
+  const [rows, setRows] = useState<AnchorImportRow[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [parsing, setParsing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ created: number; skipped: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [gender, setGender] = useState<"male" | "female">("male");
+  const dragCounter = useRef(0);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const prevent = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  const reset = () => {
+    setRows([]);
+    setSelectedIds(new Set());
+    setError(null);
+    setResult(null);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const handleClose = () => {
+    reset();
+    onClose();
+  };
+
+  const handleFile = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("请拖入 CSV 文件");
+      return;
+    }
+    setError(null);
+    setResult(null);
+    setParsing(true);
+    try {
+      const parsed = await parseAnchorsCsv(file);
+      const existingIds = new Set(anchors.map((a) => a.anchorId));
+      const newRows = parsed.filter((r) => !existingIds.has(r.anchorId));
+      setRows(newRows);
+      setSelectedIds(new Set(newRows.map((r) => r.anchorId)));
+      if (newRows.length === 0) {
+        setError(`文件中 ${parsed.length} 个主播已全部存在，无需导入`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const toggleSelect = (anchorId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(anchorId)) next.delete(anchorId);
+      else next.add(anchorId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === rows.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(rows.map((r) => r.anchorId)));
+    }
+  };
+
+  const updateRow = (index: number, field: keyof AnchorImportRow, value: string) => {
+    setRows((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    const selected = rows.filter((r) => selectedIds.has(r.anchorId));
+    if (selected.length === 0) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const api = window.electronAPI;
+      if (!api) return;
+      const res = await api.batchImportAnchors(
+        selected.map((r) => ({ ...r, gender }))
+      );
+      if (res.success) {
+        setResult(res.data);
+        onSuccess();
+      } else {
+        setError(res.error || "导入失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={handleClose}>
+      <div className="max-h-[85vh] w-full max-w-3xl overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-border shadow-2xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">从文件导入主播</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* 性别选择 */}
+            {!result && (
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-foreground">性别</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setGender("male")}
+                    disabled={submitting}
+                    className={cn(
+                      "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+                      gender === "male"
+                        ? "bg-chart-2 text-white"
+                        : "border border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    男队
+                  </button>
+                  <button
+                    onClick={() => setGender("female")}
+                    disabled={submitting}
+                    className={cn(
+                      "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+                      gender === "female"
+                        ? "bg-chart-1 text-white"
+                        : "border border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    女队
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 拖拽 / 选择文件 */}
+            {rows.length === 0 && !result && (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFile(f);
+                  }}
+                />
+                <div
+                  onDragEnter={(e) => {
+                    e.preventDefault();
+                    dragCounter.current += 1;
+                    setIsDragging(true);
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragLeave={() => {
+                    dragCounter.current -= 1;
+                    if (dragCounter.current <= 0) {
+                      dragCounter.current = 0;
+                      setIsDragging(false);
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    dragCounter.current = 0;
+                    setIsDragging(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) handleFile(f);
+                  }}
+                  onClick={() => !parsing && fileRef.current?.click()}
+                  className={cn(
+                    "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-12 transition-colors",
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50 hover:bg-accent/30",
+                    parsing && "pointer-events-none opacity-60"
+                  )}
+                >
+                  {parsing ? (
+                    <Loader2 className="size-8 animate-spin text-primary" />
+                  ) : (
+                    <FileUp className="size-8 text-muted-foreground" />
+                  )}
+                  <span className="text-sm font-medium text-foreground">
+                    拖拽 CSV 文件到此处，或点击选择
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    需含列：主播id（或 抖音号）、主播名（可选）
+                  </span>
+                </div>
+              </>
+            )}
+
+            {/* 预览表格 */}
+            {rows.length > 0 && !result && (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">
+                    共 {rows.length} 个新主播，已选 {selectedIds.size} 个
+                  </span>
+                  <button
+                    onClick={toggleSelectAll}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    {selectedIds.size === rows.length ? "取消全选" : "全选"}
+                  </button>
+                </div>
+                <div className="max-h-72 overflow-auto rounded-xl border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+                      <tr className="text-left text-muted-foreground">
+                        <th className="w-10 px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.size === rows.length && rows.length > 0}
+                            onChange={toggleSelectAll}
+                            className="accent-primary"
+                          />
+                        </th>
+                        <th className="px-3 py-2 font-medium">主播ID</th>
+                        <th className="px-3 py-2 font-medium">抖音号</th>
+                        <th className="px-3 py-2 font-medium">姓名</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => (
+                        <tr key={i} className="border-t border-border/60">
+                          <td className="px-3 py-1.5">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(r.anchorId)}
+                              onChange={() => toggleSelect(r.anchorId)}
+                              className="accent-primary"
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input
+                              value={r.anchorId}
+                              onChange={(e) => updateRow(i, "anchorId", e.target.value)}
+                              className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input
+                              value={r.douyinNo}
+                              onChange={(e) => updateRow(i, "douyinNo", e.target.value)}
+                              className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input
+                              value={r.name}
+                              onChange={(e) => updateRow(i, "name", e.target.value)}
+                              className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={reset} disabled={submitting}>
+                    重新选择
+                  </Button>
+                  <Button onClick={submit} disabled={submitting || selectedIds.size === 0}>
+                    {submitting ? "导入中…" : `确认导入 ${selectedIds.size} 个`}
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* 导入结果 */}
+            {result && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-600">
+                  <CheckCircle2 className="size-4" />
+                  成功导入 {result.created} 个主播
+                  {result.skipped > 0 && `，跳过 ${result.skipped} 个（已存在）`}
+                </div>
+                <div className="flex justify-end">
+                  <Button onClick={handleClose}>完成</Button>
+                </div>
+              </div>
+            )}
+
+            {/* 错误提示 */}
+            {error && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 }

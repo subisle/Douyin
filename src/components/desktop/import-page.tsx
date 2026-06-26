@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Upload, FileUp, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,19 @@ export function ImportPage() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounter = useRef(0);
+
+  // 阻止 Electron 默认的文件拖拽导航行为
+  useEffect(() => {
+    const prevent = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
 
   const unavailable =
     typeof window !== "undefined" && !window.electronAPI;
@@ -143,39 +156,65 @@ export function ImportPage() {
               className="w-48"
             />
           </div>
+        </div>
 
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              CSV 文件
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                需含列：主播id（或 抖音号/抖音ID）、{kind === "wave" ? "音浪" : "时长"}
-              </span>
-            </label>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onPickFile(f);
-              }}
-            />
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => fileRef.current?.click()}
-              disabled={parsing}
-              className="gap-2 min-w-[180px]"
-            >
-              {parsing ? (
-                <Loader2 className="size-5 animate-spin" />
-              ) : (
-                <FileUp className="size-5" />
-              )}
-              {fileName || "选择 CSV 文件"}
-            </Button>
-          </div>
+        {/* 拖拽 / 点击选择文件区 */}
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onPickFile(f);
+          }}
+        />
+        <div
+          onDragEnter={(e) => {
+            e.preventDefault();
+            dragCounter.current += 1;
+            setIsDragging(true);
+          }}
+          onDragOver={(e) => e.preventDefault()}
+          onDragLeave={() => {
+            dragCounter.current -= 1;
+            if (dragCounter.current <= 0) {
+              dragCounter.current = 0;
+              setIsDragging(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            dragCounter.current = 0;
+            setIsDragging(false);
+            const f = e.dataTransfer.files?.[0];
+            if (!f) return;
+            if (!f.name.toLowerCase().endsWith(".csv")) {
+              setError("请拖入 CSV 文件");
+              return;
+            }
+            onPickFile(f);
+          }}
+          onClick={() => !parsing && fileRef.current?.click()}
+          className={cn(
+            "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-8 transition-colors",
+            isDragging
+              ? "border-primary bg-primary/5"
+              : "border-border hover:border-primary/50 hover:bg-accent/30",
+            parsing && "pointer-events-none opacity-60"
+          )}
+        >
+          {parsing ? (
+            <Loader2 className="size-8 animate-spin text-primary" />
+          ) : (
+            <FileUp className="size-8 text-muted-foreground" />
+          )}
+          <span className="text-sm font-medium text-foreground">
+            {fileName || "拖拽 CSV 文件到此处，或点击选择"}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            需含列：主播id（或 抖音号/抖音ID）、{kind === "wave" ? "音浪" : "时长"}
+          </span>
         </div>
       </div>
 

@@ -182,3 +182,57 @@ export function downloadCsv(data: Record<string, unknown>[], filename: string): 
   link.click();
   URL.revokeObjectURL(url);
 }
+
+/** 从 CSV 提取主播信息（anchorId / douyinNo / name），按 anchorId 去重合并 */
+export interface AnchorImportRow {
+  anchorId: string;
+  douyinNo: string;
+  name: string;
+}
+
+export function parseAnchorsCsv(file: File): Promise<AnchorImportRow[]> {
+  return new Promise((resolve, reject) => {
+    Papa.parse<Record<string, string>>(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const findCol = (...names: string[]) => {
+          for (const key of Object.keys(results.data[0] ?? {})) {
+            const k = key.trim();
+            if (names.some((n) => k.toLowerCase() === n.toLowerCase())) return key;
+          }
+          return undefined;
+        };
+
+        // anchorId 列：优先主播id/anchor_id/uid，回退到抖音号
+        const idCol = findCol("主播id", "主播ID", "anchor_id", "uid");
+        const dyCol = findCol("抖音号", "抖音ID", "douyin_no", "douyin_id");
+        const nameCol = findCol("主播名", "昵称", "主播", "anchor_name", "name");
+
+        const map = new Map<string, AnchorImportRow>();
+
+        for (const row of results.data) {
+          let anchorId = String(row[idCol ?? ""] ?? "").trim();
+          const douyinNo = String(row[dyCol ?? ""] ?? "").trim();
+          const name = String(row[nameCol ?? ""] ?? "").trim();
+
+          // 如果没有主播id列，用抖音号作为 anchorId
+          if (!anchorId && douyinNo) anchorId = douyinNo;
+          if (!anchorId) continue;
+
+          const existing = map.get(anchorId);
+          if (existing) {
+            // 合并：填充缺失字段
+            if (!existing.name && name) existing.name = name;
+            if (!existing.douyinNo && douyinNo) existing.douyinNo = douyinNo;
+          } else {
+            map.set(anchorId, { anchorId, douyinNo, name });
+          }
+        }
+
+        resolve(Array.from(map.values()));
+      },
+      error: (err) => reject(err),
+    });
+  });
+}
