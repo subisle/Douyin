@@ -37,6 +37,9 @@ export function AnchorsPage() {
   const [page, setPage] = useState(1);
   const [addOpen, setAddOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
+  // 右键「合并到其他主播」时记下被合并方的 personId，独立于 contextMenu —
+  // contextMenu 在点击后立即清空，否则 MergeAccountsDialog 拿到的 prefillSecondary 永远是 undefined。
+  const [mergePrefillId, setMergePrefillId] = useState<number | undefined>(undefined);
   const [importOpen, setImportOpen] = useState(false);
 
   // 多选状态
@@ -134,6 +137,7 @@ export function AnchorsPage() {
   /** 打开合并弹窗并预填被合并项 */
   const handleMergeFromContext = () => {
     if (!contextMenu) return;
+    setMergePrefillId(contextMenu.anchorId);
     setMergeOpen(true);
     setContextMenu(null);
   };
@@ -405,10 +409,13 @@ export function AnchorsPage() {
       />
       <MergeAccountsDialog
         open={mergeOpen}
-        onClose={() => setMergeOpen(false)}
+        onClose={() => {
+          setMergeOpen(false);
+          setMergePrefillId(undefined);
+        }}
         onSuccess={() => reload()}
         anchors={data}
-        prefillSecondary={contextMenu?.anchorId}
+        prefillSecondary={mergePrefillId ?? undefined}
       />
       <ImportAnchorsDialog
         open={importOpen}

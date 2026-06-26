@@ -14,12 +14,11 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  loading?: boolean;
   error?: string | null;
   success?: string | null;
 }
 
-function Modal({ open, onClose, title, children, loading, error, success }: ModalProps) {
+function Modal({ open, onClose, title, children, error, success }: ModalProps) {
   if (!open) return null;
   return (
     <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
@@ -40,14 +39,6 @@ function Modal({ open, onClose, title, children, loading, error, success }: Moda
                 {success}
               </p>
             )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={onClose} disabled={loading}>
-                取消
-              </Button>
-              <Button onClick={onClose} disabled={loading} className={cn(!success && "hidden")}>
-                完成
-              </Button>
-            </div>
           </CardContent>
         </Card>
       </div>
@@ -116,7 +107,7 @@ export function AddAnchorDialog({ open, onClose, onSuccess }: AddAnchorDialogPro
   };
 
   return (
-    <Modal open={open} onClose={handleClose} title="添加主播" loading={loading} error={error} success={success}>
+    <Modal open={open} onClose={handleClose} title="添加主播" error={error} success={success}>
       <div className="space-y-3">
         <div>
           <label className="mb-1 block text-sm font-medium">主播姓名</label>
@@ -266,7 +257,7 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
     ));
 
   return (
-    <Modal open={open} onClose={handleClose} title="合并账号" loading={loading} error={error} success={success}>
+    <Modal open={open} onClose={handleClose} title="合并账号" error={error} success={success}>
       <div className="space-y-3">
         <div>
           <label className="mb-1 block text-sm font-medium">保留的主播（主账号）</label>

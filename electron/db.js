@@ -942,6 +942,8 @@ async function settleFlagScores(period) {
 
   // 5. 评分：分数 = 人均音浪/100 + 人均时长(分钟)/60，不归一化、不四舍五入。
   //    时长按小时计入（28小时标准≈28分），winner 为最高 score 的组。
+  //    浮点相等会因精度抖动错判，统一用 epsilon 阈值。
+  const EPS = 1e-9;
   let winner = null;
   if (results.length > 0) {
     const now = new Date();
@@ -951,17 +953,17 @@ async function settleFlagScores(period) {
     }
     // 找最高 score
     const maxScore = Math.max(...results.map((r) => r.score), 0);
+    const isTop = (r) => maxScore > 0 && Math.abs(r.score - maxScore) < EPS;
     for (const r of results) {
-      const isWinner = maxScore > 0 && r.score === maxScore;
       await db.query(
         `INSERT INTO flag_scores (master_id, period, score, avg_wave, avg_duration, member_count, is_winner, settled_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [r.masterId, period, r.score, r.avgWave, r.avgDuration, r.memberCount, isWinner ? 1 : 0, now]
+        [r.masterId, period, r.score, r.avgWave, r.avgDuration, r.memberCount, isTop(r) ? 1 : 0, now]
       );
     }
 
     // 记录每月得主
-    const winnerRow = results.find((r) => maxScore > 0 && r.score === maxScore) || null;
+    const winnerRow = results.find(isTop) || null;
     if (winnerRow) {
       await db.query(
         `INSERT INTO flag_winners (period, master_id, master_name, score, avg_wave, avg_duration, member_count, settled_at)
@@ -980,7 +982,7 @@ async function settleFlagScores(period) {
       winner = {
         masterId: winnerRow.masterId,
         masterName: winnerRow.masterName,
-        score: 100,
+        score: winnerRow.score,
       };
     }
   }
@@ -1019,7 +1021,7 @@ async function getFlagGroups(period) {
 }
 
 /**
- * 读取某月小红旗得主（独立表 flag_winners）。
+ * 读取某月小红旗得主（独立表 flag_winners，由 settleFlagScores 维护）。
  * 若该月未结算或无得主，返回 null。
  */
 async function getFlagWinner(period) {
@@ -1027,15 +1029,9 @@ async function getFlagWinner(period) {
     throw new Error("period 格式应为 YYYY-MM");
   }
   const db = getPool();
-  await db.query(`CREATE TABLE IF NOT EXISTS flag_winners (
-    period VARCHAR(7) PRIMARY KEY,
-    master_id INT NOT NULL,
-    master_name VARCHAR(64) NOT NULL,
-    score DECIMAL(16,2) DEFAULT 0,
-    awarded_at DATETIME DEFAULT NULL
-  )`);
+  // 注意：建表由 settleFlagScores 统一负责，这里不再重复定义（避免与其 schema 冲突）。
   const [rows] = await db.query(
-    `SELECT fw.period, fw.master_id, fw.master_name, fw.score, fw.awarded_at,
+    `SELECT fw.period, fw.master_id, fw.master_name, fw.score, fw.settled_at,
             p.name AS current_name
        FROM flag_winners fw
        LEFT JOIN persons p ON p.id = fw.master_id
@@ -1050,7 +1046,7 @@ async function getFlagWinner(period) {
     masterId: r.master_id,
     masterName: r.current_name || r.master_name || "",
     score: Number(r.score) || 0,
-    awardedAt: r.awarded_at || null,
+    awardedAt: r.settled_at || null,
   };
 }
 

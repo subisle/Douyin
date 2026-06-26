@@ -42,6 +42,30 @@ function buildTree(nodes: FamilyNode[]): TreeNode[] {
   const map = new Map<number, TreeNode>();
   nodes.forEach((n) => map.set(n.id, { ...n, children: [], descendantCount: 0 }));
   const roots: TreeNode[] = [];
+  // 先用一次 DFS 拆掉 masterId 环（A→B→A 这种脏数据会让递归栈溢出）。
+  // 把任何会形成环的 masterId 视作 null，让该节点退化为根，避免整页崩溃。
+  const onStack = new Set<number>();
+  const cleared = new Set<number>();
+  const breakCycle = (id: number) => {
+    if (cleared.has(id)) return;
+    onStack.add(id);
+    const node = map.get(id);
+    if (node && node.masterId != null) {
+      const parent = map.get(node.masterId);
+      if (parent) {
+        if (onStack.has(node.masterId)) {
+          console.warn(`[family-tree] 检测到环：${node.id} → ${node.masterId}，已断开`);
+          node.masterId = null;
+        } else {
+          breakCycle(node.masterId);
+        }
+      }
+    }
+    onStack.delete(id);
+    cleared.add(id);
+  };
+  for (const id of map.keys()) breakCycle(id);
+
   for (const node of map.values()) {
     if (node.masterId != null && map.has(node.masterId)) {
       map.get(node.masterId)!.children.push(node);
@@ -49,16 +73,26 @@ function buildTree(nodes: FamilyNode[]): TreeNode[] {
       roots.push(node);
     }
   }
-  const countDesc = (n: TreeNode): number => {
-    n.descendantCount = n.children.reduce((s, c) => s + 1 + countDesc(c), 0);
+  // 环已断开，但仍然带 visited 兜底，防止未来再有遗漏的脏数据把栈打爆。
+  const countDesc = (n: TreeNode, visited: Set<number>): number => {
+    if (visited.has(n.id)) {
+      console.warn(`[family-tree] countDesc 跳过已访问节点 ${n.id}`);
+      return 0;
+    }
+    visited.add(n.id);
+    n.descendantCount = n.children.reduce((s, c) => s + 1 + countDesc(c, visited), 0);
     return n.descendantCount;
   };
-  roots.forEach(countDesc);
-  const sortRec = (list: TreeNode[]) => {
+  roots.forEach((r) => countDesc(r, new Set()));
+  const sortRec = (list: TreeNode[], visited: Set<number>) => {
     list.sort((a, b) => b.descendantCount - a.descendantCount);
-    list.forEach((n) => sortRec(n.children));
+    for (const n of list) {
+      if (visited.has(n.id)) continue;
+      visited.add(n.id);
+      sortRec(n.children, visited);
+    }
   };
-  sortRec(roots);
+  sortRec(roots, new Set());
   roots.sort((a, b) => (a.generation ?? 99) - (b.generation ?? 99));
   return roots;
 }
@@ -68,8 +102,15 @@ function layout(root: TreeNode) {
   const placed: Placed[] = [];
   const edges: Edge[] = [];
   let cursorY = PAD;
+  const visited = new Set<number>();
 
   const walk = (node: TreeNode, depth: number): number => {
+    // buildTree 已经断环，这里再加一层守卫；即使 children 里夹了重复引用也不至于栈溢出。
+    if (visited.has(node.id)) {
+      console.warn(`[family-tree] layout 跳过重复节点 ${node.id}`);
+      return cursorY;
+    }
+    visited.add(node.id);
     const x = PAD + depth * (NODE_W + COL_GAP);
     let centerY: number;
     if (node.children.length === 0) {
@@ -81,8 +122,8 @@ function layout(root: TreeNode) {
     }
     placed.push({ node, x, y: centerY });
     for (const c of node.children) {
-      const cp = placed.find((p) => p.node === c)!;
-      edges.push({ px: x + NODE_W, py: centerY, cx: cp.x, cy: cp.y });
+      const cp = placed.find((p) => p.node === c);
+      if (cp) edges.push({ px: x + NODE_W, py: centerY, cx: cp.x, cy: cp.y });
     }
     return centerY;
   };
@@ -99,22 +140,28 @@ export function FamilyTreePage() {
   );
 
   const tree = useMemo(() => (data ? buildTree(data) : []), [data]);
-  const lineages = tree.filter((n) => n.children.length > 0);
+  // 公司里男队/女队都有族谱，过去只 find 第一个 male，其余男根 + 全部女根都被丢弃。
+  // 这里改为渲染所有"有徒弟"的根节点，按后辈数降序。
+  const lineages = useMemo(
+    () =>
+      tree
+        .filter((n) => n.children.length > 0)
+        .sort((a, b) => b.descendantCount - a.descendantCount),
+    [tree]
+  );
 
   if (unavailable) return <Wrap><BrowserModeState /></Wrap>;
   if (loading) return <Wrap><LoadingState label="正在加载族谱…" /></Wrap>;
   if (error || !data)
     return <Wrap><ErrorState message={error ?? "加载失败"} onRetry={reload} /></Wrap>;
 
-  const root = lineages.find((n) => n.gender === "male");
-
   return (
     <div className="space-y-4">
-      {root ? (
-        <LineageCard key={root.id} root={root} />
+      {lineages.length > 0 ? (
+        lineages.map((root) => <LineageCard key={root.id} root={root} />)
       ) : (
         <Wrap>
-          <EmptyState label="暂无男队族谱" />
+          <EmptyState label="暂无族谱数据" />
         </Wrap>
       )}
     </div>

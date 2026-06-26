@@ -107,22 +107,23 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
   });
 }
 
-/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → 前8位匹配 → douyinNo 匹配 → 名称匹配） */
+/** 把原始行按 anchor_id 匹配到库里主播（全匹配 → douyinNo 匹配 → 名称精确匹配）
+ *  历史上还做过「anchorId 前 8 位前缀」和「名称双向 includes」匹配，但都会因为前缀碰撞
+ *  或一字姓名而把数据写到错误的人头上，已下线 —— 宁可让用户在 unmatched 里手动确认。
+ */
 export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary {
   const byId = new Map<string, AnchorRow>();
-  const byFirst8 = new Map<string, AnchorRow>();
   const byDouyinNo = new Map<string, AnchorRow>();
+  // 同名主播无法靠名字唯一定位，落到 nameDup 里跳过名称匹配，避免误写。
   const byName = new Map<string, AnchorRow>();
+  const nameDup = new Set<string>();
   for (const a of anchors) {
-    if (a.anchorId) {
-      byId.set(a.anchorId, a);
-      byFirst8.set(a.anchorId.substring(0, 8), a);
-    }
-    if (a.douyinNo) {
-      byDouyinNo.set(a.douyinNo, a);
-    }
-    if (a.name) {
-      byName.set(a.name.trim(), a);
+    if (a.anchorId) byId.set(a.anchorId, a);
+    if (a.douyinNo) byDouyinNo.set(a.douyinNo, a);
+    const nm = (a.name || "").trim();
+    if (nm) {
+      if (byName.has(nm)) nameDup.add(nm);
+      else byName.set(nm, a);
     }
   }
 
@@ -137,20 +138,12 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
       skipped++;
       continue;
     }
-    let anchor:
-      | AnchorRow
-      | undefined =
-      byId.get(rawId) ||
-      byFirst8.get(rawId.substring(0, 8)) ||
-      byDouyinNo.get(rawId) ||
-      byName.get(r.anchorName.trim());
-    if (!anchor && r.anchorName.trim()) {
-      // 模糊名称匹配：包含关系
-      anchor = anchors.find(
-        (a) =>
-          a.name.includes(r.anchorName.trim()) ||
-          r.anchorName.trim().includes(a.name)
-      );
+    const nm = r.anchorName.trim();
+    let anchor: AnchorRow | undefined =
+      byId.get(rawId) || byDouyinNo.get(rawId);
+    // 仅在名称非空、库内唯一时才用名称兜底
+    if (!anchor && nm && !nameDup.has(nm)) {
+      anchor = byName.get(nm);
     }
     if (anchor) {
       matched.push({
