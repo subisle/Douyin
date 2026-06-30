@@ -198,10 +198,13 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
     [anchors]
   );
 
-  // 从右键菜单打开时预填被合并项
+  // 打开时重置状态；若有 prefillSecondary 则额外预填
   useEffect(() => {
-    if (open && prefillSecondary) {
-      setSecondary(String(prefillSecondary));
+    if (open) {
+      reset();
+      if (prefillSecondary) {
+        setSecondary(String(prefillSecondary));
+      }
     }
   }, [open, prefillSecondary]);
 

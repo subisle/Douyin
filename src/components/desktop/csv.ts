@@ -173,7 +173,8 @@ export function downloadCsv(data: Record<string, unknown>[], filename: string): 
   link.href = url;
   link.download = filename;
   link.click();
-  URL.revokeObjectURL(url);
+  // 延迟释放 URL，确保浏览器完成下载（立即 revoke 会导致下载失败）
+  setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /** 从 CSV 提取主播信息（anchorId / douyinNo / name），按 anchorId 去重合并 */
