@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Pencil, GitMerge, Trash2, Copy } from "lucide-react";
+import { Search, Pencil, GitMerge, Trash2, Copy, Users } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
 import { AddAnchorDialog, MergeAccountsDialog, ImportAnchorsDialog } from "./anchor-dialogs";
 
 type GenderFilter = "all" | "male" | "female";
+type MasterFilter = { mode: "none" } | { mode: "master"; personId: number } | { mode: "apprentice"; personId: number };
 const PAGE_SIZE = 15;
 
 export function AnchorsPage() {
@@ -34,6 +35,7 @@ export function AnchorsPage() {
   );
   const [keyword, setKeyword] = useState("");
   const [gender, setGender] = useState<GenderFilter>("all");
+  const [masterFilter, setMasterFilter] = useState<MasterFilter>({ mode: "none" });
   const [page, setPage] = useState(1);
   const [addOpen, setAddOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
@@ -92,11 +94,31 @@ export function AnchorsPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [contextMenu]);
 
+  // 师傅名称映射
+  const masterNameMap = useMemo(() => {
+    const m = new Map<number, string>();
+    if (!data) return m;
+    data.forEach((a) => m.set(a.id, a.name));
+    return m;
+  }, [data]);
+
   const filtered = useMemo(() => {
     if (!data) return [];
     let list = data;
     if (gender !== "all") {
       list = list.filter((a) => a.gender === gender);
+    }
+    if (masterFilter.mode === "master") {
+      // 选中的主播的徒弟：masterId === 选中 personId
+      list = list.filter((a) => a.masterId === masterFilter.personId);
+    } else if (masterFilter.mode === "apprentice") {
+      // 选中的主播的师傅：选中主播的 masterId 对应的人
+      const target = data.find((a) => a.id === masterFilter.personId);
+      if (target && target.masterId) {
+        list = list.filter((a) => a.id === target.masterId);
+      } else {
+        list = [];
+      }
     }
     const kw = keyword.trim().toLowerCase();
     if (kw) {
@@ -109,11 +131,11 @@ export function AnchorsPage() {
       );
     }
     return list;
-  }, [data, gender, keyword]);
+  }, [data, gender, keyword, masterFilter]);
 
   useEffect(() => {
     setPage(1);
-  }, [gender, keyword]);
+  }, [gender, keyword, masterFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pageCount);
@@ -190,7 +212,7 @@ export function AnchorsPage() {
   // 筛选/搜索变化时清空选择
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [gender, keyword]);
+  }, [gender, keyword, masterFilter]);
 
   if (unavailable) {
     return (
@@ -236,6 +258,12 @@ export function AnchorsPage() {
             </div>
             <div className="flex items-center gap-2">
               <GenderTabs value={gender} onChange={setGender} />
+              <MasterFilterControl
+                data={data}
+                masterNameMap={masterNameMap}
+                value={masterFilter}
+                onChange={setMasterFilter}
+              />
               <Button
                 size="sm"
                 variant="outline"
@@ -567,6 +595,136 @@ function GenderBadge({ gender }: { gender: string }) {
   if (gender === "female")
     return <Badge className="bg-chart-1/15 text-chart-1 hover:bg-chart-1/15">女</Badge>;
   return <Badge variant="outline">—</Badge>;
+}
+
+/** 师傅/徒弟筛选控件 */
+function MasterFilterControl({
+  data,
+  masterNameMap,
+  value,
+  onChange,
+}: {
+  data: AnchorRow[];
+  masterNameMap: Map<number, string>;
+  value: MasterFilter;
+  onChange: (v: MasterFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const selectedName =
+    value.mode !== "none"
+      ? masterNameMap.get(value.personId) || ""
+      : "";
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-full border px-4 py-1 text-sm font-medium transition-colors",
+          value.mode !== "none"
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-border bg-card text-muted-foreground hover:text-foreground"
+        )}
+      >
+        <Users className="size-3.5" />
+        {value.mode === "none"
+          ? "师徒筛选"
+          : value.mode === "master"
+          ? `徒弟 of ${selectedName}`
+          : `师傅 of ${selectedName}`}
+      </button>
+
+      {open && (
+        <div className="app-no-drag absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-border bg-popover p-2 shadow-xl">
+          {/* 模式选择 */}
+          <div className="mb-2 flex gap-1">
+            <button
+              onClick={() => onChange({ mode: "none" })}
+              className={cn(
+                "flex-1 rounded-md px-2 py-1 text-xs",
+                value.mode === "none" ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              )}
+            >
+              不筛选
+            </button>
+            <button
+              onClick={() => {
+                if (value.mode === "apprentice") {
+                  onChange({ mode: "master", personId: value.personId });
+                }
+              }}
+              className={cn(
+                "flex-1 rounded-md px-2 py-1 text-xs",
+                value.mode === "master" ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              )}
+            >
+              查徒弟
+            </button>
+            <button
+              onClick={() => {
+                if (value.mode === "master") {
+                  onChange({ mode: "apprentice", personId: value.personId });
+                }
+              }}
+              className={cn(
+                "flex-1 rounded-md px-2 py-1 text-xs",
+                value.mode === "apprentice" ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+              )}
+            >
+              查师傅
+            </button>
+          </div>
+
+          {/* 主播选择列表 */}
+          {value.mode !== "none" && (
+            <>
+              <div className="mb-1 px-1 text-xs text-muted-foreground">
+                {value.mode === "master" ? "选择师傅，查看其徒弟" : "选择徒弟，查看其师傅"}
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {data.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      onChange(
+                        value.mode === "master"
+                          ? { mode: "master", personId: a.id }
+                          : { mode: "apprentice", personId: a.id }
+                      );
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent",
+                      value.personId === a.id && "bg-accent"
+                    )}
+                  >
+                    <GenderBadge gender={a.gender} />
+                    <span className="font-medium">{a.name}</span>
+                    {a.masterId && value.mode === "master" && (
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        师傅: {masterNameMap.get(a.masterId) || "?"}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Pagination({

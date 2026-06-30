@@ -6,6 +6,7 @@ import {
   FileText,
   Database,
   Flag,
+  Swords,
 } from "lucide-react";
 
 export type PageId =
@@ -13,7 +14,8 @@ export type PageId =
   | "family-tree"
   | "anchors"
   | "data"
-  | "flag";
+  | "flag"
+  | "pk";
 
 export interface NavItem {
   id: PageId;
@@ -28,12 +30,6 @@ export const NAV_ITEMS: NavItem[] = [
     label: "仪表盘",
     icon: LayoutDashboard,
     description: "数据概览与趋势",
-  },
-  {
-    id: "family-tree",
-    label: "族谱",
-    icon: Network,
-    description: "主播归属关系",
   },
   {
     id: "anchors",
@@ -52,5 +48,17 @@ export const NAV_ITEMS: NavItem[] = [
     label: "流动红旗",
     icon: Flag,
     description: "师徒小组音浪时长对比",
+  },
+  {
+    id: "pk",
+    label: "PK名单",
+    icon: Swords,
+    description: "按月音浪分组",
+  },
+  {
+    id: "family-tree",
+    label: "族谱",
+    icon: Network,
+    description: "主播归属关系",
   },
 ];

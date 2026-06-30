@@ -9,6 +9,7 @@ import { AnchorsPage } from "./anchors-page";
 import { FamilyTreePage } from "./family-tree-page";
 import { DataPage } from "./data-page";
 import { FlowingFlagCard } from "./flowing-flag-card";
+import { PkRosterPage } from "./pk-roster-page";
 import { type PageId } from "./types";
 
 export function DesktopShell() {
@@ -57,6 +58,8 @@ export function DesktopShell() {
                 <DataPage />
               ) : currentPage === "flag" ? (
                 <FlowingFlagCard />
+              ) : currentPage === "pk" ? (
+                <PkRosterPage />
               ) : null}
             </main>
           </ScrollArea>

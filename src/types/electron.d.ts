@@ -111,6 +111,26 @@ export interface DailyReportData {
   };
 }
 
+export interface PkMember {
+  personId: number;
+  name: string;
+  gender: string;
+  anchorId: string;
+  wave: number;        // 总音浪（展示用）
+  trimmedAvg: number;  // 去最高后日均（分组用）
+  maxWave: number;     // 本月最高单日音浪
+  minWave: number;     // 本月最低单日音浪
+  waveDays: number;    // 有数据的天数
+  duration: number;
+  rank: number;
+}
+
+export interface PkRosterData {
+  period: string;
+  males: PkMember[];   // 男主播列表（按总音浪降序）
+  females: PkMember[]; // 女主播列表（按总音浪降序）
+}
+
 export interface DuplicateAnchorPerson {
   id: number;
   name: string;
@@ -222,6 +242,10 @@ declare global {
       date: string,
       gender: string
     ) => Promise<IpcResult<DailyReportData>>;
+    getPkRoster: (
+      period?: string,
+      groupSize?: number
+    ) => Promise<IpcResult<PkRosterData>>;
   }
 
   interface Window {

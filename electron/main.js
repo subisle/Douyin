@@ -158,3 +158,7 @@ ipcMain.handle(
   "data:getDailyWaveReport",
   wrap((date, gender) => db.getDailyWaveReport(date, gender))
 );
+ipcMain.handle(
+  "data:getPkRoster",
+  wrap((period, groupSize) => db.getPkRoster(period, groupSize))
+);

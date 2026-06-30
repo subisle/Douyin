@@ -40,4 +40,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getTierRules: () => ipcRenderer.invoke("data:getTierRules"),
   saveTierRules: (rules) => ipcRenderer.invoke("data:saveTierRules", rules),
   getDailyWaveReport: (date, gender) => ipcRenderer.invoke("data:getDailyWaveReport", date, gender),
+  getPkRoster: (period, groupSize) => ipcRenderer.invoke("data:getPkRoster", period, groupSize),
 });
