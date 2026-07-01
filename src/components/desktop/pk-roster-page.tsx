@@ -319,313 +319,134 @@ function GroupCard({
   );
 }
 
-/* ---------- 导出专用：海报式排名表 ---------- */
-function ExportRankTable({
-  title,
+/* ---------- 导出专用：Desktop风格两列对比 ---------- */
+function ExportCompareBoard({
   period,
-  groups,
-  gender,
+  maleGroups,
+  femaleGroups,
 }: {
-  title: string;
   period: string;
-  groups: GroupState[];
-  gender: "male" | "female";
+  maleGroups: GroupState[];
+  femaleGroups: GroupState[];
 }) {
-  const CYAN1 = "#00f5d4";
-  const CYAN2 = "#00b8ff";
-  const BG1 = "#0a0f1c";
-  const BG2 = "#020617";
-  const PANEL = "rgba(10, 24, 37, 0.88)";
-  const PANEL_STRONG = "rgba(10, 24, 37, 0.95)";
-  const LINE = "rgba(255, 255, 255, 0.08)";
-  const LINE_SOFT = "rgba(255, 255, 255, 0.05)";
+  const BG = "#0f172a";
+  const CARD_BG = "#1e293b";
+  const BLUE_HEADER = "rgba(59, 130, 246, 0.2)";
+  const PINK_HEADER = "rgba(236, 72, 153, 0.2)";
+  const BLUE_TEXT = "#60a5fa";
+  const PINK_TEXT = "#f472b6";
+  const YELLOW = "#facc15";
+  const CYAN = "#22d3ee";
   const TEXT_MAIN = "#f8fafc";
-  const TEXT_SUB = "#a5f3fc";
   const TEXT_MUTED = "#94a3b8";
-  const DANGER = "#f87171";
-  const PURPLE = "#c4b5fd";
+  const BORDER = "#334155";
 
-  // 合并所有组，按音浪降序
-  const all = useMemo(() => {
-    const out: (PkMember & { groupLabel: string; isCaptain: boolean })[] = [];
-    groups.forEach((g) => {
-      g.members.forEach((m) => {
-        out.push({ ...m, groupLabel: g.label, isCaptain: g.captainId === m.personId });
-      });
-    });
-    return out.sort((a, b) => b.wave - a.wave);
-  }, [groups]);
-
-  const totalWave = all.reduce((s, m) => s + m.wave, 0);
-  const notStartedList = all.filter((m) => m.wave === 0);
-  const notStarted = notStartedList.length;
-  const maxWave = Math.max(...all.map((m) => m.wave), 1);
-
-  // 等级（按总音浪）
-  const levelOf = (w: number) => {
-    if (w >= 1_0000_0000) return { label: "S1", tier: "S" };
-    if (w >= 5000_0000) return { label: "A1", tier: "A" };
-    if (w >= 1000_0000) return { label: "B1", tier: "B" };
-    if (w >= 500_0000) return { label: "B2", tier: "B" };
-    if (w >= 100_0000) return { label: "C1", tier: "C" };
-    if (w >= 50_0000) return { label: "C2", tier: "C" };
-    if (w > 0) return { label: "D1", tier: "D" };
-    return { label: "-", tier: "-" };
-  };
-
-  // 解析 period "2026-07" → "2026年7月"
   const periodDisplay = (() => {
     const [y, m] = period.split("-");
     return `${y}年${parseInt(m, 10)}月`;
   })();
 
-  return (
-    <div
-      style={{
-        width: 1080,
-        minHeight: 1080,
-        padding: 18,
-        background: `radial-gradient(circle at 50% 18%, ${BG1} 0%, ${BG2} 62%, #000 100%)`,
-        color: TEXT_MAIN,
-        fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-        position: "relative",
-        overflow: "hidden",
-      }}
-    >
-      {/* 网格背景 */}
-      <div style={{
-        position: "absolute", inset: 0, pointerEvents: "none",
-        background: `
-          linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)`,
-        backgroundSize: "28px 28px",
-        opacity: 0.35,
-      }} />
-      {/* 右上角光晕 */}
-      <div style={{
-        position: "absolute", inset: 0, pointerEvents: "none",
-        background: `radial-gradient(circle at top right, rgba(0, 245, 212, 0.16), transparent 28%)`,
-      }} />
+  const maleAll = useMemo(() => {
+    const out: (PkMember & { groupLabel: string; isCaptain: boolean })[] = [];
+    maleGroups.forEach((g) => g.members.forEach((m) => {
+      out.push({ ...m, groupLabel: g.label, isCaptain: g.captainId === m.personId });
+    }));
+    return out.sort((a, b) => b.wave - a.wave);
+  }, [maleGroups]);
 
-      {/* 内容层 */}
-      <div style={{ position: "relative", width: "100%" }}>
-        {/* Header Panel */}
-        <div style={{
-          display: "grid", gridTemplateColumns: "1fr 250px", gap: 16,
-          padding: "22px 24px",
-          background: PANEL,
-          border: `1px solid ${LINE}`,
-          borderRadius: 24,
-          boxShadow: "0 22px 44px rgba(0,0,0,0.32)",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{
-              width: 68, height: 68, borderRadius: 20,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 28, fontWeight: 800, color: "#fff",
-              background: `linear-gradient(135deg, rgba(0,245,212,0.18), rgba(0,184,255,0.18))`,
-              border: "1px solid rgba(0,245,212,0.32)",
-              boxShadow: "0 0 26px rgba(0,245,212,0.16)",
-              flexShrink: 0,
-            }}>
-              {gender === "male" ? "♂" : "♀"}
-            </div>
-            <div>
-              <div style={{
-                display: "inline-flex", alignItems: "center", gap: 8,
-                marginBottom: 8, padding: "6px 12px", borderRadius: 999,
-                fontSize: 12, letterSpacing: 1, color: CYAN1,
-                background: "rgba(0,245,212,0.08)",
-                border: "1px solid rgba(0,245,212,0.18)",
-              }}>
-                <span style={{
-                  width: 7, height: 7, borderRadius: "50%",
-                  background: `linear-gradient(135deg, ${CYAN1}, ${CYAN2})`,
-                  boxShadow: "0 0 10px rgba(0,245,212,0.6)",
-                }} />
-                星势力 {gender === "male" ? "男" : "女"}主播音浪统计
-              </div>
-              <h1 style={{
-                margin: 0, fontSize: 32, lineHeight: 1.15, letterSpacing: 1,
-                color: "#fff", whiteSpace: "nowrap",
-                textShadow: "0 0 24px rgba(0,245,212,0.18)",
-              }}>
-                {title}
-              </h1>
-              <div style={{ marginTop: 10, fontSize: 14, color: TEXT_MUTED, lineHeight: 1.5 }}>
-                统计周期：{periodDisplay} · 按总音浪降序排列
-              </div>
-            </div>
-          </div>
-          {/* 日期卡片 */}
-          <div style={{
-            display: "flex", flexDirection: "column", justifyContent: "center", gap: 8,
-            padding: "18px 20px", borderRadius: 20, textAlign: "center",
-            background: "rgba(15, 37, 56, 0.82)",
-            border: "1px solid rgba(0,245,212,0.16)",
-          }}>
-            <div style={{ fontSize: 12, letterSpacing: 1, color: TEXT_MUTED }}>数据周期</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#fff", lineHeight: 1.2 }}>{periodDisplay}</div>
-            <div style={{ fontSize: 13, color: CYAN1 }}>共 {all.length} 人参战</div>
-          </div>
+  const femaleAll = useMemo(() => {
+    const out: (PkMember & { groupLabel: string; isCaptain: boolean })[] = [];
+    femaleGroups.forEach((g) => g.members.forEach((m) => {
+      out.push({ ...m, groupLabel: g.label, isCaptain: g.captainId === m.personId });
+    }));
+    return out.sort((a, b) => b.wave - a.wave);
+  }, [femaleGroups]);
+
+  const maleTotal = maleAll.reduce((s, m) => s + m.wave, 0);
+  const femaleTotal = femaleAll.reduce((s, m) => s + m.wave, 0);
+
+  const renderColumn = (data: (PkMember & { groupLabel: string; isCaptain: boolean })[], gender: "male" | "female") => {
+    const headerBg = gender === "male" ? BLUE_HEADER : PINK_HEADER;
+    const headerText = gender === "male" ? BLUE_TEXT : PINK_TEXT;
+    const label = gender === "male" ? `男主播 (${data.length}人)` : `女主播 (${data.length}人)`;
+    const total = gender === "male" ? maleTotal : femaleTotal;
+    return (
+      <div>
+        {/* 列标题 */}
+        <div style={{ background: headerBg, borderRadius: "8px 8px 0 0", padding: "12px 16px", marginBottom: 0 }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: headerText, textAlign: "center" }}>{label}</h3>
         </div>
-
-        {/* Stats Grid */}
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 14,
-        }}>
-          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
-            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>参战人数</div>
-            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{all.length}</div>
-          </div>
-          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
-            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>未开播</div>
-            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: DANGER, fontFamily: 'Consolas, monospace' }}>{notStarted}</div>
-          </div>
-          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
-            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>30天总音浪</div>
-            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{formatPkWave(totalWave)}</div>
-          </div>
-          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
-            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>累计总音浪</div>
-            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{formatPkWave(totalWave)}</div>
-          </div>
-        </div>
-
-        {/* Board (Table) */}
-        <div style={{
-          marginTop: 14, background: PANEL, borderRadius: 24,
-          border: `1px solid ${LINE}`, overflow: "hidden",
-          boxShadow: "0 18px 36px rgba(0,0,0,0.22)",
-        }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-            <thead>
-              <tr style={{ background: PANEL_STRONG }}>
-                <th style={{ width: "8%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>排名</th>
-                <th style={{ width: "18%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>主播姓名</th>
-                <th style={{ width: "24%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>30天音浪</th>
-                <th style={{ width: "21%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>累计总音浪</th>
-                <th style={{ width: "12%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>等级</th>
-                <th style={{ width: "17%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>直播时长</th>
-              </tr>
-            </thead>
-            <tbody>
-              {all.map((m, i) => {
-                const lv = levelOf(m.wave);
-                const isEmpty = m.wave === 0;
-                const widthPct = isEmpty ? 0 : Math.max(2, (m.wave / maxWave) * 100);
-                const rank = i + 1;
-                const rankCls = rank === 1 ? "top1" : rank === 2 ? "top2" : rank === 3 ? "top3" : "";
-                const rowBg = rank === 1
-                  ? "linear-gradient(90deg, rgba(0,245,212,0.12), rgba(0,184,255,0.03))"
-                  : rank === 2
-                  ? "linear-gradient(90deg, rgba(0,245,212,0.09), rgba(255,255,255,0.02))"
-                  : rank === 3
-                  ? "linear-gradient(90deg, rgba(0,184,255,0.09), rgba(255,255,255,0.02))"
-                  : rank % 2 === 0
-                  ? "rgba(255,255,255,0.015)"
-                  : "transparent";
-                return (
-                  <tr key={m.personId} style={{ background: rowBg }}>
-                    <td style={{ padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}`, color: "rgba(255,255,255,0.92)" }}>
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        width: 28, height: 28, borderRadius: 10,
-                        fontSize: rank <= 3 ? 16 : 12, fontWeight: 700,
-                        ...(rank <= 3
-                          ? { background: "linear-gradient(135deg, rgba(0,245,212,0.2), rgba(0,184,255,0.18))", border: "1px solid rgba(0,245,212,0.22)", color: "#fff" }
-                          : { background: "rgba(148,163,184,0.14)", border: "1px solid rgba(148,163,184,0.18)", color: "rgba(255,255,255,0.72)", fontFamily: 'Consolas, monospace' }),
-                      }}>
-                        {rank <= 3 ? ["🥇", "🥈", "🥉"][rank - 1] : String(rank).padStart(2, "0")}
-                      </span>
-                    </td>
-                    <td style={{
-                      padding: "5px 8px", fontSize: 13, verticalAlign: "middle",
-                      borderBottom: `1px solid ${LINE_SOFT}`,
-                      color: rank <= 3 ? "#fff" : TEXT_SUB, fontWeight: 600,
-                    }}>
+        {/* 主播卡片列表 */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 0" }}>
+          {data.map((m, i) => {
+            const isEmpty = m.wave === 0;
+            return (
+              <div key={m.personId} style={{
+                background: CARD_BG, borderRadius: 8, padding: "12px 16px",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ color: headerText, fontWeight: 700, fontSize: 16, fontFamily: 'Consolas, monospace' }}>#{i + 1}</span>
+                    <span style={{ color: TEXT_MAIN, fontWeight: 500, fontSize: 15 }}>
                       {m.name}
                       {m.isCaptain && <span style={{ marginLeft: 4, color: "#fbbf24" }}>♛</span>}
-                    </td>
-                    <td style={{ padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}` }}>
-                      <div style={{ fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 12, color: isEmpty ? DANGER : "#fff", whiteSpace: "nowrap" }}>
-                        {isEmpty ? "未开播" : formatPkWave(m.wave)}
-                      </div>
-                      <div style={{ width: "100%", maxWidth: 138, height: 4, marginTop: 4, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
-                        <div style={{
-                          height: "100%", width: `${widthPct}%`, borderRadius: 999,
-                          background: isEmpty ? "#475569" : `linear-gradient(90deg, ${CYAN1}, ${CYAN2})`,
-                          boxShadow: isEmpty ? "none" : "0 0 12px rgba(0,245,212,0.26)",
-                        }} />
-                      </div>
-                    </td>
-                    <td style={{
-                      padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle",
-                      borderBottom: `1px solid ${LINE_SOFT}`,
-                      fontFamily: 'Consolas, monospace', fontWeight: 700,
-                      color: "rgba(255,255,255,0.95)", whiteSpace: "nowrap",
-                    }}>
-                      {formatPkWave(m.wave)}
-                    </td>
-                    <td style={{ padding: "5px 8px", verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}` }}>
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        minWidth: 54, padding: "4px 10px", borderRadius: 999,
-                        fontSize: 11, fontWeight: 800, color: "#04111f",
-                        background: `linear-gradient(90deg, ${CYAN1}, ${CYAN2})`,
-                        boxShadow: "0 0 14px rgba(0,245,212,0.18)",
-                      }}>
-                        {lv.label}
-                      </span>
-                    </td>
-                    <td style={{
-                      padding: "5px 8px", fontSize: 12, verticalAlign: "middle",
-                      borderBottom: `1px solid ${LINE_SOFT}`,
-                      color: PURPLE, textAlign: "center", whiteSpace: "nowrap",
-                    }}>
-                      {m.waveDays ? `${(m.waveDays * 0.5).toFixed(1)} 小时` : "-"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Footer Panel */}
-        {notStarted > 0 && (
-          <div style={{
-            marginTop: 14, padding: "16px 18px", borderRadius: 22,
-            background: PANEL, border: `1px solid ${LINE}`,
-          }}>
-            <div style={{
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              gap: 16, marginBottom: 12,
-            }}>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 10, fontSize: 13, color: TEXT_SUB, fontWeight: 700 }}>
-                <span style={{
-                  width: 8, height: 8, borderRadius: "50%",
-                  background: `linear-gradient(135deg, ${CYAN1}, ${CYAN2})`,
-                  boxShadow: "0 0 12px rgba(0,245,212,0.48)",
-                }} />
-                未开播名单
+                    </span>
+                  </div>
+                </div>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ color: TEXT_MUTED, fontSize: 12, marginBottom: 2 }}>音浪</div>
+                  <div style={{
+                    color: isEmpty ? "#f87171" : YELLOW,
+                    fontFamily: 'Consolas, monospace',
+                    fontWeight: 700, fontSize: 18,
+                  }}>
+                    {isEmpty ? "未开播" : formatPkWave(m.wave)}
+                  </div>
+                </div>
               </div>
-              <div style={{ fontSize: 12, color: TEXT_MUTED }}>共 {notStarted} 人</div>
-            </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {notStartedList.map((m) => (
-                <span key={m.personId} style={{
-                  padding: "5px 12px", borderRadius: 999,
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  fontSize: 12, color: "rgba(255,255,255,0.84)",
-                }}>
-                  {m.name}
-                </span>
-              ))}
-            </div>
+            );
+          })}
+          {data.length === 0 && (
+            <div style={{ textAlign: "center", color: TEXT_MUTED, padding: "32px 0" }}>暂无数据</div>
+          )}
+        </div>
+        {/* 汇总卡片 */}
+        <div style={{
+          background: gender === "male" ? "rgba(59,130,246,0.1)" : "rgba(236,72,153,0.1)",
+          border: `1px solid ${gender === "male" ? "rgba(59,130,246,0.3)" : "rgba(236,72,153,0.3)"}`,
+          borderRadius: 8, padding: "16px 20px", marginTop: 8,
+        }}>
+          <h4 style={{ margin: 0, marginBottom: 8, color: headerText, fontWeight: 700, textAlign: "center", fontSize: 15 }}>
+            {gender === "male" ? "男主播音浪汇总" : "女主播音浪汇总"}
+          </h4>
+          <div style={{ textAlign: "center" }}>
+            <span style={{ color: TEXT_MUTED, fontSize: 13 }}>总音浪 </span>
+            <span style={{ color: YELLOW, fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 18 }}>
+              {formatPkWave(total)}
+            </span>
           </div>
-        )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      width: 960,
+      background: BG,
+      color: TEXT_MAIN,
+      fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
+      padding: 32,
+    }}>
+      {/* 标题 */}
+      <div style={{ textAlign: "center", marginBottom: 24 }}>
+        <h2 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: "#fff" }}>PK主播音浪数据对比</h2>
+        <p style={{ margin: "8px 0 0", fontSize: 16, color: TEXT_MUTED }}>{periodDisplay} · 星势力</p>
+      </div>
+      {/* 两列布局 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        {renderColumn(maleAll, "male")}
+        {renderColumn(femaleAll, "female")}
       </div>
     </div>
   );
@@ -658,6 +479,7 @@ export function PkRosterPage() {
   const [selectedPoolIds, setSelectedPoolIds] = useState<Set<number>>(new Set());
   const exportRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   /** 拉取数据 */
   const fetchRoster = useCallback(async () => {
@@ -883,6 +705,11 @@ export function PkRosterPage() {
     }
   }, []);
 
+  const currentMonth = useMemo(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }, []);
+
   /** 导出图片 */
   const handleExportImage = useCallback(async () => {
     if (!exportRef.current) return;
@@ -893,21 +720,22 @@ export function PkRosterPage() {
         backgroundColor: "#0f172a",
         pixelRatio: 2,
       });
-      const link = document.createElement("a");
-      link.download = `PK名单_${dataPeriod}.png`;
-      link.href = dataUrl;
-      link.click();
+      setPreviewUrl(dataUrl);
     } catch (e) {
       console.error("导出失败", e);
     } finally {
       setExporting(false);
     }
-  }, [dataPeriod]);
-
-  const currentMonth = useMemo(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   }, []);
+
+  /** 下载预览图 */
+  const handleDownloadPreview = useCallback(() => {
+    if (!previewUrl) return;
+    const link = document.createElement("a");
+    link.download = `PK名单_${dataPeriod || period || currentMonth}.png`;
+    link.href = previewUrl;
+    link.click();
+  }, [previewUrl, dataPeriod, period, currentMonth]);
 
   const displayPeriod = dataPeriod || period || currentMonth;
 
@@ -1110,31 +938,51 @@ export function PkRosterPage() {
 
       {/* 隐藏的导出 DOM */}
       <div className="fixed -left-[9999px] top-0">
-        <div ref={exportRef} className="space-y-6">
-          {maleGroups.some((g) => g.members.length > 0) && (
-            <ExportRankTable
-              title="星势力男主播 PK 名单"
+        <div ref={exportRef}>
+          {(maleGroups.some((g) => g.members.length > 0) || femaleGroups.some((g) => g.members.length > 0)) ? (
+            <ExportCompareBoard
               period={displayPeriod}
-              groups={maleGroups}
-              gender="male"
+              maleGroups={maleGroups}
+              femaleGroups={femaleGroups}
             />
+          ) : (
+            <div className="p-8 text-center text-muted-foreground" style={{ width: 960 }}>
+              暂无分组数据
+            </div>
           )}
-          {femaleGroups.some((g) => g.members.length > 0) && (
-            <ExportRankTable
-              title="星势力女主播 PK 名单"
-              period={displayPeriod}
-              groups={femaleGroups}
-              gender="female"
-            />
-          )}
-          {!maleGroups.some((g) => g.members.length > 0) &&
-            !femaleGroups.some((g) => g.members.length > 0) && (
-              <div className="p-8 text-center text-muted-foreground" style={{ width: 960 }}>
-                暂无分组数据
-              </div>
-            )}
         </div>
       </div>
+
+      {/* 预览弹窗 */}
+      {previewUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={() => setPreviewUrl(null)}
+        >
+          <div
+            className="relative max-h-[90vh] max-w-[90vw] overflow-auto rounded-lg bg-card p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <h3 className="text-lg font-semibold">导出预览</h3>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={handleDownloadPreview}>
+                  <Download className="size-4" />
+                  下载图片
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setPreviewUrl(null)}>
+                  关闭
+                </Button>
+              </div>
+            </div>
+            <img
+              src={previewUrl}
+              alt="PK名单预览"
+              className="max-h-[80vh] max-w-full rounded"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
