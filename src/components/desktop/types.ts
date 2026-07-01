@@ -39,9 +39,9 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "data",
-    label: "数据与报告",
+    label: "导入导出",
     icon: Database,
-    description: "每日报告、导入与导出",
+    description: "数据导入、导出与每日报告",
   },
   {
     id: "flag",

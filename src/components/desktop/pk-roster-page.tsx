@@ -319,49 +319,155 @@ function GroupCard({
   );
 }
 
-/* ---------- 导出专用卡片 ---------- */
-function ExportGroupCard({ group, index }: { group: GroupState; index: number }) {
-  const colorClass = GROUP_COLORS[index % GROUP_COLORS.length];
-  const captainName = group.members.find((m) => m.personId === group.captainId)?.name;
-  const sorted = [...group.members].sort((a, b) => b.wave - a.wave);
+/* ---------- 导出专用：单性别完整排名表 ---------- */
+function ExportRankTable({
+  title,
+  period,
+  groups,
+  gender,
+}: {
+  title: string;
+  period: string;
+  groups: GroupState[];
+  gender: "male" | "female";
+}) {
+  // 合并所有组，按音浪降序
+  const all = useMemo(() => {
+    const out: (PkMember & { groupLabel: string; isCaptain: boolean })[] = [];
+    groups.forEach((g) => {
+      g.members.forEach((m) => {
+        out.push({ ...m, groupLabel: g.label, isCaptain: g.captainId === m.personId });
+      });
+    });
+    return out.sort((a, b) => b.wave - a.wave);
+  }, [groups]);
+
+  const totalWave = all.reduce((s, m) => s + m.wave, 0);
+  const notStarted = all.filter((m) => m.wave === 0).length;
+  const maxWave = Math.max(...all.map((m) => m.wave), 1);
+
+  // 等级（按总音浪）
+  const levelOf = (w: number) => {
+    if (w >= 1_0000_0000) return { label: "S", cls: "bg-red-500" };
+    if (w >= 5000_0000) return { label: "A", cls: "bg-orange-500" };
+    if (w >= 1000_0000) return { label: "B", cls: "bg-blue-500" };
+    if (w >= 100_0000) return { label: "C", cls: "bg-emerald-500" };
+    if (w > 0) return { label: "D", cls: "bg-slate-400" };
+    return { label: "-", cls: "bg-slate-600" };
+  };
+
+  // 等级分布统计
+  const levelStats = useMemo(() => {
+    const stats: Record<string, number> = { S: 0, A: 0, B: 0, C: 0, D: 0, "-": 0 };
+    all.forEach((m) => { stats[levelOf(m.wave).label]++; });
+    return stats;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all]);
+
   return (
-    <div className={`border-l-4 ${colorClass} bg-card rounded-lg`}>
-      <div className="px-3 py-2 border-b border-border/60">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold">{group.label}</span>
-          <span className="text-xs text-muted-foreground">{group.members.length} 人</span>
-        </div>
-        {captainName && (
-          <div className="mt-0.5 text-xs text-amber-500 flex items-center gap-1">
-            <Crown className="size-3" />
-            队长：{captainName}
-          </div>
-        )}
+    <div className="p-6" style={{ width: 960, background: "#0f172a", color: "#e2e8f0", fontFamily: "system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" }}>
+      {/* 标题 */}
+      <h1 className="mb-1 text-center text-2xl font-bold tracking-wide" style={{ color: "#f1f5f9" }}>
+        {title} · {period}
+      </h1>
+      <div className="mb-5 text-center text-xs" style={{ color: "#94a3b8" }}>
+        {all.length} 人 · 总音浪 {formatPkWave(totalWave)}
       </div>
-      <table className="w-full text-sm">
-        <tbody>
-          {sorted.map((m, i) => (
-            <tr key={m.personId} className="border-b border-border/40 last:border-0">
-              <td className="py-1 pl-3 text-muted-foreground w-7">{i + 1}</td>
-              <td className="py-1 font-medium">
-                {m.name}
-                {group.captainId === m.personId && (
-                  <Crown className="ml-1 inline size-3 text-amber-500" />
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+
+      {/* 表头 */}
+      <div className="grid items-center gap-2 border-b-2 px-2 py-2 text-xs font-semibold" style={{ borderColor: "#475569", color: "#cbd5e1", gridTemplateColumns: "56px 120px 1fr 90px 70px 80px" }}>
+        <div className="text-center">排名</div>
+        <div>主播姓名</div>
+        <div>30天音浪</div>
+        <div className="text-center">累计直播夜</div>
+        <div className="text-center">等级</div>
+        <div>所属组</div>
+      </div>
+
+      {/* 表格行 */}
+      {all.map((m, i) => {
+        const lv = levelOf(m.wave);
+        const isEmpty = m.wave === 0;
+        const widthPct = isEmpty ? 0 : Math.max(2, (m.wave / maxWave) * 100);
+        return (
+          <div
+            key={m.personId}
+            className="grid items-center gap-2 border-b px-2 py-1.5 text-sm"
+            style={{ borderColor: "#1e293b", gridTemplateColumns: "56px 120px 1fr 90px 70px 80px" }}
+          >
+            <div className="text-center tabular-nums" style={{ color: "#64748b" }}>
+              {String(i + 1).padStart(2, "0")}
+            </div>
+            <div className="truncate font-medium" style={{ color: isEmpty ? "#f87171" : "#f1f5f9" }}>
+              {m.name}
+              {m.isCaptain && <span className="ml-1" style={{ color: "#fbbf24" }}>♛</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="relative h-2.5 flex-1 overflow-hidden rounded" style={{ background: "#1e293b" }}>
+                <div
+                  className="absolute inset-y-0 left-0 rounded"
+                  style={{
+                    width: `${widthPct}%`,
+                    background: isEmpty
+                      ? "#475569"
+                      : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)",
+                  }}
+                />
+              </div>
+              <span className="w-20 text-right text-xs tabular-nums" style={{ color: isEmpty ? "#f87171" : "#cbd5e1" }}>
+                {isEmpty ? "未开播" : formatPkWave(m.wave)}
+              </span>
+            </div>
+            <div className="text-center tabular-nums" style={{ color: "#94a3b8" }}>
+              {m.waveDays}
+            </div>
+            <div className="flex items-center justify-center gap-1.5">
+              <span className={`inline-block size-2.5 rounded-full ${lv.cls}`} />
+              <span className="text-xs" style={{ color: "#cbd5e1" }}>{lv.label}</span>
+            </div>
+            <div className="truncate text-xs" style={{ color: "#94a3b8" }}>
+              {m.groupLabel}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* 底部汇总 */}
+      <div className="mt-4 flex items-center justify-between border-t-2 pt-3 text-xs" style={{ borderColor: "#475569" }}>
+        <div className="flex items-center gap-4">
+          <span style={{ color: "#cbd5e1" }}>
+            {gender === "male" ? "男" : "女"}主播 <span className="text-base font-semibold" style={{ color: "#f1f5f9" }}>{all.length}</span> 人
+          </span>
+          <span style={{ color: "#f87171" }}>
+            未开播 <span className="text-base font-semibold">{notStarted}</span> 人
+          </span>
+        </div>
+        <div className="flex items-center gap-3" style={{ color: "#cbd5e1" }}>
+          {(["S", "A", "B", "C", "D", "-"] as const).map((lv) => {
+            const c = { S: "bg-red-500", A: "bg-orange-500", B: "bg-blue-500", C: "bg-emerald-500", D: "bg-slate-400", "-": "bg-slate-600" }[lv];
+            return (
+              <span key={lv} className="flex items-center gap-1">
+                <span className={`inline-block size-2 rounded-full ${c}`} />
+                {lv} {levelStats[lv]}
+              </span>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
+}
+
+function currentPeriod(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 /* ================================================================
    主页面
    ================================================================ */
 export function PkRosterPage() {
-  const [period, setPeriod] = useState("");
+  const [period, setPeriod] = useState(currentPeriod());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -434,18 +540,28 @@ export function PkRosterPage() {
     return out;
   }, [rawMales, rawFemales]);
 
-  /** 未分组的男成员（排除已排除和已分组的） */
+  /** 未分组的男成员（排除已排除和已分组的，按 personId 去重） */
   const poolMales = useMemo(() => {
     const inGroup = new Set<number>();
     maleGroups.forEach((g) => g.members.forEach((m) => inGroup.add(m.personId)));
-    return rawMales.filter((m) => !excludedIds.has(m.personId) && !inGroup.has(m.personId));
+    const seen = new Set<number>();
+    return rawMales.filter((m) => {
+      if (excludedIds.has(m.personId) || inGroup.has(m.personId) || seen.has(m.personId)) return false;
+      seen.add(m.personId);
+      return true;
+    });
   }, [rawMales, excludedIds, maleGroups]);
 
   /** 未分组的女成员 */
   const poolFemales = useMemo(() => {
     const inGroup = new Set<number>();
     femaleGroups.forEach((g) => g.members.forEach((m) => inGroup.add(m.personId)));
-    return rawFemales.filter((m) => !excludedIds.has(m.personId) && !inGroup.has(m.personId));
+    const seen = new Set<number>();
+    return rawFemales.filter((m) => {
+      if (excludedIds.has(m.personId) || inGroup.has(m.personId) || seen.has(m.personId)) return false;
+      seen.add(m.personId);
+      return true;
+    });
   }, [rawFemales, excludedIds, femaleGroups]);
 
   /** 拖拽开始 */
@@ -601,7 +717,7 @@ export function PkRosterPage() {
     try {
       const { toPng } = await import("html-to-image");
       const dataUrl = await toPng(exportRef.current, {
-        backgroundColor: "#0f0f0f",
+        backgroundColor: "#0f172a",
         pixelRatio: 2,
       });
       const link = document.createElement("a");
@@ -659,7 +775,7 @@ export function PkRosterPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-        💡 成员按总音浪降序排列。从池中勾选成员后点「分配到组」，或直接拖拽到目标组。右键成员可设队长（同性别唯一）。导出图片不含音浪数据。
+        💡 成员按总音浪降序排列。从池中勾选成员后点「分配到组」，或直接拖拽到目标组。右键成员可设队长（同性别唯一）。导出图片含音浪数据。
       </div>
 
       {/* 内容 */}
@@ -821,32 +937,29 @@ export function PkRosterPage() {
 
       {/* 隐藏的导出 DOM */}
       <div className="fixed -left-[9999px] top-0">
-        <div ref={exportRef}>
-          <div className="p-6 bg-background text-foreground" style={{ width: 900 }}>
-            <h2 className="text-xl font-bold mb-4">PK 名单 · {displayPeriod}</h2>
-            <div className="space-y-4">
-              {maleGroups.filter((g) => g.members.length > 0).length > 0 && (
-                <div>
-                  <h3 className="text-base font-semibold mb-2">男团</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {maleGroups.filter((g) => g.members.length > 0).map((g, i) => (
-                      <ExportGroupCard key={g.key} group={g} index={i} />
-                    ))}
-                  </div>
-                </div>
-              )}
-              {femaleGroups.filter((g) => g.members.length > 0).length > 0 && (
-                <div>
-                  <h3 className="text-base font-semibold mb-2">女团</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {femaleGroups.filter((g) => g.members.length > 0).map((g, i) => (
-                      <ExportGroupCard key={g.key} group={g} index={i} />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+        <div ref={exportRef} className="space-y-6">
+          {maleGroups.some((g) => g.members.length > 0) && (
+            <ExportRankTable
+              title="星势力男主播 PK 名单"
+              period={displayPeriod}
+              groups={maleGroups}
+              gender="male"
+            />
+          )}
+          {femaleGroups.some((g) => g.members.length > 0) && (
+            <ExportRankTable
+              title="星势力女主播 PK 名单"
+              period={displayPeriod}
+              groups={femaleGroups}
+              gender="female"
+            />
+          )}
+          {!maleGroups.some((g) => g.members.length > 0) &&
+            !femaleGroups.some((g) => g.members.length > 0) && (
+              <div className="p-8 text-center text-muted-foreground" style={{ width: 960 }}>
+                暂无分组数据
+              </div>
+            )}
         </div>
       </div>
     </div>
