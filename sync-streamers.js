@@ -1,6 +1,19 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config({ path: '.env' });
 
+/**
+ * 从 streamers 表同步主播到 persons + accounts。
+ *
+ * 稳定键：streamers.streamer_id === accounts.anchor_id（accounts 上有 UNIQUE uk_anchor）。
+ * 采用按业务键 UPSERT，绝不清空全表、绝不按下标顺序配对——
+ * 旧实现 DELETE + 按 [i] 对应会把账号挂到错误的人身上，并连带清掉
+ * scripts-seed-family.js 单独维护的 master_id / generation / gender。
+ *
+ * 行为：
+ *  - streamer_id 已有对应 account：仅更新姓名/抖音号，person 的师徒/代数/性别保持不变。
+ *  - streamer_id 尚无 account：新建 person + 主账号。
+ * 全程在一个事务内。
+ */
 async function sync() {
   const pool = mysql.createPool({
     host: process.env.DB_HOST,
@@ -13,73 +26,70 @@ async function sync() {
   });
   const conn = await pool.getConnection();
   try {
-    // 1. 从 streamers 读取数据
-    const [streamers] = await conn.query('SELECT id, streamer_id, streamer_name, douyin_id, status, join_date FROM streamers');
-    console.log(`读取到 ${streamers.length} 条主播`);
-
+    // 1. 读取源数据：仅取有稳定键(streamer_id)且有姓名的行
+    const [streamers] = await conn.query(
+      'SELECT streamer_id, streamer_name, douyin_id FROM streamers ' +
+      'WHERE streamer_id IS NOT NULL AND streamer_id != "" AND streamer_name IS NOT NULL AND streamer_name != ""'
+    );
+    console.log(`读取到 ${streamers.length} 条有效主播`);
     if (streamers.length === 0) { console.log('无数据可同步'); return; }
 
-    // 2. 写入 persons（只同步有姓名的）
-    const personValues = streamers
-      .filter(s => s.streamer_name)
-      .map(s => [
-        s.streamer_name,
-        '',           // gender
-        null,         // master_id
-        null,         // generation
-        new Date(),  // created_at
-        new Date(),  // updated_at
-      ]);
+    // 2. 现有账号：anchor_id -> person_id，用于判断该主播是否已存在
+    const [existingAccounts] = await conn.query(
+      'SELECT anchor_id, person_id FROM accounts WHERE anchor_id IS NOT NULL AND anchor_id != ""'
+    );
+    const personIdByAnchor = new Map(
+      existingAccounts.map((a) => [String(a.anchor_id), a.person_id])
+    );
 
-    if (personValues.length > 0) {
-      // 清空旧数据后重新插入
-      await conn.query('DELETE FROM persons');
-      await conn.query(
-        'INSERT INTO persons (name, gender, master_id, generation, created_at, updated_at) VALUES ?',
-        [personValues]
-      );
-      console.log(`写入 ${personValues.length} 条 persons`);
+    await conn.beginTransaction();
+    let created = 0;
+    let updated = 0;
+
+    for (const s of streamers) {
+      const anchorId = String(s.streamer_id).trim();
+      const name = String(s.streamer_name).trim();
+      const douyinNo = String(s.douyin_id || '').trim();
+      if (!anchorId || !name) continue;
+
+      const existingPersonId = personIdByAnchor.get(anchorId);
+      if (existingPersonId) {
+        // 已存在：只更新展示字段，不动师徒关系/代数/性别
+        await conn.query(
+          'UPDATE persons SET name = ?, updated_at = NOW() WHERE id = ?',
+          [name, existingPersonId]
+        );
+        await conn.query(
+          'UPDATE accounts SET anchor_name = ?, douyin_no = ? WHERE anchor_id = ?',
+          [name, douyinNo, anchorId]
+        );
+        updated++;
+      } else {
+        // 新主播：新建 person + 主账号
+        const [pRes] = await conn.query(
+          'INSERT INTO persons (name, gender, master_id, generation, created_at, updated_at) ' +
+          'VALUES (?, "", NULL, NULL, NOW(), NOW())',
+          [name]
+        );
+        await conn.query(
+          'INSERT INTO accounts (person_id, anchor_id, douyin_no, anchor_name, is_primary, created_at) ' +
+          'VALUES (?, ?, ?, ?, 1, NOW())',
+          [pRes.insertId, anchorId, douyinNo, name]
+        );
+        personIdByAnchor.set(anchorId, pRes.insertId);
+        created++;
+      }
     }
 
-    // 3. streamers 原始数据还在，重新读出来做对应
-    const [allStreamers] = await conn.query('SELECT streamer_id, streamer_name, douyin_id FROM streamers WHERE streamer_name != ""');
+    await conn.commit();
+    console.log(`同步完成：新建 ${created} 人，更新 ${updated} 人`);
 
-    // 4. 按插入顺序与 persons 对应（两者数量相同且顺序一致）
-    const [newPersons] = await conn.query('SELECT id, name FROM persons ORDER BY id');
-
-    const accountValues = [];
-    for (let i = 0; i < allStreamers.length && i < newPersons.length; i++) {
-      const sp = allStreamers[i];
-      const person = newPersons[i];
-      accountValues.push([
-        person.id,         // person_id
-        sp.streamer_id,    // anchor_id
-        sp.douyin_id || '',
-        sp.streamer_name,
-        1,                 // is_primary
-        new Date(),
-      ]);
-    }
-
-    if (accountValues.length > 0) {
-      await conn.query('DELETE FROM accounts');
-      await conn.query(
-        'INSERT INTO accounts (person_id, anchor_id, douyin_no, anchor_name, is_primary, created_at) VALUES ?',
-        [accountValues]
-      );
-      console.log(`写入 ${accountValues.length} 条 accounts`);
-    }
-
-    // 验证
     const [p] = await conn.query('SELECT COUNT(*) as c FROM persons');
     const [a] = await conn.query('SELECT COUNT(*) as c FROM accounts');
-    console.log(`\n同步完成：persons=${p[0].c}, accounts=${a[0].c}`);
-
-    const [sample] = await conn.query(
-      'SELECT p.id, p.name, a.anchor_id, a.douyin_no FROM persons p JOIN accounts a ON a.person_id = p.id LIMIT 5'
-    );
-    console.log('示例:', JSON.stringify(sample, null, 2));
-
+    console.log(`当前总量：persons=${p[0].c}, accounts=${a[0].c}`);
+  } catch (e) {
+    await conn.rollback();
+    throw e;
   } finally {
     conn.release();
     await pool.end();

@@ -54,7 +54,8 @@ export function ExportPage() {
         setMsg(`${opt.label}暂无数据可导出`);
         return;
       }
-      const date = new Date().toISOString().split("T")[0];
+      const now = new Date();
+      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
       downloadCsv(res.data, `${opt.file}_${date}.csv`);
       setMsg(`已导出 ${res.data.length} 条${opt.label}`);
     } catch (e) {

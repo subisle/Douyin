@@ -7,6 +7,8 @@ import { FileText, Download, Settings, ChevronDown, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatWave, formatDuration } from "./format";
 import { exportElementAsImage } from "./export-image";
+import { PosterCard } from "./poster-export";
+import { DataTableImageExport } from "./data-table-image-export";
 import type { TierRule, DailyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
@@ -65,7 +67,9 @@ export function DailyReportPage() {
 
   // 导出
   const [exporting, setExporting] = useState(false);
+  const [showImageExport, setShowImageExport] = useState(false);
   const reportRef = useRef<HTMLDivElement>(null);
+  const posterRef = useRef<HTMLDivElement>(null);
 
   const fetchReport = useCallback(async (d: string, g: string) => {
     const api = window.electronAPI;
@@ -109,12 +113,16 @@ export function DailyReportPage() {
   }, [fetchTiers]);
 
   const handleExport = async () => {
-    if (!reportRef.current || exporting) return;
+    if (!posterRef.current || exporting || !report) return;
     setExporting(true);
     try {
-      await exportElementAsImage(reportRef.current, `每日报告-${date}-${gender === "male" ? "男队" : "女队"}.png`);
+      await exportElementAsImage(
+        posterRef.current,
+        `战报海报-${date}-${gender === "male" ? "男队" : "女队"}.png`,
+        { backgroundColor: "#07090e", pixelRatio: 1 }
+      );
     } catch (e) {
-      console.error("导出失败", e);
+      console.error("海报导出失败", e);
     } finally {
       setExporting(false);
     }
@@ -202,14 +210,23 @@ export function DailyReportPage() {
                 onChange={(e) => setDate(e.target.value)}
                 className="rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary"
               />
-              {/* 导出 */}
+              {/* 导出图片 */}
+              <button
+                onClick={() => setShowImageExport(true)}
+                disabled={!report || rows.length === 0}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+              >
+                <Download className="size-4" />
+                导出图片
+              </button>
+              {/* 导出海报 */}
               <button
                 onClick={handleExport}
                 disabled={exporting || !report || rows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <Download className="size-4" />
-                {exporting ? "导出中…" : "导出图片"}
+                {exporting ? "导出中…" : "导出海报"}
               </button>
               {/* 等级设置 */}
               <button
@@ -463,6 +480,30 @@ export function DailyReportPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* 海报组件（隐藏渲染，仅用于导出） */}
+      {report && rows.length > 0 && (
+        <div
+          style={{
+            position: "fixed",
+            left: -9999,
+            top: 0,
+            zIndex: -1,
+            pointerEvents: "none",
+          }}
+        >
+          <PosterCard ref={posterRef} report={report} />
+        </div>
+      )}
+
+      {/* 图片导出弹窗 */}
+      {showImageExport && report && rows.length > 0 && (
+        <DataTableImageExport
+          report={report}
+          gender={gender}
+          onClose={() => setShowImageExport(false)}
+        />
+      )}
     </div>
   );
 }

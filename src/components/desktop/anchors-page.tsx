@@ -304,6 +304,7 @@ export function AnchorsPage() {
                   <TableHead className="w-12">#</TableHead>
                   <TableHead>主播</TableHead>
                   <TableHead>性别</TableHead>
+                  <TableHead>师傅</TableHead>
                   <TableHead>抖音ID</TableHead>
                   <TableHead>抖音号</TableHead>
                   <TableHead className="text-right">账号数</TableHead>
@@ -336,6 +337,9 @@ export function AnchorsPage() {
                     </TableCell>
                     <TableCell>
                       <GenderBadge gender={a.gender} />
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {a.masterId ? (masterNameMap.get(a.masterId) || "—") : "—"}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {a.anchorId || "—"}
