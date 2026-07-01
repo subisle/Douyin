@@ -319,7 +319,7 @@ function GroupCard({
   );
 }
 
-/* ---------- 导出专用：单性别完整排名表 ---------- */
+/* ---------- 导出专用：海报式排名表 ---------- */
 function ExportRankTable({
   title,
   period,
@@ -331,6 +331,20 @@ function ExportRankTable({
   groups: GroupState[];
   gender: "male" | "female";
 }) {
+  const CYAN1 = "#00f5d4";
+  const CYAN2 = "#00b8ff";
+  const BG1 = "#0a0f1c";
+  const BG2 = "#020617";
+  const PANEL = "rgba(10, 24, 37, 0.88)";
+  const PANEL_STRONG = "rgba(10, 24, 37, 0.95)";
+  const LINE = "rgba(255, 255, 255, 0.08)";
+  const LINE_SOFT = "rgba(255, 255, 255, 0.05)";
+  const TEXT_MAIN = "#f8fafc";
+  const TEXT_SUB = "#a5f3fc";
+  const TEXT_MUTED = "#94a3b8";
+  const DANGER = "#f87171";
+  const PURPLE = "#c4b5fd";
+
   // 合并所有组，按音浪降序
   const all = useMemo(() => {
     const out: (PkMember & { groupLabel: string; isCaptain: boolean })[] = [];
@@ -343,116 +357,275 @@ function ExportRankTable({
   }, [groups]);
 
   const totalWave = all.reduce((s, m) => s + m.wave, 0);
-  const notStarted = all.filter((m) => m.wave === 0).length;
+  const notStartedList = all.filter((m) => m.wave === 0);
+  const notStarted = notStartedList.length;
   const maxWave = Math.max(...all.map((m) => m.wave), 1);
 
   // 等级（按总音浪）
   const levelOf = (w: number) => {
-    if (w >= 1_0000_0000) return { label: "S", cls: "bg-red-500" };
-    if (w >= 5000_0000) return { label: "A", cls: "bg-orange-500" };
-    if (w >= 1000_0000) return { label: "B", cls: "bg-blue-500" };
-    if (w >= 100_0000) return { label: "C", cls: "bg-emerald-500" };
-    if (w > 0) return { label: "D", cls: "bg-slate-400" };
-    return { label: "-", cls: "bg-slate-600" };
+    if (w >= 1_0000_0000) return { label: "S1", tier: "S" };
+    if (w >= 5000_0000) return { label: "A1", tier: "A" };
+    if (w >= 1000_0000) return { label: "B1", tier: "B" };
+    if (w >= 500_0000) return { label: "B2", tier: "B" };
+    if (w >= 100_0000) return { label: "C1", tier: "C" };
+    if (w >= 50_0000) return { label: "C2", tier: "C" };
+    if (w > 0) return { label: "D1", tier: "D" };
+    return { label: "-", tier: "-" };
   };
 
-  // 等级分布统计
-  const levelStats = useMemo(() => {
-    const stats: Record<string, number> = { S: 0, A: 0, B: 0, C: 0, D: 0, "-": 0 };
-    all.forEach((m) => { stats[levelOf(m.wave).label]++; });
-    return stats;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [all]);
+  // 解析 period "2026-07" → "2026年7月"
+  const periodDisplay = (() => {
+    const [y, m] = period.split("-");
+    return `${y}年${parseInt(m, 10)}月`;
+  })();
 
   return (
-    <div className="p-6" style={{ width: 960, background: "#0f172a", color: "#e2e8f0", fontFamily: "system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" }}>
-      {/* 标题 */}
-      <h1 className="mb-1 text-center text-2xl font-bold tracking-wide" style={{ color: "#f1f5f9" }}>
-        {title} · {period}
-      </h1>
-      <div className="mb-5 text-center text-xs" style={{ color: "#94a3b8" }}>
-        {all.length} 人 · 总音浪 {formatPkWave(totalWave)}
-      </div>
+    <div
+      style={{
+        width: 1080,
+        minHeight: 1080,
+        padding: 18,
+        background: `radial-gradient(circle at 50% 18%, ${BG1} 0%, ${BG2} 62%, #000 100%)`,
+        color: TEXT_MAIN,
+        fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      {/* 网格背景 */}
+      <div style={{
+        position: "absolute", inset: 0, pointerEvents: "none",
+        background: `
+          linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)`,
+        backgroundSize: "28px 28px",
+        opacity: 0.35,
+      }} />
+      {/* 右上角光晕 */}
+      <div style={{
+        position: "absolute", inset: 0, pointerEvents: "none",
+        background: `radial-gradient(circle at top right, rgba(0, 245, 212, 0.16), transparent 28%)`,
+      }} />
 
-      {/* 表头 */}
-      <div className="grid items-center gap-2 border-b-2 px-2 py-2 text-xs font-semibold" style={{ borderColor: "#475569", color: "#cbd5e1", gridTemplateColumns: "56px 120px 1fr 90px 70px 80px" }}>
-        <div className="text-center">排名</div>
-        <div>主播姓名</div>
-        <div>30天音浪</div>
-        <div className="text-center">累计直播夜</div>
-        <div className="text-center">等级</div>
-        <div>所属组</div>
-      </div>
-
-      {/* 表格行 */}
-      {all.map((m, i) => {
-        const lv = levelOf(m.wave);
-        const isEmpty = m.wave === 0;
-        const widthPct = isEmpty ? 0 : Math.max(2, (m.wave / maxWave) * 100);
-        return (
-          <div
-            key={m.personId}
-            className="grid items-center gap-2 border-b px-2 py-1.5 text-sm"
-            style={{ borderColor: "#1e293b", gridTemplateColumns: "56px 120px 1fr 90px 70px 80px" }}
-          >
-            <div className="text-center tabular-nums" style={{ color: "#64748b" }}>
-              {String(i + 1).padStart(2, "0")}
+      {/* 内容层 */}
+      <div style={{ position: "relative", width: "100%" }}>
+        {/* Header Panel */}
+        <div style={{
+          display: "grid", gridTemplateColumns: "1fr 250px", gap: 16,
+          padding: "22px 24px",
+          background: PANEL,
+          border: `1px solid ${LINE}`,
+          borderRadius: 24,
+          boxShadow: "0 22px 44px rgba(0,0,0,0.32)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{
+              width: 68, height: 68, borderRadius: 20,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 28, fontWeight: 800, color: "#fff",
+              background: `linear-gradient(135deg, rgba(0,245,212,0.18), rgba(0,184,255,0.18))`,
+              border: "1px solid rgba(0,245,212,0.32)",
+              boxShadow: "0 0 26px rgba(0,245,212,0.16)",
+              flexShrink: 0,
+            }}>
+              {gender === "male" ? "♂" : "♀"}
             </div>
-            <div className="truncate font-medium" style={{ color: isEmpty ? "#f87171" : "#f1f5f9" }}>
-              {m.name}
-              {m.isCaptain && <span className="ml-1" style={{ color: "#fbbf24" }}>♛</span>}
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="relative h-2.5 flex-1 overflow-hidden rounded" style={{ background: "#1e293b" }}>
-                <div
-                  className="absolute inset-y-0 left-0 rounded"
-                  style={{
-                    width: `${widthPct}%`,
-                    background: isEmpty
-                      ? "#475569"
-                      : "linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%)",
-                  }}
-                />
+            <div>
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                marginBottom: 8, padding: "6px 12px", borderRadius: 999,
+                fontSize: 12, letterSpacing: 1, color: CYAN1,
+                background: "rgba(0,245,212,0.08)",
+                border: "1px solid rgba(0,245,212,0.18)",
+              }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: "50%",
+                  background: `linear-gradient(135deg, ${CYAN1}, ${CYAN2})`,
+                  boxShadow: "0 0 10px rgba(0,245,212,0.6)",
+                }} />
+                星势力 {gender === "male" ? "男" : "女"}主播音浪统计
               </div>
-              <span className="w-20 text-right text-xs tabular-nums" style={{ color: isEmpty ? "#f87171" : "#cbd5e1" }}>
-                {isEmpty ? "未开播" : formatPkWave(m.wave)}
-              </span>
-            </div>
-            <div className="text-center tabular-nums" style={{ color: "#94a3b8" }}>
-              {m.waveDays}
-            </div>
-            <div className="flex items-center justify-center gap-1.5">
-              <span className={`inline-block size-2.5 rounded-full ${lv.cls}`} />
-              <span className="text-xs" style={{ color: "#cbd5e1" }}>{lv.label}</span>
-            </div>
-            <div className="truncate text-xs" style={{ color: "#94a3b8" }}>
-              {m.groupLabel}
+              <h1 style={{
+                margin: 0, fontSize: 32, lineHeight: 1.15, letterSpacing: 1,
+                color: "#fff", whiteSpace: "nowrap",
+                textShadow: "0 0 24px rgba(0,245,212,0.18)",
+              }}>
+                {title}
+              </h1>
+              <div style={{ marginTop: 10, fontSize: 14, color: TEXT_MUTED, lineHeight: 1.5 }}>
+                统计周期：{periodDisplay} · 按总音浪降序排列
+              </div>
             </div>
           </div>
-        );
-      })}
+          {/* 日期卡片 */}
+          <div style={{
+            display: "flex", flexDirection: "column", justifyContent: "center", gap: 8,
+            padding: "18px 20px", borderRadius: 20, textAlign: "center",
+            background: "rgba(15, 37, 56, 0.82)",
+            border: "1px solid rgba(0,245,212,0.16)",
+          }}>
+            <div style={{ fontSize: 12, letterSpacing: 1, color: TEXT_MUTED }}>数据周期</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#fff", lineHeight: 1.2 }}>{periodDisplay}</div>
+            <div style={{ fontSize: 13, color: CYAN1 }}>共 {all.length} 人参战</div>
+          </div>
+        </div>
 
-      {/* 底部汇总 */}
-      <div className="mt-4 flex items-center justify-between border-t-2 pt-3 text-xs" style={{ borderColor: "#475569" }}>
-        <div className="flex items-center gap-4">
-          <span style={{ color: "#cbd5e1" }}>
-            {gender === "male" ? "男" : "女"}主播 <span className="text-base font-semibold" style={{ color: "#f1f5f9" }}>{all.length}</span> 人
-          </span>
-          <span style={{ color: "#f87171" }}>
-            未开播 <span className="text-base font-semibold">{notStarted}</span> 人
-          </span>
+        {/* Stats Grid */}
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 14,
+        }}>
+          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>参战人数</div>
+            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{all.length}</div>
+          </div>
+          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>未开播</div>
+            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: DANGER, fontFamily: 'Consolas, monospace' }}>{notStarted}</div>
+          </div>
+          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>30天总音浪</div>
+            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{formatPkWave(totalWave)}</div>
+          </div>
+          <div style={{ padding: "16px 18px", borderRadius: 20, background: PANEL, border: `1px solid ${LINE}` }}>
+            <div style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 8 }}>累计总音浪</div>
+            <div style={{ fontSize: 28, lineHeight: 1, fontWeight: 700, color: "#fff", textShadow: "0 0 18px rgba(0,245,212,0.16)", fontFamily: 'Consolas, monospace' }}>{formatPkWave(totalWave)}</div>
+          </div>
         </div>
-        <div className="flex items-center gap-3" style={{ color: "#cbd5e1" }}>
-          {(["S", "A", "B", "C", "D", "-"] as const).map((lv) => {
-            const c = { S: "bg-red-500", A: "bg-orange-500", B: "bg-blue-500", C: "bg-emerald-500", D: "bg-slate-400", "-": "bg-slate-600" }[lv];
-            return (
-              <span key={lv} className="flex items-center gap-1">
-                <span className={`inline-block size-2 rounded-full ${c}`} />
-                {lv} {levelStats[lv]}
-              </span>
-            );
-          })}
+
+        {/* Board (Table) */}
+        <div style={{
+          marginTop: 14, background: PANEL, borderRadius: 24,
+          border: `1px solid ${LINE}`, overflow: "hidden",
+          boxShadow: "0 18px 36px rgba(0,0,0,0.22)",
+        }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <thead>
+              <tr style={{ background: PANEL_STRONG }}>
+                <th style={{ width: "8%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>排名</th>
+                <th style={{ width: "18%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>主播姓名</th>
+                <th style={{ width: "24%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>30天音浪</th>
+                <th style={{ width: "21%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>累计总音浪</th>
+                <th style={{ width: "12%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>等级</th>
+                <th style={{ width: "17%", padding: "11px 8px", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, color: TEXT_SUB, textAlign: "left", borderBottom: `1px solid ${LINE}` }}>直播时长</th>
+              </tr>
+            </thead>
+            <tbody>
+              {all.map((m, i) => {
+                const lv = levelOf(m.wave);
+                const isEmpty = m.wave === 0;
+                const widthPct = isEmpty ? 0 : Math.max(2, (m.wave / maxWave) * 100);
+                const rank = i + 1;
+                const rankCls = rank === 1 ? "top1" : rank === 2 ? "top2" : rank === 3 ? "top3" : "";
+                const rowBg = rank === 1
+                  ? "linear-gradient(90deg, rgba(0,245,212,0.12), rgba(0,184,255,0.03))"
+                  : rank === 2
+                  ? "linear-gradient(90deg, rgba(0,245,212,0.09), rgba(255,255,255,0.02))"
+                  : rank === 3
+                  ? "linear-gradient(90deg, rgba(0,184,255,0.09), rgba(255,255,255,0.02))"
+                  : rank % 2 === 0
+                  ? "rgba(255,255,255,0.015)"
+                  : "transparent";
+                return (
+                  <tr key={m.personId} style={{ background: rowBg }}>
+                    <td style={{ padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}`, color: "rgba(255,255,255,0.92)" }}>
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        width: 28, height: 28, borderRadius: 10,
+                        fontSize: rank <= 3 ? 16 : 12, fontWeight: 700,
+                        ...(rank <= 3
+                          ? { background: "linear-gradient(135deg, rgba(0,245,212,0.2), rgba(0,184,255,0.18))", border: "1px solid rgba(0,245,212,0.22)", color: "#fff" }
+                          : { background: "rgba(148,163,184,0.14)", border: "1px solid rgba(148,163,184,0.18)", color: "rgba(255,255,255,0.72)", fontFamily: 'Consolas, monospace' }),
+                      }}>
+                        {rank <= 3 ? ["🥇", "🥈", "🥉"][rank - 1] : String(rank).padStart(2, "0")}
+                      </span>
+                    </td>
+                    <td style={{
+                      padding: "5px 8px", fontSize: 13, verticalAlign: "middle",
+                      borderBottom: `1px solid ${LINE_SOFT}`,
+                      color: rank <= 3 ? "#fff" : TEXT_SUB, fontWeight: 600,
+                    }}>
+                      {m.name}
+                      {m.isCaptain && <span style={{ marginLeft: 4, color: "#fbbf24" }}>♛</span>}
+                    </td>
+                    <td style={{ padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}` }}>
+                      <div style={{ fontFamily: 'Consolas, monospace', fontWeight: 700, fontSize: 12, color: isEmpty ? DANGER : "#fff", whiteSpace: "nowrap" }}>
+                        {isEmpty ? "未开播" : formatPkWave(m.wave)}
+                      </div>
+                      <div style={{ width: "100%", maxWidth: 138, height: 4, marginTop: 4, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
+                        <div style={{
+                          height: "100%", width: `${widthPct}%`, borderRadius: 999,
+                          background: isEmpty ? "#475569" : `linear-gradient(90deg, ${CYAN1}, ${CYAN2})`,
+                          boxShadow: isEmpty ? "none" : "0 0 12px rgba(0,245,212,0.26)",
+                        }} />
+                      </div>
+                    </td>
+                    <td style={{
+                      padding: "5px 8px", fontSize: 12.5, verticalAlign: "middle",
+                      borderBottom: `1px solid ${LINE_SOFT}`,
+                      fontFamily: 'Consolas, monospace', fontWeight: 700,
+                      color: "rgba(255,255,255,0.95)", whiteSpace: "nowrap",
+                    }}>
+                      {formatPkWave(m.wave)}
+                    </td>
+                    <td style={{ padding: "5px 8px", verticalAlign: "middle", borderBottom: `1px solid ${LINE_SOFT}` }}>
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        minWidth: 54, padding: "4px 10px", borderRadius: 999,
+                        fontSize: 11, fontWeight: 800, color: "#04111f",
+                        background: `linear-gradient(90deg, ${CYAN1}, ${CYAN2})`,
+                        boxShadow: "0 0 14px rgba(0,245,212,0.18)",
+                      }}>
+                        {lv.label}
+                      </span>
+                    </td>
+                    <td style={{
+                      padding: "5px 8px", fontSize: 12, verticalAlign: "middle",
+                      borderBottom: `1px solid ${LINE_SOFT}`,
+                      color: PURPLE, textAlign: "center", whiteSpace: "nowrap",
+                    }}>
+                      {m.waveDays ? `${(m.waveDays * 0.5).toFixed(1)} 小时` : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
+
+        {/* Footer Panel */}
+        {notStarted > 0 && (
+          <div style={{
+            marginTop: 14, padding: "16px 18px", borderRadius: 22,
+            background: PANEL, border: `1px solid ${LINE}`,
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 16, marginBottom: 12,
+            }}>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 10, fontSize: 13, color: TEXT_SUB, fontWeight: 700 }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: `linear-gradient(135deg, ${CYAN1}, ${CYAN2})`,
+                  boxShadow: "0 0 12px rgba(0,245,212,0.48)",
+                }} />
+                未开播名单
+              </div>
+              <div style={{ fontSize: 12, color: TEXT_MUTED }}>共 {notStarted} 人</div>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {notStartedList.map((m) => (
+                <span key={m.personId} style={{
+                  padding: "5px 12px", borderRadius: 999,
+                  background: "rgba(255,255,255,0.06)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  fontSize: 12, color: "rgba(255,255,255,0.84)",
+                }}>
+                  {m.name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
