@@ -137,17 +137,18 @@ async function getDashboardSummary() {
 async function getWaveRanking(limit = 10) {
   const db = getPool();
 
-  // 累计音浪排名 + 家族（师父名）
+  // 累计音浪排名 + 家族（师父名）—— 按人汇总其名下所有账号（含合并副号）
   const [rows] = await db.query(
-    `SELECT a.anchor_id,
-            COALESCE(a.anchor_name, p.name) AS name,
+    `SELECT p.id AS person_id,
+            COALESCE(p.name, MIN(a.anchor_name)) AS name,
             m.name AS family,
+            GROUP_CONCAT(DISTINCT a.anchor_id) AS anchor_ids,
             COALESCE(SUM(w.wave_value),0) AS wave
        FROM wave_snapshots w
-       JOIN accounts a ON a.anchor_id = w.anchor_id AND a.is_primary = 1
+       JOIN accounts a ON a.anchor_id = w.anchor_id
        LEFT JOIN persons p ON p.id = a.person_id
        LEFT JOIN persons m ON m.id = p.master_id
-      GROUP BY a.anchor_id, name, family
+      GROUP BY p.id, p.name, m.name
       ORDER BY wave DESC
       LIMIT ?`,
     [limit]
@@ -182,8 +183,17 @@ async function getWaveRanking(limit = 10) {
   }
 
   return rows.map((r, i) => {
-    const latest = latestMap.get(r.anchor_id);
-    const prev = prevMap.get(r.anchor_id);
+    // 该人名下所有账号（含合并副号）的 anchor_id 列表
+    const anchorIds = r.anchor_ids ? String(r.anchor_ids).split(",") : [];
+    // 汇总最近两期当日音浪与累计时长
+    let latest = null;
+    let prev = null;
+    let duration = 0;
+    for (const aid of anchorIds) {
+      if (latestMap.has(aid)) latest = (latest || 0) + latestMap.get(aid);
+      if (prevMap.has(aid)) prev = (prev || 0) + prevMap.get(aid);
+      duration += durMap.get(aid) || 0;
+    }
     let trend = "flat";
     if (latest != null && prev != null) {
       trend = latest > prev ? "up" : latest < prev ? "down" : "flat";
@@ -191,10 +201,10 @@ async function getWaveRanking(limit = 10) {
     return {
       rank: i + 1,
       name: r.name || "",
-      anchorId: r.anchor_id,
+      anchorId: anchorIds[0] || "",
       family: r.family || "",
       wave: Number(r.wave) || 0,
-      duration: durMap.get(r.anchor_id) || 0,
+      duration,
       trend,
     };
   });
@@ -212,7 +222,7 @@ async function getWaveTrendByGender() {
             p.gender AS gender,
             COALESCE(SUM(w.wave_value),0) AS total
        FROM wave_snapshots w
-       JOIN accounts a ON a.anchor_id = w.anchor_id AND a.is_primary = 1
+       JOIN accounts a ON a.anchor_id = w.anchor_id
        LEFT JOIN persons p ON p.id = a.person_id
       GROUP BY w.import_date, p.gender
       ORDER BY w.import_date ASC`
@@ -751,27 +761,29 @@ async function getFlowingFlag(personId) {
     };
   }
 
-  // 2. 查这些人对应的 accounts（anchor_id）
+  // 2. 查这些人对应的 accounts（每人名下全部账号，含合并副号）
   const personIds = persons.map((p) => p.id);
   const placeholders = personIds.map(() => "?").join(",");
   const [accounts] = await db.query(
     `SELECT id, person_id, anchor_id, anchor_name FROM accounts
-      WHERE person_id IN (${placeholders}) AND is_primary = 1`,
+      WHERE person_id IN (${placeholders})
+        AND anchor_id IS NOT NULL AND anchor_id != ''`,
     personIds
   );
 
-  const anchorByPerson = new Map(); // personId -> { anchorId, anchorName }
+  const anchorsByPerson = new Map(); // personId -> [anchorId, ...]
+  const primaryAnchorByPerson = new Map(); // personId -> 展示用主 anchorId
   for (const a of accounts) {
-    anchorByPerson.set(a.person_id, {
-      anchorId: a.anchor_id,
-      anchorName: a.anchor_name,
-    });
+    if (!anchorsByPerson.has(a.person_id)) anchorsByPerson.set(a.person_id, []);
+    anchorsByPerson.get(a.person_id).push(a.anchor_id);
+    if (!primaryAnchorByPerson.has(a.person_id)) {
+      primaryAnchorByPerson.set(a.person_id, a.anchor_id);
+    }
   }
 
-  // 3. 查最新一批音浪快照
-  const anchorIds = Array.from(anchorByPerson.values())
-    .map((a) => a.anchorId)
-    .filter(Boolean);
+  // 3. 查最新一批音浪/时长快照（按人名下所有 anchor 汇总到该人）
+  const anchorIds = [];
+  for (const ids of anchorsByPerson.values()) anchorIds.push(...ids);
   let waveMap = new Map(); // anchorId -> wave_value
   let durationMap = new Map(); // anchorId -> duration_minutes
 
@@ -815,17 +827,22 @@ async function getFlowingFlag(personId) {
     }
   }
 
-  // 4. 组装成员数据
+  // 4. 组装成员数据（每人音浪/时长 = 其名下所有 anchor 之和）
   const members = persons.map((p) => {
-    const acc = anchorByPerson.get(p.id);
-    const anchorId = acc?.anchorId || "";
+    const ids = anchorsByPerson.get(p.id) || [];
+    let wave = 0;
+    let duration = 0;
+    for (const aid of ids) {
+      wave += waveMap.get(aid) ?? 0;
+      duration += durationMap.get(aid) ?? 0;
+    }
     return {
       id: p.id,
       name: p.name,
       gender: p.gender,
-      anchorId,
-      wave: anchorId ? (waveMap.get(anchorId) ?? 0) : 0,
-      duration: anchorId ? (durationMap.get(anchorId) ?? 0) : 0,
+      anchorId: primaryAnchorByPerson.get(p.id) || "",
+      wave,
+      duration,
     };
   });
 
@@ -1098,15 +1115,30 @@ async function getFlagWinner(period) {
  */
 async function getDailyWaveReport(date, gender) {
   const db = getPool();
-  // 1. 获取指定性别的主播（仅主账号），同时获取 master_id 用于查师傅名字
-  const [persons] = await db.query(
+  // 1. 获取指定性别的主播 + 其名下所有账号 anchor（含合并副号），同时获取 master_id 用于查师傅名字
+  const [personRows] = await db.query(
     "SELECT p.id AS person_id, p.name, p.master_id, a.anchor_id " +
     "FROM persons p " +
-    "INNER JOIN accounts a ON a.person_id = p.id AND a.is_primary = 1 " +
+    "INNER JOIN accounts a ON a.person_id = p.id " +
     "WHERE p.gender = ? AND a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
     "ORDER BY p.id",
     [gender]
   );
+
+  // 按人归并其名下所有 anchor
+  const personMap = new Map(); // personId -> { person_id, name, master_id, anchorIds: [] }
+  for (const r of personRows) {
+    if (!personMap.has(r.person_id)) {
+      personMap.set(r.person_id, {
+        person_id: r.person_id,
+        name: r.name,
+        master_id: r.master_id,
+        anchorIds: [],
+      });
+    }
+    personMap.get(r.person_id).anchorIds.push(r.anchor_id);
+  }
+  const persons = Array.from(personMap.values());
 
   // 1b. 获取所有人员名字映射，用于解析师傅名字
   const [allPersons] = await db.query("SELECT id, name FROM persons");
@@ -1115,7 +1147,8 @@ async function getDailyWaveReport(date, gender) {
     return { date, gender, rows: [], summary: { total: 0, notLiveCount: 0, notLiveNames: [] } };
   }
 
-  const anchorIds = persons.map(p => p.anchor_id);
+  const anchorIds = [];
+  for (const p of persons) anchorIds.push(...p.anchorIds);
   const ph = anchorIds.map(() => "?").join(",");
 
   // 2. 获取等级规则（按 min_wave 降序，便于匹配）
@@ -1159,18 +1192,21 @@ async function getDailyWaveReport(date, gender) {
   const totalDurMap = new Map();
   for (const r of totalDurs) totalDurMap.set(r.anchor_id, Number(r.total) || 0);
 
-  // 7. 组装行数据
+  // 7. 组装行数据（每人指标 = 其名下所有 anchor 之和）
   const rows = persons.map(p => {
-    const dw = dailyWaveMap.get(p.anchor_id) || 0;
-    const tw = totalWaveMap.get(p.anchor_id) || 0;
-    const dd = dailyDurMap.get(p.anchor_id) || 0;
-    const td = totalDurMap.get(p.anchor_id) || 0;
+    let dw = 0, tw = 0, dd = 0, td = 0;
+    for (const aid of p.anchorIds) {
+      dw += dailyWaveMap.get(aid) || 0;
+      tw += totalWaveMap.get(aid) || 0;
+      dd += dailyDurMap.get(aid) || 0;
+      td += totalDurMap.get(aid) || 0;
+    }
     const isLive = dw > 0 || dd > 0;
     let tier = "";
     for (const tr of tierRows) {
       if (tw >= Number(tr.min_wave)) { tier = tr.label; break; }
     }
-    return { rank: 0, name: p.name, anchorId: p.anchor_id, dailyWave: dw, totalWave: tw, dailyDuration: dd, totalDuration: td, tier, isLive, masterName: p.master_id ? nameById.get(p.master_id) || null : null };
+    return { rank: 0, name: p.name, anchorId: p.anchorIds[0] || "", dailyWave: dw, totalWave: tw, dailyDuration: dd, totalDuration: td, tier, isLive, masterName: p.master_id ? nameById.get(p.master_id) || null : null };
   });
 
   rows.sort((a, b) => b.totalWave - a.totalWave);
@@ -1202,48 +1238,80 @@ async function getPkRoster(period, groupSize) {
   const monthStart = period + "-01";
   const monthEnd = new Date(y, m, 0).toISOString().slice(0, 10);
 
-  // 1. 获取所有有主账号的主播（GROUP BY 防止一人多主账号导致重复）
-  const [persons] = await db.query(
-    "SELECT p.id AS person_id, p.name, p.gender, MIN(a.anchor_id) AS anchor_id " +
+  // 1. 获取所有主播 + 其名下所有账号 anchor（含合并副号）
+  const [personRows] = await db.query(
+    "SELECT p.id AS person_id, p.name, p.gender, a.anchor_id " +
     "FROM persons p " +
-    "INNER JOIN accounts a ON a.person_id = p.id AND a.is_primary = 1 " +
+    "INNER JOIN accounts a ON a.person_id = p.id " +
     "WHERE a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
-    "GROUP BY p.id " +
     "ORDER BY p.id"
   );
-  if (persons.length === 0) {
+  if (personRows.length === 0) {
     return { period, males: [], females: [] };
   }
 
-  const anchorIds = persons.map(p => p.anchor_id);
+  // 按人归并其名下所有 anchor
+  const personMap = new Map(); // personId -> { person_id, name, gender, anchorIds: [] }
+  const anchorToPerson = new Map(); // anchorId -> personId
+  for (const r of personRows) {
+    if (!personMap.has(r.person_id)) {
+      personMap.set(r.person_id, {
+        person_id: r.person_id,
+        name: r.name,
+        gender: r.gender,
+        anchorIds: [],
+      });
+    }
+    personMap.get(r.person_id).anchorIds.push(r.anchor_id);
+    anchorToPerson.set(r.anchor_id, r.person_id);
+  }
+  const persons = Array.from(personMap.values());
+
+  const anchorIds = [];
+  for (const p of persons) anchorIds.push(...p.anchorIds);
   const ph = anchorIds.map(() => "?").join(",");
 
-  // 2. 获取当月每日音浪（用于 trimmed mean 计算）
+  // 2. 获取当月每日音浪，按人归并——同一人多账号在同一天的音浪先按日相加，
+  //    再对日序列算 trimmed mean（否则同一天会被拆成多条，去最高日失真）。
   const [waveRows] = await db.query(
     "SELECT anchor_id, import_date, wave_value FROM wave_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? ORDER BY anchor_id, import_date",
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? ORDER BY import_date",
     [...anchorIds, monthStart, monthEnd]
   );
-  const waveByAnchor = new Map();
+  const fmtDay = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  const dayByPerson = new Map(); // personId -> Map(dateStr -> summedWave)
   for (const r of waveRows) {
-    if (!waveByAnchor.has(r.anchor_id)) waveByAnchor.set(r.anchor_id, []);
-    waveByAnchor.get(r.anchor_id).push(Number(r.wave_value) || 0);
+    const pid = anchorToPerson.get(r.anchor_id);
+    if (pid == null) continue;
+    if (!dayByPerson.has(pid)) dayByPerson.set(pid, new Map());
+    const dm = dayByPerson.get(pid);
+    const key = fmtDay(r.import_date);
+    dm.set(key, (dm.get(key) || 0) + (Number(r.wave_value) || 0));
+  }
+  const waveByPerson = new Map(); // personId -> [dailyWave...]
+  for (const [pid, dm] of dayByPerson) {
+    waveByPerson.set(pid, Array.from(dm.values()));
   }
 
-  // 3. 获取当月总时长
+  // 3. 获取当月总时长（按人汇总其名下所有 anchor）
   const [durRows] = await db.query(
     "SELECT anchor_id, COALESCE(SUM(total_minutes), 0) AS total_dur FROM duration_snapshots " +
     "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
     [...anchorIds, monthStart, monthEnd]
   );
-  const durMap = new Map();
-  for (const r of durRows) durMap.set(r.anchor_id, Number(r.total_dur) || 0);
+  const durMap = new Map(); // personId -> total minutes
+  for (const r of durRows) {
+    const pid = anchorToPerson.get(r.anchor_id);
+    if (pid == null) continue;
+    durMap.set(pid, (durMap.get(pid) || 0) + (Number(r.total_dur) || 0));
+  }
 
   // 4. 计算每位主播的统计数据
   const males = [];
   const females = [];
   for (const p of persons) {
-    const days = waveByAnchor.get(p.anchor_id) || [];
+    const days = waveByPerson.get(p.person_id) || [];
     const totalWave = days.reduce((s, v) => s + v, 0);
     const waveDays = days.length;
     const maxWave = waveDays > 0 ? Math.max(...days) : 0;
@@ -1257,9 +1325,9 @@ async function getPkRoster(period, groupSize) {
     } else if (waveDays === 1) {
       trimmedAvg = days[0];
     }
-    const duration = durMap.get(p.anchor_id) || 0;
+    const duration = durMap.get(p.person_id) || 0;
     const member = {
-      personId: p.person_id, name: p.name, gender: p.gender, anchorId: p.anchor_id,
+      personId: p.person_id, name: p.name, gender: p.gender, anchorId: p.anchorIds[0] || "",
       wave: totalWave, trimmedAvg, maxWave, minWave, waveDays, duration, rank: 0,
     };
     if (p.gender === "male") males.push(member);
