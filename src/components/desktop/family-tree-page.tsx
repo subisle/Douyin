@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useElectronData } from "./use-electron-data";
 import type { FamilyNode } from "@/types/electron";
 import { exportElementAsImage } from "./export-image";
+import { exportFamilyPoster } from "./export-family-poster";
 import {
   BrowserModeState,
   EmptyState,
@@ -15,7 +16,7 @@ import {
   LoadingState,
 } from "./states";
 
-interface TreeNode extends FamilyNode {
+export interface TreeNode extends FamilyNode {
   children: TreeNode[];
   descendantCount: number;
 }
@@ -97,15 +98,15 @@ function buildTree(nodes: FamilyNode[]): TreeNode[] {
   return roots;
 }
 
-/** 左→右 tidy-tree：depth 决定列(x)，叶子顺序决定行(y)，父节点纵向居中于子节点 */
-function layout(root: TreeNode) {
+/** 左→右 tidy-tree：depth 决定列(x)，叶子顺序决定行(y)，父节点纵向居中于子节点。
+ *  支持多个根节点，全部在同一张图中上下排列。 */
+function layoutAll(roots: TreeNode[]) {
   const placed: Placed[] = [];
   const edges: Edge[] = [];
   let cursorY = PAD;
   const visited = new Set<number>();
 
   const walk = (node: TreeNode, depth: number): number => {
-    // buildTree 已经断环，这里再加一层守卫；即使 children 里夹了重复引用也不至于栈溢出。
     if (visited.has(node.id)) {
       console.warn(`[family-tree] layout 跳过重复节点 ${node.id}`);
       return cursorY;
@@ -127,7 +128,12 @@ function layout(root: TreeNode) {
     }
     return centerY;
   };
-  walk(root, 0);
+
+  // 多个根之间加额外间距
+  for (const root of roots) {
+    walk(root, 0);
+    cursorY += NODE_H; // 根之间额外间距
+  }
 
   const maxX = Math.max(...placed.map((p) => p.x + NODE_W));
   const maxY = Math.max(...placed.map((p) => p.y + NODE_H / 2));
@@ -140,9 +146,8 @@ export function FamilyTreePage() {
   );
 
   const tree = useMemo(() => (data ? buildTree(data) : []), [data]);
-  // 公司里男队/女队都有族谱，过去只 find 第一个 male，其余男根 + 全部女根都被丢弃。
-  // 这里改为渲染所有"有徒弟"的根节点，按后辈数降序。
-  const lineages = useMemo(
+  // 渲染所有"有徒弟"的根节点，按后辈数降序，合并到一张图
+  const roots = useMemo(
     () =>
       tree
         .filter((n) => n.children.length > 0)
@@ -155,17 +160,10 @@ export function FamilyTreePage() {
   if (error || !data)
     return <Wrap><ErrorState message={error ?? "加载失败"} onRetry={reload} /></Wrap>;
 
-  return (
-    <div className="space-y-4">
-      {lineages.length > 0 ? (
-        lineages.map((root) => <LineageCard key={root.id} root={root} />)
-      ) : (
-        <Wrap>
-          <EmptyState label="暂无族谱数据" />
-        </Wrap>
-      )}
-    </div>
-  );
+  if (roots.length === 0)
+    return <Wrap><EmptyState label="暂无族谱数据" /></Wrap>;
+
+  return <TreeCard roots={roots} />;
 }
 
 function Wrap({ children }: { children: React.ReactNode }) {
@@ -176,37 +174,35 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
-function LineageCard({ root }: { root: TreeNode }) {
-  const { placed, edges, width, height } = useMemo(() => layout(root), [root]);
+function TreeCard({ roots }: { roots: TreeNode[] }) {
+  const { placed, edges, width, height } = useMemo(() => layoutAll(roots), [roots]);
+  const rootSet = useMemo(() => new Set(roots.map((r) => r.id)), [roots]);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [exporting, setExporting] = useState(false);
 
-  // 自动缩放：让整棵树宽度刚好放进容器，窗口变化时自动重算
+  // 自动缩放：让整棵树在一页内完整显示，同时考虑宽度和高度约束
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const update = () => {
-      const avail = el.clientWidth;
-      if (avail <= 0 || width <= 0) return; // 防止 0 宽度算出 scale=0
-      setScale(Math.min(1, avail / width));
+      const availW = el.clientWidth;
+      const availH = el.clientHeight;
+      if (availW <= 0 || availH <= 0 || width <= 0 || height <= 0) return;
+      setScale(Math.min(1, availW / width, availH / height));
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [width]);
+  }, [width, height]);
 
   const handleExport = async () => {
-    if (!contentRef.current || exporting) return;
+    if (exporting) return;
     setExporting(true);
     try {
-      await exportElementAsImage(contentRef.current, `族谱-${root.name}.png`, {
-        width,
-        height,
-        style: { transform: "none" },
-      });
+      await exportFamilyPoster(roots, "族谱海报.png");
     } catch (e) {
       console.error("导出失败", e);
     } finally {
@@ -215,14 +211,14 @@ function LineageCard({ root }: { root: TreeNode }) {
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="flex min-h-0 flex-1 flex-col">
+      <CardHeader className="shrink-0 pb-2 pt-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Crown className="size-4 text-primary" />
-            {root.name} 一脉
+            族谱
             <Badge variant="secondary" className="ml-1">
-              {root.descendantCount} 名后辈
+              {placed.length} 人
             </Badge>
           </CardTitle>
           <button
@@ -231,12 +227,12 @@ function LineageCard({ root }: { root: TreeNode }) {
             className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
           >
             <Download className="size-4" />
-            {exporting ? "导出中…" : "导出图片"}
+            {exporting ? "导出中…" : "导出海报"}
           </button>
         </div>
       </CardHeader>
-      <CardContent>
-        <div ref={containerRef} className="w-full overflow-hidden">
+      <CardContent className="min-h-0 flex-1">
+        <div ref={containerRef} className="h-full w-full overflow-hidden">
           {/* 缩放后占位高度，避免底部留白 */}
           <div style={{ height: height * scale }}>
             <div
@@ -278,7 +274,7 @@ function LineageCard({ root }: { root: TreeNode }) {
                     height: NODE_H,
                   }}
                 >
-                  <NodeCard node={p.node} isRoot={p.node === root} />
+                  <NodeCard node={p.node} isRoot={rootSet.has(p.node.id)} />
                 </div>
               ))}
             </div>

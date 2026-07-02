@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { FileText, Download, Settings, ChevronDown, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatWave, formatDuration } from "./format";
+import { exportDailyReportPoster } from "./export-daily-report";
 import { exportElementAsImage } from "./export-image";
 import { PosterCard } from "./poster-export";
 import { DataTableImageExport } from "./data-table-image-export";
@@ -113,14 +114,15 @@ export function DailyReportPage() {
   }, [fetchTiers]);
 
   const handleExport = async () => {
-    if (!posterRef.current || exporting || !report) return;
+    if (!report || exporting || rows.length === 0) return;
     setExporting(true);
     try {
-      await exportElementAsImage(
-        posterRef.current,
-        `战报海报-${date}-${gender === "male" ? "男队" : "女队"}.png`,
-        { backgroundColor: "#07090e", pixelRatio: 1 }
-      );
+      await exportDailyReportPoster({
+        rows,
+        date,
+        gender,
+        visibleCols,
+      });
     } catch (e) {
       console.error("海报导出失败", e);
     } finally {
@@ -353,33 +355,72 @@ export function DailyReportPage() {
           ) : !report || rows.length === 0 ? (
             <EmptyState label={`该日期无${gender === "male" ? "男" : "女"}队数据`} />
           ) : (
-            <div ref={reportRef} className="space-y-3">
+            <div
+              className="relative space-y-3 overflow-hidden rounded-2xl border-2 p-4"
+              style={{
+                background: "radial-gradient(circle at 50% 18%, #0a0f1c 0%, #020617 62%, #000 100%)",
+                borderColor: "rgba(0, 245, 212, 0.3)",
+                color: "#f8fafc",
+              }}
+            >
+              {/* 网格线背景 */}
+              <div className="pointer-events-none absolute inset-0 opacity-[0.03]"
+                style={{
+                  backgroundImage: "linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px)",
+                  backgroundSize: "28px 28px",
+                }}
+              />
+              {/* 右上光效 */}
+              <div className="pointer-events-none absolute right-0 top-0 h-48 w-48"
+                style={{ background: "radial-gradient(circle at top right, rgba(0,245,212,0.16), transparent 70%)" }}
+              />
+
               {/* 报告标题 */}
-              <div className="flex items-center justify-between border-b border-border pb-3">
-                <h2 className="text-lg font-bold text-foreground">
-                  {gender === "male" ? "男主播" : "女主播"}音浪日报
-                </h2>
-                <span className="text-sm text-muted-foreground">{date}</span>
+              <div className="relative flex items-center justify-between pb-3" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="flex items-center gap-3">
+                  <div className="flex size-10 items-center justify-center rounded-xl"
+                    style={{ background: "linear-gradient(135deg, rgba(0,245,212,0.18), rgba(0,184,255,0.18))", border: "1px solid rgba(0,245,212,0.32)" }}
+                  >
+                    <span className="text-base font-bold" style={{ color: "#f8fafc" }}>报</span>
+                  </div>
+                  <div>
+                    <span className="text-xs font-medium" style={{ color: "#00f5d4" }}>
+                      {gender === "male" ? "男队" : "女队"} · 每日音浪
+                    </span>
+                    <h2 className="text-lg font-bold" style={{ color: "#f8fafc", textShadow: "0 0 24px rgba(0,245,212,0.18)" }}>
+                      {gender === "male" ? "男主播" : "女主播"}音浪日报
+                    </h2>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl px-3 py-1.5 text-center"
+                    style={{ background: "rgba(15,37,56,0.82)", border: "1px solid rgba(0,245,212,0.16)" }}
+                  >
+                    <div className="text-[10px]" style={{ color: "#94a3b8" }}>人数</div>
+                    <div className="text-base font-bold" style={{ color: "#f8fafc" }}>{rows.length}</div>
+                  </div>
+                  <span className="text-sm" style={{ color: "#94a3b8" }}>{date}</span>
+                </div>
               </div>
 
               {/* 表格 */}
-              <div className="overflow-hidden rounded-xl border border-border">
+              <div className="relative overflow-hidden rounded-xl" style={{ border: "1px solid rgba(255,255,255,0.06)" }}>
                 <table className="w-full text-sm">
-                  <thead className="bg-muted/50">
+                  <thead style={{ background: "rgba(255,255,255,0.03)" }}>
                     <tr>
-                      <th className="w-12 px-3 py-2 text-left font-medium text-muted-foreground">序号</th>
-                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">主播</th>
+                      <th className="w-12 px-3 py-2 text-left font-medium" style={{ color: "#94a3b8" }}>序号</th>
+                      <th className="px-3 py-2 text-left font-medium" style={{ color: "#94a3b8" }}>主播</th>
                       {visibleCols.dailyWave && (
-                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">当日音浪</th>
+                        <th className="px-3 py-2 text-left font-medium" style={{ color: "#94a3b8" }}>当日音浪</th>
                       )}
                       {visibleCols.totalWave && (
-                        <th className="px-3 py-2 text-right font-medium text-muted-foreground">累计总音浪</th>
+                        <th className="px-3 py-2 text-right font-medium" style={{ color: "#94a3b8" }}>累计总音浪</th>
                       )}
                       {visibleCols.duration && (
-                        <th className="px-3 py-2 text-left font-medium text-muted-foreground">直播时长</th>
+                        <th className="px-3 py-2 text-left font-medium" style={{ color: "#94a3b8" }}>直播时长</th>
                       )}
                       {visibleCols.tier && (
-                        <th className="w-20 px-3 py-2 text-center font-medium text-muted-foreground">等级</th>
+                        <th className="w-20 px-3 py-2 text-center font-medium" style={{ color: "#94a3b8" }}>等级</th>
                       )}
                     </tr>
                   </thead>
@@ -388,56 +429,63 @@ export function DailyReportPage() {
                       <tr
                         key={r.anchorId}
                         className={cn(
-                          "border-t border-border hover:bg-muted/30",
-                          !r.isLive && "opacity-60"
+                          !r.isLive && "opacity-50"
                         )}
+                        style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
                       >
                         <td className="px-3 py-2">
                           {r.rank <= 3 ? (
                             <span className={cn(
                               "flex size-6 items-center justify-center rounded-full text-xs font-bold",
-                              r.rank === 1 ? "bg-amber-400/20 text-amber-600"
-                                : r.rank === 2 ? "bg-slate-400/20 text-slate-500"
-                                : "bg-orange-400/20 text-orange-600"
-                            )}>
+                              r.rank === 1 ? "text-amber-400"
+                                : r.rank === 2 ? "text-slate-400"
+                                : "text-orange-400"
+                            )}
+                              style={{
+                                background: r.rank === 1 ? "rgba(251,191,36,0.15)"
+                                  : r.rank === 2 ? "rgba(148,163,184,0.12)"
+                                  : "rgba(251,146,60,0.15)",
+                              }}
+                            >
                               {r.rank}
                             </span>
                           ) : (
-                            <span className="text-muted-foreground">{r.rank}</span>
+                            <span style={{ color: "#94a3b8" }}>{r.rank}</span>
                           )}
                         </td>
-                        <td className="px-3 py-2 font-medium">{r.name}</td>
+                        <td className="px-3 py-2 font-medium" style={{ color: "rgba(255,255,255,0.92)" }}>{r.name}</td>
                         {visibleCols.dailyWave && (
                           <td className="px-3 py-2">
                             {r.isLive ? (
                               <div className="flex items-center gap-2">
-                                <span className="tabular-nums text-foreground">
+                                <span className="tabular-nums" style={{ color: "#f8fafc" }}>
                                   {formatWave(r.dailyWave)}
                                 </span>
-                                {/* 进度条 */}
-                                <div className="h-1.5 w-24 overflow-hidden rounded-full bg-muted">
+                                {/* 进度条 - 渐变 */}
+                                <div className="h-1.5 w-24 overflow-hidden rounded-full" style={{ background: "rgba(255,255,255,0.06)" }}>
                                   <div
-                                    className="h-full rounded-full bg-primary"
+                                    className="h-full rounded-full"
                                     style={{
                                       width: maxDailyWave > 0
                                         ? `${(r.dailyWave / maxDailyWave) * 100}%`
                                         : "0%",
+                                      background: "linear-gradient(90deg, #00f5d4, #00b8ff)",
                                     }}
                                   />
                                 </div>
                               </div>
                             ) : (
-                              <span className="text-xs font-bold text-destructive">未开播</span>
+                              <span className="text-xs font-bold" style={{ color: "#f43f5e" }}>未开播</span>
                             )}
                           </td>
                         )}
                         {visibleCols.totalWave && (
-                          <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                          <td className="px-3 py-2 text-right tabular-nums" style={{ color: "#94a3b8" }}>
                             {formatWave(r.totalWave)}
                           </td>
                         )}
                         {visibleCols.duration && (
-                          <td className="px-3 py-2 tabular-nums text-muted-foreground">
+                          <td className="px-3 py-2 tabular-nums" style={{ color: "#94a3b8" }}>
                             {r.isLive && r.dailyDuration > 0
                               ? formatDuration(r.dailyDuration)
                               : r.isLive
@@ -448,7 +496,21 @@ export function DailyReportPage() {
                         {visibleCols.tier && (
                           <td className="px-3 py-2 text-center">
                             {r.tier && (
-                              <Badge className={tierColorClass(r.tier)}>
+                              <Badge
+                                className="border-0"
+                                style={{
+                                  background: r.tier.charAt(0) === "A" ? "rgba(16,185,129,0.18)"
+                                    : r.tier.charAt(0) === "B" ? "rgba(56,189,248,0.18)"
+                                    : r.tier.charAt(0) === "C" ? "rgba(251,191,36,0.18)"
+                                    : r.tier.charAt(0) === "D" ? "rgba(244,63,94,0.18)"
+                                    : "rgba(255,255,255,0.06)",
+                                  color: r.tier.charAt(0) === "A" ? "#34d399"
+                                    : r.tier.charAt(0) === "B" ? "#38bdf8"
+                                    : r.tier.charAt(0) === "C" ? "#fbbf24"
+                                    : r.tier.charAt(0) === "D" ? "#f43f5e"
+                                    : "#94a3b8",
+                                }}
+                              >
                                 {r.tier}
                               </Badge>
                             )}
@@ -461,16 +523,16 @@ export function DailyReportPage() {
               </div>
 
               {/* 底部摘要 */}
-              <div className="flex items-center justify-between border-t border-border pt-3 text-sm">
-                <div className="flex items-center gap-2 text-muted-foreground">
+              <div className="relative flex items-center justify-between pt-3 text-sm" style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                <div className="flex items-center gap-2" style={{ color: "#94a3b8" }}>
                   <span>{gender === "male" ? "男主播" : "女主播"} {report.summary.total} 人</span>
                   <span>·</span>
                   <span>导出日期 {date}</span>
                 </div>
                 {report.summary.notLiveCount > 0 && (
-                  <div className="flex items-center gap-2 text-destructive">
+                  <div className="flex items-center gap-2" style={{ color: "#f43f5e" }}>
                     <span>未开播 {report.summary.notLiveCount} 人</span>
-                    <span className="text-muted-foreground">
+                    <span style={{ color: "#94a3b8" }}>
                       {report.summary.notLiveNames.join("、")}
                     </span>
                   </div>
