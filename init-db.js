@@ -93,10 +93,14 @@ async function init() {
     const [[tierCount]] = await conn.query('SELECT COUNT(*) AS c FROM tier_rules');
     if (Number(tierCount.c) === 0) {
       const defaults = [
-        ['C1', 400000, 13], ['C2', 300000, 12], ['C3', 200000, 11],
-        ['D1', 100000, 10], ['D2', 80000, 9], ['D3', 60000, 8],
-        ['D4', 40000, 7], ['D5', 30000, 6], ['D6', 20000, 5],
-        ['D7', 10000, 4], ['D8', 5000, 3], ['D9', 1000, 2], ['D10', 0, 1],
+        // A 级（顶级主播）
+        ['A', 500000, 4],
+        // B 级（核心主播）
+        ['B', 200000, 3],
+        // C 级（活跃主播）
+        ['C', 50000, 2],
+        // D 级（新人/待提升）
+        ['D', 0, 1],
       ];
       for (const [label, minWave, sortOrder] of defaults) {
         await conn.query(
@@ -104,7 +108,7 @@ async function init() {
           [label, minWave, sortOrder]
         );
       }
-      console.log('Seeded 13 default tier_rules');
+      console.log('Seeded 4 default tier_rules');
     }
 
     const [t] = await conn.query('SHOW TABLES');

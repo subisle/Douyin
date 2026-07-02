@@ -42,4 +42,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getDailyWaveReport: (date, gender) => ipcRenderer.invoke("data:getDailyWaveReport", date, gender),
   getPkRoster: (period, groupSize) => ipcRenderer.invoke("data:getPkRoster", period, groupSize),
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),
+
+  // ── 自动更新 ──
+  checkForUpdates: () => ipcRenderer.invoke("updater:check"),
+  downloadUpdate: () => ipcRenderer.invoke("updater:download"),
+  installUpdate: () => ipcRenderer.invoke("updater:install"),
+  getUpdateStatus: () => ipcRenderer.invoke("updater:status"),
+  onUpdateStatus: (callback) => {
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on("updater:status-changed", handler);
+    return () => ipcRenderer.removeListener("updater:status-changed", handler);
+  },
 });

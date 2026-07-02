@@ -112,6 +112,23 @@ export interface DailyReportData {
   };
 }
 
+// ── 自动更新相关类型 ──
+export interface UpdateStatus {
+  status: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+  info: {
+    version: string;
+    releaseDate: string;
+    releaseNotes: string | unknown;
+  } | null;
+  progress: {
+    percent: number;
+    transferred: number;
+    total: number;
+    bytesPerSecond: number;
+  } | null;
+  error: string | null;
+}
+
 export interface PkMember {
   personId: number;
   name: string;
@@ -259,6 +276,13 @@ declare global {
       groupSize?: number
     ) => Promise<IpcResult<PkRosterData>>;
     getFlagWinner: (period: string) => Promise<IpcResult<FlagWinnerData | null>>;
+
+    // ── 自动更新 API ──
+    checkForUpdates: () => Promise<IpcResult<{ status: string }>>;
+    downloadUpdate: () => Promise<IpcResult<{ status: string }>>;
+    installUpdate: () => Promise<IpcResult<{ status: string }>>;
+    getUpdateStatus: () => Promise<IpcResult<UpdateStatus>>;
+    onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
   }
 
   interface Window {

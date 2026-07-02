@@ -1,0 +1,9 @@
+# electron-updater 配置文件
+# 使用 generic provider，通过 GitHub 代理加速国内访问
+provider: generic
+url: https://github.akams.cn/https://github.com/subisle/douyin-updater/releases/latest/download
+# 发布仓库信息
+owner: subisle
+repo: douyin-updater
+# 更新检查间隔（秒），0 表示不自动检查（由主进程代码控制）
+updateInterval: 0

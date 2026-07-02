@@ -10,12 +10,47 @@
     "lint": "next lint",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
-    "electron:build": "cross-env ELECTRON=true next build"
+    "electron:build": "cross-env ELECTRON=true next build",
+    "dist": "electron-builder --mac --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.subisle.douyin",
+    "productName": "抖音数据管理",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://github.akams.cn/https://github.com/subisle/douyin-updater/releases/latest/download"
+    },
+    "extraMetadata": {}
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.513.0",
     "mysql2": "^3.22.5",
@@ -37,6 +72,7 @@
     "concurrently": "^10.0.3",
     "cross-env": "^10.1.0",
     "electron": "^42.4.1",
+    "electron-builder": "^25.1.8",
     "eslint": "^9",
     "eslint-config-next": "^15.3.4",
     "tailwindcss": "^4",
