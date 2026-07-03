@@ -88,6 +88,8 @@ export function DailyReportPage() {
       gender: genderText === "男" ? "male" : "female",
       customTitle: `${genderText}主播数据统计`,
       scale: 2,
+      showDuration: true,
+      showMaster: true,
     });
   }, [report, rows, date, gender]);
 

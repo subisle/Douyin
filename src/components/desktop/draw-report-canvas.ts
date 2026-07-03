@@ -92,6 +92,62 @@ function drawRoundRect(
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+ *  配色 — 严格对照 HTML 模板 CSS 变量
+ * ═══════════════════════════════════════════════════════════════ */
+
+const C = {
+  // 外背景
+  bg: "#F4F6F9",
+  // 卡片底
+  cardBg: "#FFFFFF",
+
+  // ── 头部 ──
+  headerBg: "#272D3E",
+
+  // ── 表头 ──
+  thBg: "#EAF1FA",
+  thText: "#555555",
+  borderColor: "#F0F0F0",
+
+  // ── 前3名行底色 ──
+  top1Bg: "#FFFBF0",
+  top2Bg: "#F4F7FC",
+  top3Bg: "#FDF5EC",
+
+  // ── 前3名徽章渐变 ──
+  medal1Start: "#FFD700",
+  medal1End: "#FBC02D",
+  medal2Start: "#E0E0E0",
+  medal2End: "#B0BEC5",
+  medal3Start: "#FFBCA8",
+  medal3End: "#E68A70",
+
+  // ── 进度条 ──
+  barBg: "#74A8FB",
+
+  // ── 等级标签 ──
+  badgeBg: "#E3F0FF",
+  badgeText: "#2F88FF",
+
+  // ── 文字 ──
+  textMain: "#333333",
+  textSub: "#777777",
+  textDanger: "#D35555",
+  // 累计总音浪
+  totalWaveText: "#666666",
+  // 师傅
+  masterText: "#777777",
+  // 占位符
+  placeholderText: "#2F88FF",
+
+  // ── 底部 ──
+  footerBg: "#FAFBFC",
+  footerTitle: "#333333",
+  footerMeta: "#777777",
+  footerInactive: "#D35555",
+};
+
 /* ────────────────── 列定义 ────────────────── */
 
 type ColumnKey = "rank" | "name" | "dailyWave" | "totalWave" | "tier" | "duration" | "master";
@@ -110,28 +166,35 @@ function buildColumns(
   scale: number,
   availableWidth: number,
   date: string,
-  rows: DailyReportRow[]
+  rows: DailyReportRow[],
+  showDuration: boolean,
+  showMaster: boolean
 ) {
   const parts = date.split("-");
   const day = parseInt(parts[2] || "1", 10) || 1;
 
   const defs: ColumnDef[] = [
-    { key: "rank", label: "序号", minWidth: 72, flex: 0.7, align: "center", getText: (_, i) => String(i + 1) },
-    { key: "name", label: "主播姓名", minWidth: 150, flex: 1.6, align: "left", getText: (r) => r.name },
-    { key: "dailyWave", label: `${day}号音浪`, minWidth: 180, flex: 2.1, align: "right", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-    { key: "totalWave", label: "累计总音浪", minWidth: 160, flex: 1.5, align: "right", getText: (r) => formatWave(r.totalWave) },
-    { key: "tier", label: "等级", minWidth: 96, flex: 1, align: "center", getText: (r) => r.tier || "" },
-    { key: "duration", label: "有效时长", minWidth: 130, flex: 1.3, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
-    { key: "master", label: "师傅", minWidth: 100, flex: 1.1, align: "left", getText: (r) => r.masterName || "—" },
+    { key: "rank", label: "序号", minWidth: 80, flex: 0.8, align: "center", getText: (_, i) => String(i + 1) },
+    { key: "name", label: "主播姓名", minWidth: 140, flex: 1.5, align: "left", getText: (r) => r.name },
+    { key: "dailyWave", label: `${day}号音浪`, minWidth: 220, flex: 3.0, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "totalWave", label: "累计总音浪", minWidth: 150, flex: 1.8, align: "center", getText: (r) => formatWave(r.totalWave) },
+    { key: "tier", label: "等级", minWidth: 90, flex: 1.0, align: "center", getText: (r) => r.tier || "" },
   ];
+
+  if (showDuration) {
+    defs.push({ key: "duration", label: "有效时长", minWidth: 110, flex: 1.2, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" });
+  }
+  if (showMaster) {
+    defs.push({ key: "master", label: "师傅", minWidth: 90, flex: 1.0, align: "center", getText: (r) => r.masterName || "—" });
+  }
 
   ctx.save();
   let widths = defs.map((col) => {
-    ctx.font = `bold ${14 * scale}px sans-serif`;
+    ctx.font = `600 ${15 * scale}px sans-serif`;
     const headerW = ctx.measureText(col.label).width;
-    ctx.font = `${14 * scale}px sans-serif`;
+    ctx.font = `${15 * scale}px sans-serif`;
     const sampleW = rows.slice(0, 12).reduce((max, r, i) => Math.max(max, ctx.measureText(col.getText(r, i)).width), 0);
-    return Math.max(col.minWidth * scale, headerW + 28 * scale, sampleW + 36 * scale);
+    return Math.max(col.minWidth * scale, headerW + 30 * scale, sampleW + 36 * scale);
   });
   ctx.restore();
 
@@ -149,89 +212,6 @@ function buildColumns(
   return defs.map((col, i) => ({ ...col, x, width: widths[i] }));
 }
 
-/* ═══════════════════════════════════════════════════════════════
- *  配色规范 — 深紫蓝主色 + 淡薰衣草表头 + 暖白卡片
- * ═══════════════════════════════════════════════════════════════ */
-
-const C = {
-  // 外背景
-  bg: "#F0EEF8",
-  // 卡片底
-  cardBg: "#FFFFFF",
-
-  // ── 头部 ──
-  // 深紫蓝色渐变
-  titleGradStart: "#1E1B4B",   // 深邃
-  titleGradEnd: "#312E81",     // 略浅
-  // 装饰条 — 亮紫色
-  decoColor: "#A78BFA",
-
-  // ── 表头 ──
-  // 极浅淡紫色/薰衣草色
-  headerBg: "#EDE9FE",
-  headerBorder: "#C4B5FD",
-  // 深紫蓝色文字
-  headerText: "#3730A3",
-
-  // ── 数据行 ──
-  // 斑马纹
-  rowOdd: "#FFFFFF",
-  rowEven: "#F8F7FC",
-  rowBorder: "#E9E7F4",
-
-  // 前3名行底色
-  rank1Bg: "#FEF9C3",   // 浅黄
-  rank2Bg: "#F1F5F9",   // 极浅蓝灰
-  rank3Bg: "#FFEDD5",   // 浅橙
-
-  // 前3名左侧竖线 — 粗壮
-  rank1Stripe: "#F59E0B",   // 亮橙金
-  rank2Stripe: "#475569",   // 深蓝灰
-  rank3Stripe: "#C2410C",   // 深橙土黄
-
-  // 前3名圆形徽章
-  medal1GradStart: "#F59E0B",
-  medal1GradEnd: "#FBBF24",
-  medal2GradStart: "#475569",
-  medal2GradEnd: "#64748B",
-  medal3GradStart: "#C2410C",
-  medal3GradEnd: "#EA580C",
-
-  // 常规序号 — 深紫色
-  rankNormalText: "#7C3AED",
-
-  // ── 文字 ──
-  nameText: "#1F2937",      // 深灰/炭黑
-  nameTopText: "#1F2937",   // 前3名姓名也用炭黑
-  waveText: "#1F2937",      // 正常音浪数字
-  waveInactive: "#DC2626",  // 未开播 — 醒目红色
-  totalWaveText: "#4B5563", // 累计总音浪 — 深灰
-  masterText: "#4B5563",    // 师傅 — 深灰
-  // 占位符 — 深紫色
-  placeholderText: "#6D28D9",
-
-  // ── 音浪进度条 ──
-  waveTrackBg: "#E9E7F4",
-  waveBarGradStart: "#6366F1",
-  waveBarGradEnd: "#A78BFA",
-
-  // ── 底部 ──
-  footerBg: "#EDE9FE",       // 淡薰衣草（与表头呼应）
-  footerBorder: "#C4B5FD",
-  footerTitle: "#1E1B4B",
-  footerMeta: "#6B7280",
-  footerInactive: "#DC2626",
-  footerInactiveText: "#991B1B",
-};
-
-// 等级徽章 — 胶囊勋章
-const TIER_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  A: { bg: "rgba(16, 185, 129, 0.12)", border: "rgba(16, 185, 129, 0.35)", text: "#059669" },
-  B: { bg: "rgba(79, 70, 229, 0.12)", border: "rgba(79, 70, 229, 0.35)", text: "#4338CA" },
-  C: { bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.35)", text: "#B45309" },
-  D: { bg: "rgba(239, 68, 68, 0.10)", border: "rgba(239, 68, 68, 0.30)", text: "#B91C1C" },
-};
-
 /* ────────────────── 主绘制函数 ────────────────── */
 
 export interface DrawReportOptions {
@@ -240,6 +220,10 @@ export interface DrawReportOptions {
   gender: "male" | "female";
   customTitle?: string;
   scale?: number;
+  /** 显示有效时长列 */
+  showDuration?: boolean;
+  /** 显示师傅列 */
+  showMaster?: boolean;
 }
 
 export function drawReportToCanvas(
@@ -249,7 +233,7 @@ export function drawReportToCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  const { date, rows, gender, customTitle = "", scale = 2 } = opts;
+  const { date, rows, gender, customTitle = "", scale = 2, showDuration = false, showMaster = false } = opts;
 
   const parts = date.split("-");
   const year = parseInt(parts[0]) || 2026;
@@ -258,40 +242,38 @@ export function drawReportToCanvas(
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   const genderText = gender === "male" ? "男" : "女";
-  const titleText = customTitle || `${genderText}主播数据统计`;
-  const subtitleText = formattedDate;
+  // 头部标题：标题 + 日期 合在一行，居中
+  const titleText = `${customTitle || `${genderText}主播数据统计`} ${formattedDate}`;
 
-  const margin = 16 * scale;
-  const tablePaddingX = 24 * scale;
-  const headerHeight = 64 * scale;
-  const tableHeaderHeight = 36 * scale;
-  const rowHeight = 42 * scale;
-  const footerHeightBase = 72 * scale;
+  const margin = 20 * scale;
+  const tablePaddingX = 0; // 表格贴边
+  const headerHeight = 68 * scale;   // 头部 padding 24px*2 ≈ 48 + 字高
+  const tableHeaderHeight = 48 * scale; // th padding 16px*2 ≈ 32 + 字高
+  const rowHeight = 46 * scale;       // td padding 14px*2 ≈ 28 + 字高
+  const footerHeightBase = 80 * scale;
   const inactiveStreamers = rows.filter((r) => !r.isLive);
   const hasInactive = inactiveStreamers.length > 0;
-  const cornerRadius = 16 * scale;
-  const stripeW = 5 * scale; // 前3名左侧粗竖线
+  const cornerRadius = 12 * scale;
 
   // 计算容器宽度
-  ctx.font = `bold ${24 * scale}px sans-serif`;
+  ctx.font = `bold ${26 * scale}px sans-serif`;
   const titleW = ctx.measureText(titleText).width;
-  const estCols = buildColumns(ctx, scale, 760 * scale, date, rows);
+  const estCols = buildColumns(ctx, scale, 860 * scale, date, rows, showDuration, showMaster);
   const estW = estCols.reduce((s, c) => s + c.width, 0);
   const containerW = Math.max(
     680 * scale,
-    Math.min(1000 * scale, Math.max(titleW + 120 * scale, estW + tablePaddingX * 2))
+    Math.min(1000 * scale, Math.max(titleW + 80 * scale, estW))
   );
 
-  ctx.font = `${11 * scale}px sans-serif`;
+  ctx.font = `${14 * scale}px sans-serif`;
   const inactiveLines = hasInactive
-    ? wrapCanvasText(ctx, inactiveStreamers.map((r) => r.name).join("、"), containerW / 2 - 48 * scale)
+    ? wrapCanvasText(ctx, inactiveStreamers.map((r) => r.name).join("、"), containerW * 0.3)
     : [];
   const footerHeight = hasInactive
-    ? Math.max(footerHeightBase, (56 + inactiveLines.length * 18) * scale + 24 * scale)
+    ? Math.max(footerHeightBase, (60 + inactiveLines.length * 20) * scale)
     : footerHeightBase;
 
-  const cols = buildColumns(ctx, scale, containerW - tablePaddingX * 2 - margin * 2, date, rows);
-  const innerW = containerW - margin * 2;
+  const cols = buildColumns(ctx, scale, containerW, date, rows, showDuration, showMaster);
   const totalH = margin + headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight + margin;
 
   canvas.width = containerW;
@@ -304,13 +286,13 @@ export function drawReportToCanvas(
   // ── 卡片外框 ──
   const cardX = margin;
   const cardY = margin;
-  const cardW = innerW;
+  const cardW = containerW - margin * 2;
   const cardH = totalH - margin * 2;
 
   ctx.save();
-  ctx.shadowColor = "rgba(30, 27, 75, 0.08)";
-  ctx.shadowBlur = 12 * scale;
-  ctx.shadowOffsetY = 4 * scale;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.08)";
+  ctx.shadowBlur = 30 * scale;
+  ctx.shadowOffsetY = 10 * scale;
   ctx.fillStyle = C.cardBg;
   ctx.beginPath();
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
@@ -325,69 +307,35 @@ export function drawReportToCanvas(
 
   let y = cardY;
 
-  // ══════ 头部区域 ══════
-  // 深紫蓝色渐变背景
-  const titleGrad = ctx.createLinearGradient(0, y, 0, y + headerHeight);
-  titleGrad.addColorStop(0, C.titleGradStart);
-  titleGrad.addColorStop(1, C.titleGradEnd);
-  ctx.fillStyle = titleGrad;
+  // ══════ 头部 ══════
+  // #272d3e 深灰蓝纯色背景
+  ctx.fillStyle = C.headerBg;
   ctx.fillRect(cardX, y, cardW, headerHeight);
 
-  // 左侧粗壮亮紫色竖线
-  ctx.fillStyle = C.decoColor;
-  const decoX = cardX + tablePaddingX;
-  const decoH = headerHeight * 0.5;
-  ctx.fillRect(decoX, y + (headerHeight - decoH) / 2, stripeW, decoH);
-
-  // 主标题 — 纯白色，大字号，粗体
+  // 居中标题：标题+日期 合并
   ctx.fillStyle = "#FFFFFF";
-  ctx.font = `bold ${24 * scale}px sans-serif`;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(titleText, decoX + stripeW + 14 * scale, y + headerHeight * 0.36);
-
-  // 副标题日期 — 浅灰色，小字号
-  ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
-  ctx.font = `${13 * scale}px sans-serif`;
-  ctx.fillText(subtitleText, decoX + stripeW + 14 * scale, y + headerHeight * 0.68);
-
-  // 右上角半透明深色胶囊标签
-  ctx.font = `bold ${13 * scale}px sans-serif`;
-  const countText = `共 ${rows.length} 人`;
-  const countW = ctx.measureText(countText).width + 28 * scale;
-  const countH = 28 * scale;
-  const countX = cardX + cardW - tablePaddingX - countW;
-  const countY = y + (headerHeight - countH) / 2;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
-  ctx.beginPath();
-  drawRoundRect(ctx, countX, countY, countW, countH, countH / 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+  ctx.font = `bold ${26 * scale}px sans-serif`;
   ctx.textAlign = "center";
-  ctx.fillText(countText, countX + countW / 2, countY + countH / 2);
+  ctx.textBaseline = "middle";
+  ctx.fillText(titleText, cardX + cardW / 2, y + headerHeight / 2);
 
   y += headerHeight;
 
   // ══════ 表头 ══════
-  // 极浅淡紫色背景
-  ctx.fillStyle = C.headerBg;
+  ctx.fillStyle = C.thBg;
   ctx.fillRect(cardX, y, cardW, tableHeaderHeight);
-  // 底部强调线
-  ctx.fillStyle = C.headerBorder;
-  ctx.fillRect(cardX, y + tableHeaderHeight - 2 * scale, cardW, 2 * scale);
 
-  // 深紫蓝色粗体文字
-  ctx.fillStyle = C.headerText;
-  ctx.font = `bold ${13 * scale}px sans-serif`;
+  ctx.fillStyle = C.thText;
+  ctx.font = `600 ${15 * scale}px sans-serif`;
   ctx.textBaseline = "middle";
   cols.forEach((col) => {
-    const drawX = cardX + tablePaddingX + col.x;
+    const drawX = cardX + col.x;
     if (col.align === "left") {
       ctx.textAlign = "left";
-      ctx.fillText(col.label, drawX + 10 * scale, y + tableHeaderHeight / 2);
+      ctx.fillText(col.label, drawX + 20 * scale, y + tableHeaderHeight / 2);
     } else if (col.align === "right") {
       ctx.textAlign = "right";
-      ctx.fillText(col.label, drawX + col.width - 10 * scale, y + tableHeaderHeight / 2);
+      ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderHeight / 2);
     } else {
       ctx.textAlign = "center";
       ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderHeight / 2);
@@ -407,35 +355,25 @@ export function drawReportToCanvas(
 
     // ── 行背景 ──
     let rowBg: string;
-    if (rank === 1) rowBg = C.rank1Bg;        // 浅黄
-    else if (rank === 2) rowBg = C.rank2Bg;    // 极浅蓝灰
-    else if (rank === 3) rowBg = C.rank3Bg;    // 浅橙
-    else rowBg = index % 2 === 0 ? C.rowOdd : C.rowEven;  // 斑马纹
+    if (rank === 1) rowBg = C.top1Bg;
+    else if (rank === 2) rowBg = C.top2Bg;
+    else if (rank === 3) rowBg = C.top3Bg;
+    else rowBg = C.cardBg; // 纯白，无斑马纹（对照 HTML 模板）
 
     ctx.fillStyle = rowBg;
     ctx.fillRect(cardX, y, cardW, rowHeight);
 
-    // 行分隔线
-    ctx.strokeStyle = C.rowBorder;
-    ctx.lineWidth = 0.5 * scale;
+    // 行底分隔线
+    ctx.strokeStyle = C.borderColor;
+    ctx.lineWidth = 1 * scale;
     ctx.beginPath();
-    ctx.moveTo(cardX, y);
-    ctx.lineTo(cardX + cardW, y);
+    ctx.moveTo(cardX, y + rowHeight);
+    ctx.lineTo(cardX + cardW, y + rowHeight);
     ctx.stroke();
-
-    // ── 前3名左侧粗壮竖线 ──
-    if (isTop3) {
-      let stripeColor: string;
-      if (rank === 1) stripeColor = C.rank1Stripe;
-      else if (rank === 2) stripeColor = C.rank2Stripe;
-      else stripeColor = C.rank3Stripe;
-      ctx.fillStyle = stripeColor;
-      ctx.fillRect(cardX, y, stripeW, rowHeight);
-    }
 
     // ── 各列绘制 ──
     cols.forEach((col) => {
-      const drawX = cardX + tablePaddingX + col.x;
+      const drawX = cardX + col.x;
       const cy = y + rowHeight / 2;
 
       if (col.key === "rank") {
@@ -443,115 +381,123 @@ export function drawReportToCanvas(
         ctx.textBaseline = "middle";
 
         if (isTop3) {
-          // 实心渐变圆形徽章
+          // 渐变圆形徽章
           let gradStart: string, gradEnd: string;
-          if (rank === 1) { gradStart = C.medal1GradStart; gradEnd = C.medal1GradEnd; }
-          else if (rank === 2) { gradStart = C.medal2GradStart; gradEnd = C.medal2GradEnd; }
-          else { gradStart = C.medal3GradStart; gradEnd = C.medal3GradEnd; }
+          if (rank === 1) { gradStart = C.medal1Start; gradEnd = C.medal1End; }
+          else if (rank === 2) { gradStart = C.medal2Start; gradEnd = C.medal2End; }
+          else { gradStart = C.medal3Start; gradEnd = C.medal3End; }
 
-          const medalSize = 28 * scale;
-          const mx = drawX + (col.width - medalSize) / 2;
+          const badgeSize = 26 * scale;
+          const bx = drawX + (col.width - badgeSize) / 2;
+          const by = cy - badgeSize / 2;
 
-          const medalGrad = ctx.createLinearGradient(mx, cy - medalSize / 2, mx, cy + medalSize / 2);
+          // 徽章阴影
+          ctx.save();
+          ctx.shadowColor = `rgba(0, 0, 0, 0.2)`;
+          ctx.shadowBlur = 6 * scale;
+          ctx.shadowOffsetY = 2 * scale;
+
+          const medalGrad = ctx.createLinearGradient(bx, by, bx + badgeSize, by + badgeSize);
           medalGrad.addColorStop(0, gradStart);
           medalGrad.addColorStop(1, gradEnd);
           ctx.fillStyle = medalGrad;
           ctx.beginPath();
-          ctx.arc(mx + medalSize / 2, cy, medalSize / 2, 0, Math.PI * 2);
+          ctx.arc(bx + badgeSize / 2, cy, badgeSize / 2, 0, Math.PI * 2);
           ctx.fill();
+          ctx.restore();
 
           // 白色数字
           ctx.fillStyle = "#FFFFFF";
-          ctx.font = `bold ${14 * scale}px sans-serif`;
+          ctx.font = `bold ${13 * scale}px sans-serif`;
           ctx.fillText(String(rank), drawX + col.width / 2, cy + 1 * scale);
         } else {
-          // 常规行 — 浅灰色两位数，无圆形背景
-          ctx.fillStyle = "#9CA3AF";
-          ctx.font = `bold ${14 * scale}px sans-serif`;
-          ctx.fillText(String(rank).padStart(2, "0"), drawX + col.width / 2, cy);
+          // 常规行 — 斜体灰色 serif
+          ctx.fillStyle = C.textSub;
+          ctx.font = `italic ${16 * scale}px Georgia, serif`;
+          const rankStr = rank < 10 ? `0${rank}` : String(rank);
+          ctx.fillText(rankStr, drawX + col.width / 2, cy);
         }
       } else if (col.key === "name") {
-        // 深灰/炭黑色
         ctx.textAlign = "left";
-        ctx.fillStyle = C.nameText;
-        ctx.font = `${isTop3 ? "bold " : ""}${15 * scale}px sans-serif`;
-        const text = truncateCanvasText(ctx, row.name, col.width - 24 * scale);
-        ctx.fillText(text, drawX + 10 * scale, cy);
+        ctx.fillStyle = C.textMain;
+        ctx.font = `${15 * scale}px sans-serif`;
+        const text = truncateCanvasText(ctx, row.name, col.width - 40 * scale);
+        ctx.fillText(text, drawX + 20 * scale, cy);
       } else if (col.key === "dailyWave") {
-        if (!isInactive) {
+        // 音浪列 — 进度条 + 文字叠层
+        if (isInactive) {
+          // 未开播 — 红色
+          ctx.textAlign = "center";
+          ctx.fillStyle = C.textDanger;
+          ctx.font = `${15 * scale}px sans-serif`;
+          ctx.fillText("未开播", drawX + col.width / 2, cy);
+        } else {
           // 进度条
-          const barAreaW = col.width - 28 * scale;
-          const barH = 16 * scale;
+          const barW = col.width - 40 * scale; // 两侧各留 20px
+          const barH = 28 * scale;
+          const barLeft = drawX + 20 * scale;
           const barTop = cy - barH / 2;
-          const barLeft = drawX + 8 * scale;
+          // 进度条最大占 85%
+          const fillPercent = (row.dailyWave / maxWave) * 0.85;
+          const fillW = Math.max(barW * fillPercent, 30 * scale);
 
-          ctx.fillStyle = C.waveTrackBg;
+          // 背景轨道（透明，仅用底色）
+          // 进度条填充
+          ctx.fillStyle = C.barBg;
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, barAreaW, barH, barH / 2);
+          drawRoundRect(ctx, barLeft, barTop, fillW, barH, barH / 2);
           ctx.fill();
 
-          const barW = Math.max((barAreaW * row.dailyWave) / maxWave, 20 * scale);
-          const barGrad = ctx.createLinearGradient(barLeft, 0, barLeft + barW, 0);
-          barGrad.addColorStop(0, C.waveBarGradStart);
-          barGrad.addColorStop(1, C.waveBarGradEnd);
-          ctx.fillStyle = barGrad;
-          ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, Math.min(barW, barAreaW), barH, barH / 2);
-          ctx.fill();
+          // 进度条上的文字 — 居中于整个进度条区域
+          ctx.fillStyle = "#444444";
+          ctx.font = `500 ${14 * scale}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(formatWave(row.dailyWave), drawX + col.width / 2, cy);
         }
-        // 未开播 — 全部红色加粗
-        ctx.textAlign = "right";
-        ctx.font = `bold ${14 * scale}px monospace`;
-        ctx.fillStyle = isInactive ? C.waveInactive : C.waveText;
-        ctx.fillText(isInactive ? "未开播" : formatWave(row.dailyWave), drawX + col.width - 10 * scale, cy);
       } else if (col.key === "totalWave") {
-        // 深灰色
-        ctx.textAlign = "right";
-        ctx.font = `${14 * scale}px monospace`;
+        // 累计总音浪 — 居中，灰色
+        ctx.textAlign = "center";
+        ctx.font = `${15 * scale}px sans-serif`;
         ctx.fillStyle = C.totalWaveText;
-        ctx.fillText(formatWave(row.totalWave), drawX + col.width - 10 * scale, cy);
+        ctx.fillText(formatWave(row.totalWave), drawX + col.width / 2, cy);
       } else if (col.key === "tier") {
         if (row.tier) {
-          // 胶囊勋章
-          const bw = Math.min(col.width - 16 * scale, 60 * scale);
-          const bh = 24 * scale;
+          // 统一蓝标签
+          const labelText = row.tier;
+          ctx.font = `600 ${13 * scale}px sans-serif`;
+          const textW = ctx.measureText(labelText).width;
+          const padX = 14 * scale;
+          const bw = textW + padX * 2;
+          const bh = 28 * scale;
           const bl = drawX + (col.width - bw) / 2;
           const bt = cy - bh / 2;
-          const tierLetter = (row.tier.charAt(0) || "D").toUpperCase();
-          const tc = TIER_COLORS[tierLetter] || TIER_COLORS.D;
 
-          ctx.fillStyle = tc.bg;
+          ctx.fillStyle = C.badgeBg;
           ctx.beginPath();
           drawRoundRect(ctx, bl, bt, bw, bh, bh / 2);
           ctx.fill();
 
-          ctx.strokeStyle = tc.border;
-          ctx.lineWidth = 1 * scale;
-          ctx.beginPath();
-          drawRoundRect(ctx, bl, bt, bw, bh, bh / 2);
-          ctx.stroke();
-
-          ctx.fillStyle = tc.text;
-          ctx.font = `bold ${13 * scale}px sans-serif`;
+          ctx.fillStyle = C.badgeText;
           ctx.textAlign = "center";
-          ctx.fillText(row.tier, drawX + col.width / 2, cy + 1 * scale);
+          ctx.textBaseline = "middle";
+          ctx.fillText(labelText, drawX + col.width / 2, cy + 1 * scale);
         }
       } else if (col.key === "duration") {
-        // 空数据 — 深紫色 "—"
         ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         const dText = row.isLive && row.dailyDuration > 0
           ? formatDurationText(row.dailyDuration)
           : "—";
-        ctx.fillStyle = row.isLive && row.dailyDuration > 0 ? C.placeholderText : C.placeholderText;
-        ctx.font = `${13 * scale}px sans-serif`;
+        ctx.fillStyle = row.isLive && row.dailyDuration > 0 ? C.textMain : C.placeholderText;
+        ctx.font = `${15 * scale}px sans-serif`;
         ctx.fillText(dText, drawX + col.width / 2, cy);
       } else if (col.key === "master") {
-        // 深灰色
-        ctx.textAlign = "left";
+        ctx.textAlign = "center";
         ctx.fillStyle = C.masterText;
-        ctx.font = `${13 * scale}px sans-serif`;
-        const text = truncateCanvasText(ctx, row.masterName || "—", col.width - 24 * scale);
-        ctx.fillText(text, drawX + 10 * scale, cy);
+        ctx.font = `${15 * scale}px sans-serif`;
+        const text = truncateCanvasText(ctx, row.masterName || "—", col.width - 20 * scale);
+        ctx.fillText(text, drawX + col.width / 2, cy);
       }
     });
 
@@ -559,39 +505,44 @@ export function drawReportToCanvas(
   });
 
   // ══════ 底部 ══════
-  // 淡薰衣草底色（与表头呼应）
   ctx.fillStyle = C.footerBg;
   ctx.fillRect(cardX, y, cardW, footerHeight);
-  ctx.fillStyle = C.footerBorder;
-  ctx.fillRect(cardX, y, cardW, 1.5 * scale);
 
-  // 左侧：人数
+  // 三栏 flex 布局模拟
+  const footerPadX = 30 * scale;
+  const colW = (cardW - footerPadX * 2) / 3;
+
+  // 左栏：人数 + 日期
   ctx.fillStyle = C.footerTitle;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.font = `bold ${16 * scale}px sans-serif`;
-  ctx.fillText(`${genderText}主播 ${rows.length} 人`, cardX + tablePaddingX, y + 28 * scale);
+  ctx.font = `bold ${20 * scale}px sans-serif`;
+  ctx.fillText(`${genderText}主播 ${rows.length} 人`, cardX + footerPadX, y + 30 * scale);
 
-  ctx.font = `${11 * scale}px sans-serif`;
+  ctx.font = `${13 * scale}px sans-serif`;
   ctx.fillStyle = C.footerMeta;
-  ctx.fillText(`导出日期 ${formattedDate}`, cardX + tablePaddingX, y + 50 * scale);
+  ctx.fillText(`导出日期 ${formattedDate}`, cardX + footerPadX, y + 56 * scale);
 
-  // 右侧：未开播
+  // 中栏：未开播
   if (hasInactive) {
-    const rightX = cardX + cardW / 2;
+    const centerX = cardX + footerPadX + colW;
 
     ctx.fillStyle = C.footerInactive;
-    ctx.font = `bold ${13 * scale}px sans-serif`;
-    ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, rightX, y + 24 * scale);
+    ctx.font = `bold ${18 * scale}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, centerX, y + 30 * scale);
 
-    ctx.font = `${11 * scale}px sans-serif`;
-    ctx.fillStyle = C.footerInactiveText;
+    ctx.font = `${14 * scale}px sans-serif`;
+    ctx.fillStyle = C.footerInactive;
     ctx.textBaseline = "top";
     inactiveLines.forEach((line, i) => {
-      ctx.fillText(line, rightX, y + (42 + i * 16) * scale);
+      ctx.fillText(line, centerX, y + (50 + i * 20) * scale);
     });
     ctx.textBaseline = "middle";
   }
+
+  // 右栏：占位平衡
+  // （空，仅用于视觉平衡）
 
   ctx.restore();
 }
