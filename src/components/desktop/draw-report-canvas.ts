@@ -627,14 +627,9 @@ export function drawReportToCanvas(
 
           drawTrophy(ctx, badgeX + badgeSize / 2, cy, badgeSize, mainColor, accentColor, scale);
         } else {
-          // ════ 普通排名：方角方块 + 数字 ════
-          ctx.fillStyle = C.topNormalBg;
-          ctx.beginPath();
-          drawRoundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 0);
-          ctx.fill();
-
+          // ════ 普通排名：纯文字（无方块背景） ════
           ctx.fillStyle = C.topNormalText;
-          ctx.font = `800 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
+          ctx.font = `800 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
           const rankStr = rank < 10 ? `0${rank}` : String(rank);
           ctx.fillText(rankStr, badgeX + badgeSize / 2, cy);
         }
