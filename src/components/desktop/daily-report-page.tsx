@@ -6,10 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { FileText, Download, FileSpreadsheet, Settings, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatWave } from "./format";
-import { exportElementAsImage } from "./export-image";
-import DataTableStyle2Template, {
-  type DataTableStyle2Row,
-} from "./data-table-style2-template";
+import { drawReportToCanvas } from "./draw-report-canvas";
 import type { TierRule, DailyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
@@ -18,15 +15,6 @@ type GenderView = "male" | "female";
 function todayStr(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function formatDurationText(minutes: number): string {
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
-    return m > 0 ? `${h}时${m}分` : `${h}时`;
-  }
-  return `${minutes}分`;
 }
 
 export function DailyReportPage() {
@@ -45,11 +33,7 @@ export function DailyReportPage() {
 
   // 导出
   const [exporting, setExporting] = useState(false);
-  const style2Ref = useRef<HTMLDivElement>(null);
-
-  // 页面海报显示自适应缩放
-  const displayWrapRef = useRef<HTMLDivElement>(null);
-  const [displayScale, setDisplayScale] = useState(0.5);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const rows = report?.rows || [];
 
@@ -94,75 +78,29 @@ export function DailyReportPage() {
     fetchTiers();
   }, [fetchTiers]);
 
-  // 监听容器宽度，缩放 1080 海报以适配页面
+  // 绘制 Canvas 预览
   useEffect(() => {
-    const el = displayWrapRef.current;
-    if (!el) return;
-    const update = () => {
-      const w = el.clientWidth;
-      setDisplayScale(w > 0 ? w / 1080 : 0.5);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [report]);
-
-  // 样式二海报数据
-  const style2Data = useMemo(() => {
-    const parts = date.split("-");
-    const year = parseInt(parts[0], 10) || 2026;
-    const month = parseInt(parts[1], 10) || 1;
-    const day = parseInt(parts[2], 10) || 1;
-    const formattedDate = `${year}年${month}月${day}日`;
+    if (!report || rows.length === 0 || !canvasRef.current) return;
     const genderText = gender === "male" ? "男" : "女";
-    const title = `${genderText}主播数据统计`;
-
-    const liveWaves = rows.filter((r) => r.isLive).map((r) => r.dailyWave);
-    const maxWave = liveWaves.length > 0 ? Math.max(...liveWaves) : 1;
-    const inactiveNames = rows.filter((r) => !r.isLive).map((r) => r.name);
-    const totalDailyWave = rows.reduce(
-      (sum, r) => sum + (r.isLive ? Math.max(r.dailyWave, 0) : 0),
-      0
-    );
-    const totalWave = rows.reduce((sum, r) => sum + Math.max(r.totalWave, 0), 0);
-
-    const style2Rows: DataTableStyle2Row[] = rows.map((r, i) => ({
-      rank: i + 1,
-      name: r.name,
-      waveText: r.isLive ? formatWave(r.dailyWave) : "未开播",
-      waveRatio: r.isLive ? r.dailyWave / maxWave : 0,
-      totalWaveText: formatWave(r.totalWave),
-      grade: r.tier || "",
-      durationText:
-        r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—",
-    }));
-
-    return {
-      title,
-      formattedDate,
-      genderText,
-      totalCount: rows.length,
-      inactiveCount: inactiveNames.length,
-      totalDailyWaveText: formatWave(totalDailyWave),
-      totalWaveText: formatWave(totalWave),
-      inactiveNames,
-      rows: style2Rows,
-    };
-  }, [rows, date, gender]);
+    drawReportToCanvas(canvasRef.current, {
+      date,
+      rows,
+      gender: genderText === "男" ? "male" : "female",
+      customTitle: `${genderText}主播数据统计`,
+      scale: 2,
+    });
+  }, [report, rows, date, gender]);
 
   const handleExportImage = async () => {
-    const node = style2Ref.current;
-    if (!node || exporting) return;
+    const canvas = canvasRef.current;
+    if (!canvas || exporting || rows.length === 0) return;
     setExporting(true);
     try {
       const genderText = gender === "male" ? "男" : "女";
-      await exportElementAsImage(node, `${date}_${genderText}_${rows.length}人.png`, {
-        width: 1080,
-        height: 1080,
-        pixelRatio: 2,
-        backgroundColor: "#020617",
-      });
+      const link = document.createElement("a");
+      link.download = `${date}_${genderText}_${rows.length}人.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
     } catch (e) {
       console.error("导出图片失败", e);
       alert("导出失败: " + String(e));
@@ -402,38 +340,15 @@ export function DailyReportPage() {
           ) : !report || rows.length === 0 ? (
             <EmptyState label={`该日期无${gender === "male" ? "男" : "女"}队数据`} />
           ) : (
-            <div ref={displayWrapRef} className="mx-auto w-full" style={{ maxWidth: 1080 }}>
-              <div style={{ position: "relative", width: "100%", paddingBottom: "100%" }}>
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: 1080,
-                    height: 1080,
-                    transform: `scale(${displayScale})`,
-                    transformOrigin: "top left",
-                  }}
-                >
-                  <DataTableStyle2Template {...style2Data} exportMode />
-                </div>
-              </div>
+            <div className="flex justify-center">
+              <canvas
+                ref={canvasRef}
+                style={{ maxWidth: "100%", height: "auto", border: "1px solid var(--border)", borderRadius: "4px" }}
+              />
             </div>
           )}
         </CardContent>
       </Card>
-
-      {/* 样式二离屏导出节点（1:1 原始尺寸） */}
-      {report && rows.length > 0 && (
-        <div
-          style={{ position: "fixed", left: -20000, top: 0, pointerEvents: "none" }}
-          aria-hidden
-        >
-          <div ref={style2Ref}>
-            <DataTableStyle2Template {...style2Data} exportMode />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
