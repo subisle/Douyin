@@ -479,7 +479,7 @@ export function drawReportToCanvas(
         gradStops.addColorStop(1, grad[1]);
         ctx.fillStyle = gradStops;
         ctx.beginPath();
-        drawRoundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 12 * scale);
+        drawRoundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 0);
         ctx.fill();
         ctx.restore();
 
@@ -530,7 +530,7 @@ export function drawReportToCanvas(
           // 轨道
           ctx.fillStyle = C.barTrack;
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, barW, barH, barH / 2);
+          drawRoundRect(ctx, barLeft, barTop, barW, barH, 0);
           ctx.fill();
 
           // 进度条
@@ -539,7 +539,7 @@ export function drawReportToCanvas(
           barGrad.addColorStop(1, C.barGrad[1]);
           ctx.fillStyle = barGrad;
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, fillW, barH, barH / 2);
+          drawRoundRect(ctx, barLeft, barTop, fillW, barH, 0);
           ctx.fill();
 
           // 文字（用白色 + 阴影确保在深浅背景下都可见）
@@ -579,7 +579,7 @@ export function drawReportToCanvas(
           lvlGrad.addColorStop(1, ls.grad[1]);
           ctx.fillStyle = lvlGrad;
           ctx.beginPath();
-          drawRoundRect(ctx, bl, bt, bw, bh, 8 * scale);
+          drawRoundRect(ctx, bl, bt, bw, bh, 0);
           ctx.fill();
           ctx.restore();
 
