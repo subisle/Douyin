@@ -187,8 +187,13 @@ function buildColumns(
     widths = widths.map((w) => w * ratio);
   }
 
+  const result: (ColumnDef & { x: number; width: number })[] = [];
   let x = 0;
-  return defs.map((col, i) => ({ ...col, x, width: widths[i] }));
+  for (let i = 0; i < defs.length; i++) {
+    result.push({ ...defs[i], x, width: widths[i] });
+    x += widths[i];
+  }
+  return result;
 }
 
 /* ────────────────── 主绘制函数 ────────────────── */
