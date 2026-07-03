@@ -97,51 +97,30 @@ function drawRoundRect(
  * ═══════════════════════════════════════════════════════════════ */
 
 const C = {
-  // 外背景
   bg: "#F4F6F9",
-  // 卡片底
   cardBg: "#FFFFFF",
-
-  // ── 头部 ──
   headerBg: "#272D3E",
-
-  // ── 表头 ──
   thBg: "#EAF1FA",
   thText: "#555555",
   borderColor: "#F0F0F0",
-
-  // ── 前3名行底色 ──
   top1Bg: "#FFFBF0",
   top2Bg: "#F4F7FC",
   top3Bg: "#FDF5EC",
-
-  // ── 前3名徽章渐变 ──
   medal1Start: "#FFD700",
   medal1End: "#FBC02D",
   medal2Start: "#E0E0E0",
   medal2End: "#B0BEC5",
   medal3Start: "#FFBCA8",
   medal3End: "#E68A70",
-
-  // ── 进度条 ──
   barBg: "#74A8FB",
-
-  // ── 等级标签 ──
   badgeBg: "#E3F0FF",
   badgeText: "#2F88FF",
-
-  // ── 文字 ──
   textMain: "#333333",
   textSub: "#777777",
   textDanger: "#D35555",
-  // 累计总音浪
   totalWaveText: "#666666",
-  // 师傅
   masterText: "#777777",
-  // 占位符
   placeholderText: "#2F88FF",
-
-  // ── 底部 ──
   footerBg: "#FAFBFC",
   footerTitle: "#333333",
   footerMeta: "#777777",
@@ -164,28 +143,28 @@ interface ColumnDef {
 function buildColumns(
   ctx: CanvasRenderingContext2D,
   scale: number,
-  availableWidth: number,
+  cardWidth: number,
   date: string,
   rows: DailyReportRow[],
   showDuration: boolean,
   showMaster: boolean
-) {
+): (ColumnDef & { x: number; width: number })[] {
   const parts = date.split("-");
   const day = parseInt(parts[2] || "1", 10) || 1;
 
   const defs: ColumnDef[] = [
     { key: "rank", label: "序号", minWidth: 80, flex: 0.8, align: "center", getText: (_, i) => String(i + 1) },
-    { key: "name", label: "主播姓名", minWidth: 140, flex: 1.5, align: "left", getText: (r) => r.name },
-    { key: "dailyWave", label: `${day}号音浪`, minWidth: 220, flex: 3.0, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-    { key: "totalWave", label: "累计总音浪", minWidth: 150, flex: 1.8, align: "center", getText: (r) => formatWave(r.totalWave) },
-    { key: "tier", label: "等级", minWidth: 90, flex: 1.0, align: "center", getText: (r) => r.tier || "" },
+    { key: "name", label: "主播姓名", minWidth: 120, flex: 1.5, align: "left", getText: (r) => r.name },
+    { key: "dailyWave", label: `${day}号音浪`, minWidth: 200, flex: 3.0, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "totalWave", label: "累计总音浪", minWidth: 130, flex: 1.8, align: "center", getText: (r) => formatWave(r.totalWave) },
+    { key: "tier", label: "等级", minWidth: 80, flex: 1.0, align: "center", getText: (r) => r.tier || "" },
   ];
 
   if (showDuration) {
-    defs.push({ key: "duration", label: "有效时长", minWidth: 110, flex: 1.2, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" });
+    defs.push({ key: "duration", label: "有效时长", minWidth: 100, flex: 1.2, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" });
   }
   if (showMaster) {
-    defs.push({ key: "master", label: "师傅", minWidth: 90, flex: 1.0, align: "center", getText: (r) => r.masterName || "—" });
+    defs.push({ key: "master", label: "师傅", minWidth: 80, flex: 1.0, align: "center", getText: (r) => r.masterName || "—" });
   }
 
   ctx.save();
@@ -199,12 +178,12 @@ function buildColumns(
   ctx.restore();
 
   const totalW = widths.reduce((s, w) => s + w, 0);
-  if (totalW < availableWidth) {
-    const extra = availableWidth - totalW;
+  if (totalW < cardWidth) {
+    const extra = cardWidth - totalW;
     const totalFlex = defs.reduce((s, c) => s + c.flex, 0) || 1;
     widths = widths.map((w, i) => w + extra * (defs[i].flex / totalFlex));
-  } else if (totalW > availableWidth) {
-    const ratio = availableWidth / totalW;
+  } else if (totalW > cardWidth) {
+    const ratio = cardWidth / totalW;
     widths = widths.map((w) => w * ratio);
   }
 
@@ -220,9 +199,7 @@ export interface DrawReportOptions {
   gender: "male" | "female";
   customTitle?: string;
   scale?: number;
-  /** 显示有效时长列 */
   showDuration?: boolean;
-  /** 显示师傅列 */
   showMaster?: boolean;
 }
 
@@ -242,38 +219,33 @@ export function drawReportToCanvas(
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   const genderText = gender === "male" ? "男" : "女";
-  // 头部标题：标题 + 日期 合在一行，居中
   const titleText = `${customTitle || `${genderText}主播数据统计`} ${formattedDate}`;
 
+  // ── 固定卡片宽度 900px (对照 HTML max-width: 900px) ──
+  const cardW = 900 * scale;
   const margin = 20 * scale;
-  const tablePaddingX = 0; // 表格贴边
-  const headerHeight = 68 * scale;   // 头部 padding 24px*2 ≈ 48 + 字高
-  const tableHeaderHeight = 48 * scale; // th padding 16px*2 ≈ 32 + 字高
-  const rowHeight = 46 * scale;       // td padding 14px*2 ≈ 28 + 字高
+  const cornerRadius = 12 * scale;
+  const containerW = cardW + margin * 2;
+
+  const headerHeight = 68 * scale;
+  const tableHeaderHeight = 48 * scale;
+  const rowHeight = 46 * scale;
   const footerHeightBase = 80 * scale;
+
   const inactiveStreamers = rows.filter((r) => !r.isLive);
   const hasInactive = inactiveStreamers.length > 0;
-  const cornerRadius = 12 * scale;
-
-  // 计算容器宽度
-  ctx.font = `bold ${26 * scale}px sans-serif`;
-  const titleW = ctx.measureText(titleText).width;
-  const estCols = buildColumns(ctx, scale, 860 * scale, date, rows, showDuration, showMaster);
-  const estW = estCols.reduce((s, c) => s + c.width, 0);
-  const containerW = Math.max(
-    680 * scale,
-    Math.min(1000 * scale, Math.max(titleW + 80 * scale, estW))
-  );
 
   ctx.font = `${14 * scale}px sans-serif`;
   const inactiveLines = hasInactive
-    ? wrapCanvasText(ctx, inactiveStreamers.map((r) => r.name).join("、"), containerW * 0.3)
+    ? wrapCanvasText(ctx, inactiveStreamers.map((r) => r.name).join("、"), cardW * 0.3)
     : [];
   const footerHeight = hasInactive
     ? Math.max(footerHeightBase, (60 + inactiveLines.length * 20) * scale)
     : footerHeightBase;
 
-  const cols = buildColumns(ctx, scale, containerW, date, rows, showDuration, showMaster);
+  // 一次性计算列宽，传入卡片实际宽度
+  const cols = buildColumns(ctx, scale, cardW, date, rows, showDuration, showMaster);
+
   const totalH = margin + headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight + margin;
 
   canvas.width = containerW;
@@ -283,10 +255,9 @@ export function drawReportToCanvas(
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, containerW, totalH);
 
-  // ── 卡片外框 ──
+  // ── 卡片 ──
   const cardX = margin;
   const cardY = margin;
-  const cardW = containerW - margin * 2;
   const cardH = totalH - margin * 2;
 
   ctx.save();
@@ -308,11 +279,9 @@ export function drawReportToCanvas(
   let y = cardY;
 
   // ══════ 头部 ══════
-  // #272d3e 深灰蓝纯色背景
   ctx.fillStyle = C.headerBg;
   ctx.fillRect(cardX, y, cardW, headerHeight);
 
-  // 居中标题：标题+日期 合并
   ctx.fillStyle = "#FFFFFF";
   ctx.font = `bold ${26 * scale}px sans-serif`;
   ctx.textAlign = "center";
@@ -329,6 +298,7 @@ export function drawReportToCanvas(
   ctx.font = `600 ${15 * scale}px sans-serif`;
   ctx.textBaseline = "middle";
   cols.forEach((col) => {
+    // col.x 是相对于卡片左边缘的偏移
     const drawX = cardX + col.x;
     if (col.align === "left") {
       ctx.textAlign = "left";
@@ -353,12 +323,12 @@ export function drawReportToCanvas(
     const isTop3 = rank <= 3;
     const isInactive = !row.isLive;
 
-    // ── 行背景 ──
+    // 行背景
     let rowBg: string;
     if (rank === 1) rowBg = C.top1Bg;
     else if (rank === 2) rowBg = C.top2Bg;
     else if (rank === 3) rowBg = C.top3Bg;
-    else rowBg = C.cardBg; // 纯白，无斑马纹（对照 HTML 模板）
+    else rowBg = C.cardBg;
 
     ctx.fillStyle = rowBg;
     ctx.fillRect(cardX, y, cardW, rowHeight);
@@ -371,7 +341,7 @@ export function drawReportToCanvas(
     ctx.lineTo(cardX + cardW, y + rowHeight);
     ctx.stroke();
 
-    // ── 各列绘制 ──
+    // 各列
     cols.forEach((col) => {
       const drawX = cardX + col.x;
       const cy = y + rowHeight / 2;
@@ -381,7 +351,6 @@ export function drawReportToCanvas(
         ctx.textBaseline = "middle";
 
         if (isTop3) {
-          // 渐变圆形徽章
           let gradStart: string, gradEnd: string;
           if (rank === 1) { gradStart = C.medal1Start; gradEnd = C.medal1End; }
           else if (rank === 2) { gradStart = C.medal2Start; gradEnd = C.medal2End; }
@@ -389,15 +358,13 @@ export function drawReportToCanvas(
 
           const badgeSize = 26 * scale;
           const bx = drawX + (col.width - badgeSize) / 2;
-          const by = cy - badgeSize / 2;
 
-          // 徽章阴影
           ctx.save();
-          ctx.shadowColor = `rgba(0, 0, 0, 0.2)`;
+          ctx.shadowColor = "rgba(0, 0, 0, 0.2)";
           ctx.shadowBlur = 6 * scale;
           ctx.shadowOffsetY = 2 * scale;
 
-          const medalGrad = ctx.createLinearGradient(bx, by, bx + badgeSize, by + badgeSize);
+          const medalGrad = ctx.createLinearGradient(bx, cy - badgeSize / 2, bx + badgeSize, cy + badgeSize / 2);
           medalGrad.addColorStop(0, gradStart);
           medalGrad.addColorStop(1, gradEnd);
           ctx.fillStyle = medalGrad;
@@ -406,12 +373,10 @@ export function drawReportToCanvas(
           ctx.fill();
           ctx.restore();
 
-          // 白色数字
           ctx.fillStyle = "#FFFFFF";
           ctx.font = `bold ${13 * scale}px sans-serif`;
           ctx.fillText(String(rank), drawX + col.width / 2, cy + 1 * scale);
         } else {
-          // 常规行 — 斜体灰色 serif
           ctx.fillStyle = C.textSub;
           ctx.font = `italic ${16 * scale}px Georgia, serif`;
           const rankStr = rank < 10 ? `0${rank}` : String(rank);
@@ -424,31 +389,26 @@ export function drawReportToCanvas(
         const text = truncateCanvasText(ctx, row.name, col.width - 40 * scale);
         ctx.fillText(text, drawX + 20 * scale, cy);
       } else if (col.key === "dailyWave") {
-        // 音浪列 — 进度条 + 文字叠层
         if (isInactive) {
-          // 未开播 — 红色
           ctx.textAlign = "center";
           ctx.fillStyle = C.textDanger;
           ctx.font = `${15 * scale}px sans-serif`;
           ctx.fillText("未开播", drawX + col.width / 2, cy);
         } else {
-          // 进度条
-          const barW = col.width - 40 * scale; // 两侧各留 20px
+          const barW = col.width - 40 * scale;
           const barH = 28 * scale;
           const barLeft = drawX + 20 * scale;
           const barTop = cy - barH / 2;
-          // 进度条最大占 85%
           const fillPercent = (row.dailyWave / maxWave) * 0.85;
           const fillW = Math.max(barW * fillPercent, 30 * scale);
 
-          // 背景轨道（透明，仅用底色）
           // 进度条填充
           ctx.fillStyle = C.barBg;
           ctx.beginPath();
           drawRoundRect(ctx, barLeft, barTop, fillW, barH, barH / 2);
           ctx.fill();
 
-          // 进度条上的文字 — 居中于整个进度条区域
+          // 文字居中于整个列
           ctx.fillStyle = "#444444";
           ctx.font = `500 ${14 * scale}px sans-serif`;
           ctx.textAlign = "center";
@@ -456,17 +416,14 @@ export function drawReportToCanvas(
           ctx.fillText(formatWave(row.dailyWave), drawX + col.width / 2, cy);
         }
       } else if (col.key === "totalWave") {
-        // 累计总音浪 — 居中，灰色
         ctx.textAlign = "center";
         ctx.font = `${15 * scale}px sans-serif`;
         ctx.fillStyle = C.totalWaveText;
         ctx.fillText(formatWave(row.totalWave), drawX + col.width / 2, cy);
       } else if (col.key === "tier") {
         if (row.tier) {
-          // 统一蓝标签
-          const labelText = row.tier;
           ctx.font = `600 ${13 * scale}px sans-serif`;
-          const textW = ctx.measureText(labelText).width;
+          const textW = ctx.measureText(row.tier).width;
           const padX = 14 * scale;
           const bw = textW + padX * 2;
           const bh = 28 * scale;
@@ -481,7 +438,7 @@ export function drawReportToCanvas(
           ctx.fillStyle = C.badgeText;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(labelText, drawX + col.width / 2, cy + 1 * scale);
+          ctx.fillText(row.tier, drawX + col.width / 2, cy + 1 * scale);
         }
       } else if (col.key === "duration") {
         ctx.textAlign = "center";
@@ -508,11 +465,10 @@ export function drawReportToCanvas(
   ctx.fillStyle = C.footerBg;
   ctx.fillRect(cardX, y, cardW, footerHeight);
 
-  // 三栏 flex 布局模拟
   const footerPadX = 30 * scale;
-  const colW = (cardW - footerPadX * 2) / 3;
+  const colW = cardW / 3;
 
-  // 左栏：人数 + 日期
+  // 左栏
   ctx.fillStyle = C.footerTitle;
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
@@ -525,7 +481,7 @@ export function drawReportToCanvas(
 
   // 中栏：未开播
   if (hasInactive) {
-    const centerX = cardX + footerPadX + colW;
+    const centerX = cardX + colW + colW / 2;
 
     ctx.fillStyle = C.footerInactive;
     ctx.font = `bold ${18 * scale}px sans-serif`;
@@ -540,9 +496,6 @@ export function drawReportToCanvas(
     });
     ctx.textBaseline = "middle";
   }
-
-  // 右栏：占位平衡
-  // （空，仅用于视觉平衡）
 
   ctx.restore();
 }
