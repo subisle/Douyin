@@ -1,6 +1,82 @@
 import type { DailyReportRow } from "@/types/electron";
 import { formatWave } from "./format";
 
+/* ═══════════════════════════════════════════════════════════════
+ *  Kawaii Minimal 糖果色配色系统
+ *  Candy Color Palette — 高明度、中饱和度、温暖治愈
+ * ═══════════════════════════════════════════════════════════════ */
+
+const K = {
+  // ── 主色调 ──
+  pink:          "#FFB6D9",
+  pinkLight:     "#FFDBE9",
+  purple:        "#E6D5FF",
+  purpleLight:   "#F5EDFF",
+  green:         "#D4F1D4",
+  greenLight:    "#E8F8E8",
+  yellow:        "#FFF9E6",
+  cream:         "#FFF9F5",
+
+  // ── 中性色 ──
+  textDark:      "#333333",
+  textMedium:    "#666666",
+  textLight:     "#999999",
+  bgWhite:       "#FFFFFF",
+  bgCream:       "#FFF9F5",
+  bgGray:        "#F8F9FA",
+
+  // ── 渐变端点 ──
+  gradPrimary:   ["#FFB6D9", "#E6D5FF"] as [string, string],
+  gradSecondary: ["#FFB6D9", "#D4F1D4"] as [string, string],
+  gradRainbow:   ["#FFB6D9", "#E6D5FF", "#D4F1D4"] as [string, string, string],
+
+  // ── 阴影色（粉色调） ──
+  shadowPink:    "rgba(255, 182, 217, 0.25)",
+  shadowPurple:  "rgba(230, 213, 255, 0.20)",
+  shadowGreen:   "rgba(212, 241, 212, 0.15)",
+
+  // ── 圆角 ──
+  radiusSm:      16,
+  radiusMd:      24,
+  radiusLg:      32,
+  radiusPill:    9999,
+
+  // ── 特殊色 ──
+  danger:        "#FF6B6B",
+  dangerLight:   "#FFDBE9",
+  separator:     "rgba(255, 182, 217, 0.12)",
+
+  // ── 等级色（糖果色系） ──
+  levelA: { grad: ["#FFB6D9", "#FF8FAB"] as [string, string], text: "#FFFFFF" },
+  levelB: { grad: ["#E6D5FF", "#C8A2E8"] as [string, string], text: "#FFFFFF" },
+  levelC: { grad: ["#D4F1D4", "#8FE38F"] as [string, string], text: "#2D5F2D" },
+  levelD: { grad: ["#FFF9E6", "#FFE89A"] as [string, string], text: "#8B6914" },
+
+  // ── 前三名行底色 ──
+  top1RowBg: "rgba(255, 182, 217, 0.08)",
+  top2RowBg: "rgba(230, 213, 255, 0.08)",
+  top3RowBg: "rgba(212, 241, 212, 0.08)",
+
+  // ── 趋势色 ──
+  trendUp:   "#10B981",
+  trendDown: "#FF6B6B",
+  trendFlat: "#CBD5E1",
+
+  // ── 进度条 ──
+  barGrad: ["#FFB6D9", "#E6D5FF"] as [string, string],
+  barTrack: "rgba(255, 182, 217, 0.08)",
+  barText:  "#FFFFFF",
+};
+
+function getLevelStyle(level: string): { grad: [string, string]; text: string } {
+  if (!level) return K.levelD;
+  const ch = level.charAt(0).toUpperCase();
+  if (ch === "A") return K.levelA;
+  if (ch === "B") return K.levelB;
+  if (ch === "C") return K.levelC;
+  return K.levelD;
+}
+
 /* ────────────────── 工具函数 ────────────────── */
 
 function formatDurationText(minutes: number): string {
@@ -39,23 +115,14 @@ function wrapCanvasText(
       current = next;
       return;
     }
-    if (current) {
-      lines.push(current);
-      current = "";
-    }
-    if (ctx.measureText(seg).width <= maxWidth) {
-      current = seg;
-      return;
-    }
+    if (current) { lines.push(current); current = ""; }
+    if (ctx.measureText(seg).width <= maxWidth) { current = seg; return; }
     let chunk = "";
     for (const ch of seg) {
       const nxt = chunk + ch;
       if (ctx.measureText(nxt).width > maxWidth && chunk) {
-        lines.push(chunk);
-        chunk = ch;
-      } else {
-        chunk = nxt;
-      }
+        lines.push(chunk); chunk = ch;
+      } else { chunk = nxt; }
     }
     current = chunk;
   });
@@ -65,11 +132,7 @@ function wrapCanvasText(
 
 function drawRoundRect(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
+  x: number, y: number, w: number, h: number, r: number
 ) {
   const radius = Math.min(r, w / 2, h / 2);
   if (ctx.roundRect) {
@@ -90,16 +153,14 @@ function drawRoundRect(
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  奖杯绘制 — 贝塞尔曲线精致版
+ *  可爱奖杯 — 糖果色版
  * ═══════════════════════════════════════════════════════════════ */
 
 function drawTrophy(
   ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
+  cx: number, cy: number,
   size: number,
-  mainColor: string,
-  accentColor: string,
+  mainColor: string, accentColor: string,
   scale: number
 ) {
   const s = size;
@@ -108,35 +169,31 @@ function drawTrophy(
   ctx.save();
   ctx.translate(cx, cy);
 
-  // ── 阴影 ──
-  ctx.shadowColor = "rgba(0,0,0,0.20)";
-  ctx.shadowBlur = 6 * scale;
-  ctx.shadowOffsetY = 2 * scale;
+  // ── 柔和阴影 ──
+  ctx.shadowColor = K.shadowPink;
+  ctx.shadowBlur = 8 * scale;
+  ctx.shadowOffsetY = 3 * scale;
 
-  // ── 杯身（贝塞尔曲线，圆润梯形） ──
-  const cupTopW  = s * 0.50;
-  const cupMidW  = s * 0.40;
-  const cupBotW  = s * 0.34;
-  const cupH     = s * 0.38;
-  const cupTop   = -s * 0.12;
+  // ── 杯身（贝塞尔曲线） ──
+  const cupTopW = s * 0.50;
+  const cupMidW = s * 0.40;
+  const cupBotW = s * 0.34;
+  const cupH    = s * 0.38;
+  const cupTop  = -s * 0.12;
 
-  // 杯身渐变（上 mainColor → 下 accentColor）
   const cupGrad = ctx.createLinearGradient(0, cupTop, 0, cupTop + cupH);
   cupGrad.addColorStop(0, mainColor);
   cupGrad.addColorStop(1, accentColor);
   ctx.fillStyle = cupGrad;
 
   ctx.beginPath();
-  // 左杯口 → 左腰 → 底左
   ctx.moveTo(-cupTopW / 2, cupTop);
   ctx.bezierCurveTo(
     -cupTopW / 2 - s * 0.03, cupTop + cupH * 0.25,
     -cupMidW / 2 - s * 0.02, cupTop + cupH * 0.55,
     -cupBotW / 2, cupTop + cupH
   );
-  // 底
   ctx.lineTo(cupBotW / 2, cupTop + cupH);
-  // 底右 → 右腰 → 右杯口
   ctx.bezierCurveTo(
     cupMidW / 2 + s * 0.02, cupTop + cupH * 0.55,
     cupTopW / 2 + s * 0.03, cupTop + cupH * 0.25,
@@ -145,13 +202,12 @@ function drawTrophy(
   ctx.closePath();
   ctx.fill();
 
-  // 取消阴影（后续细节不需要）
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
 
-  // ── 杯身高光（左侧弧光带） ──
-  ctx.globalAlpha = 0.28;
+  // ── 高光 ──
+  ctx.globalAlpha = 0.30;
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
   ctx.moveTo(-cupTopW / 2 + s * 0.04, cupTop + s * 0.04);
@@ -170,11 +226,10 @@ function drawTrophy(
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
-  // ── 杯口弧线（描边） ──
+  // ── 杯口描边 ──
   ctx.strokeStyle = accentColor;
   ctx.lineWidth = lw * 0.7;
   ctx.lineCap = "round";
-  // 左半弧
   ctx.beginPath();
   ctx.moveTo(-cupTopW / 2, cupTop);
   ctx.bezierCurveTo(
@@ -183,7 +238,6 @@ function drawTrophy(
     -cupBotW / 2, cupTop + cupH
   );
   ctx.stroke();
-  // 右半弧
   ctx.beginPath();
   ctx.moveTo(cupTopW / 2, cupTop);
   ctx.bezierCurveTo(
@@ -192,38 +246,23 @@ function drawTrophy(
     cupBotW / 2, cupTop + cupH
   );
   ctx.stroke();
-  // 杯口顶线
   ctx.beginPath();
   ctx.moveTo(-cupTopW / 2 + s * 0.02, cupTop);
   ctx.lineTo(cupTopW / 2 - s * 0.02, cupTop);
   ctx.stroke();
 
-  // ── 把手（S 形弧线，两侧） ──
+  // ── 把手 ──
   const handR  = s * 0.15;
   const handCy = cupTop + cupH * 0.38;
-  ctx.strokeStyle = accentColor;
   ctx.lineWidth = lw;
-  ctx.lineCap = "round";
-  // 左把手（向外弯）
   ctx.beginPath();
-  ctx.arc(
-    -cupTopW / 2 + s * 0.01, handCy,
-    handR,
-    -Math.PI * 0.55, Math.PI * 0.25,
-    true
-  );
+  ctx.arc(-cupTopW / 2 + s * 0.01, handCy, handR, -Math.PI * 0.55, Math.PI * 0.25, true);
   ctx.stroke();
-  // 右把手
   ctx.beginPath();
-  ctx.arc(
-    cupTopW / 2 - s * 0.01, handCy,
-    handR,
-    -Math.PI * 0.25, Math.PI * 0.55,
-    true
-  );
+  ctx.arc(cupTopW / 2 - s * 0.01, handCy, handR, -Math.PI * 0.25, Math.PI * 0.55, true);
   ctx.stroke();
 
-  // ── 底座（两层：上窄 + 下宽） ──
+  // ── 底座（两层，大圆角） ──
   const baseTopW = s * 0.46;
   const baseBotW = s * 0.54;
   const baseH    = s * 0.11;
@@ -234,44 +273,37 @@ function drawTrophy(
   baseGrad.addColorStop(1, accentColor);
   ctx.fillStyle = baseGrad;
 
-  // 上底（窄）
   ctx.beginPath();
-  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.015);
+  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.025);
   ctx.fill();
-  // 下底（宽）
   ctx.beginPath();
-  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.015);
+  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.025);
   ctx.fill();
 
-  // 底座高光
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.20;
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  drawRoundRect(
-    ctx, -baseTopW / 2 + s * 0.03, baseY + s * 0.01,
-    baseTopW * 0.35, baseH * 0.30, s * 0.008
-  );
+  drawRoundRect(ctx, -baseTopW / 2 + s * 0.03, baseY + s * 0.01, baseTopW * 0.35, baseH * 0.30, s * 0.01);
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
-  // 底座描边
   ctx.strokeStyle = accentColor;
   ctx.lineWidth = lw * 0.4;
   ctx.beginPath();
-  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.015);
+  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.025);
   ctx.stroke();
   ctx.beginPath();
-  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.015);
+  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.025);
   ctx.stroke();
 
-  // ── 台座（最底部小方块） ──
+  // ── 台座 ──
   const pedW = s * 0.30;
   const pedH = s * 0.05;
   const pedY = baseY + baseH + s * 0.01;
   ctx.fillStyle = accentColor;
   ctx.globalAlpha = 0.65;
   ctx.beginPath();
-  drawRoundRect(ctx, -pedW / 2, pedY, pedW, pedH, s * 0.01);
+  drawRoundRect(ctx, -pedW / 2, pedY, pedW, pedH, s * 0.02);
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
@@ -279,61 +311,53 @@ function drawTrophy(
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  配色 — 严格对照 HTML 模板 CSS 变量
+ *  可爱装饰元素
  * ═══════════════════════════════════════════════════════════════ */
 
-// ── 背景已改为纯色，BG_COLORS 已移除 ──
+// 画一个小星星 ✨
+function drawStar(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  size: number, color: string
+) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = 0.6;
 
-// ── 玻璃卡片 ──
-const C = {
+  // 四角星
+  const spikes = 4;
+  const outerR = size;
+  const innerR = size * 0.3;
 
-  textMain: "#1e293b",
-  textSub: "#64748b",
-  textDanger: "#ef4444",
-  separator: "rgba(0, 0, 0, 0.06)",
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const angle = (Math.PI / spikes) * i - Math.PI / 2;
+    const x = Math.cos(angle) * r;
+    const y = Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
 
-  // 表头底色（透明 — 玻璃）
-  thBg: "rgba(255, 255, 255, 0.2)",
+  ctx.restore();
+}
 
-  // 前3名徽章（方角数字，奖杯用 drawTrophy 绘制）
-  topNormalBg: "rgba(0,0,0,0.04)",
-  topNormalText: "#64748b",
-
-  // 进度条
-  barGrad: ["#667eea", "#764ba2"] as [string, string],
-  barTrack: "rgba(0,0,0,0.04)",
-  barText: "#ffffff",
-
-  // 趋势色
-  trendUp: "#10b981",
-  trendDown: "#ef4444",
-  trendFlat: "#cbd5e1",
-
-  // 等级（按首字母分色）
-  levelA: { grad: ["#FF9A9E", "#FECFEF"] as [string, string], text: "#B91C1C" },
-  levelB: { grad: ["#a18cd1", "#fbc2eb"] as [string, string], text: "#ffffff" },
-  levelC: { grad: ["#84fab0", "#8fd3f4"] as [string, string], text: "#065F46" },
-  levelD: { grad: ["#e0c3fc", "#8ec5fc"] as [string, string], text: "#3730A3" },
-
-  // 行底色（前三名极微弱高亮）
-  top1RowBg: "rgba(246, 211, 101, 0.05)",
-  top2RowBg: "rgba(148, 163, 184, 0.05)",
-  top3RowBg: "rgba(251, 194, 235, 0.05)",
-
-  // 底部
-  footerBg: "rgba(255, 255, 255, 0.4)",
-  footerTitle: "#1e293b",
-  footerSub: "#64748b",
-  footerInactive: "#ef4444",
-};
-
-function getLevelStyle(level: string): { grad: [string, string]; text: string } {
-  if (!level) return C.levelD as { grad: [string, string]; text: string };
-  const ch = level.charAt(0).toUpperCase();
-  if (ch === "A") return C.levelA as { grad: [string, string]; text: string };
-  if (ch === "B") return C.levelB as { grad: [string, string]; text: string };
-  if (ch === "C") return C.levelC as { grad: [string, string]; text: string };
-  return C.levelD as { grad: [string, string]; text: string };
+// 画一个圆点装饰
+function drawDot(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number,
+  radius: number, color: string, alpha: number = 0.3
+) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 /* ────────────────── 列定义 ────────────────── */
@@ -350,13 +374,13 @@ interface ColumnDef {
 }
 
 export const ALL_COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
-  { key: "rank", label: "排名趋势", defaultVisible: true },
-  { key: "name", label: "主播姓名", defaultVisible: true },
-  { key: "dailyWave", label: "当日音浪", defaultVisible: true },
+  { key: "rank",      label: "排名趋势",  defaultVisible: true },
+  { key: "name",      label: "主播姓名",  defaultVisible: true },
+  { key: "dailyWave", label: "当日音浪",  defaultVisible: true },
   { key: "totalWave", label: "累计总音浪", defaultVisible: true },
-  { key: "tier", label: "等级", defaultVisible: true },
-  { key: "duration", label: "有效时长", defaultVisible: true },
-  { key: "master", label: "师傅", defaultVisible: true },
+  { key: "tier",      label: "等级",      defaultVisible: true },
+  { key: "duration",  label: "有效时长",  defaultVisible: true },
+  { key: "master",    label: "师傅",      defaultVisible: true },
 ];
 
 export const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ALL_COLUMNS.map((c) => c.key);
@@ -373,13 +397,13 @@ function buildColumns(
   const day = parseInt(parts[2] || "1", 10) || 1;
 
   const allDefs: ColumnDef[] = [
-    { key: "rank", label: "排名趋势", minWidth: 130, flex: 1.2, align: "center", getText: (_, i) => String(i + 1) },
-    { key: "name", label: "主播姓名", minWidth: 110, flex: 1.0, align: "left", getText: (r) => r.name },
-    { key: "dailyWave", label: `${day}号音浪`, minWidth: 220, flex: 2.5, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-    { key: "totalWave", label: "累计总音浪", minWidth: 130, flex: 1.2, align: "center", getText: (r) => formatWave(r.totalWave) },
-    { key: "tier", label: "等级", minWidth: 100, flex: 0.9, align: "center", getText: (r) => r.tier || "" },
-    { key: "duration", label: "有效时长", minWidth: 100, flex: 1.0, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
-    { key: "master", label: "师傅", minWidth: 90, flex: 0.9, align: "center", getText: (r) => r.masterName || "—" },
+    { key: "rank",      label: "排名趋势",       minWidth: 130, flex: 1.2, align: "center", getText: (_, i) => String(i + 1) },
+    { key: "name",      label: "主播姓名",       minWidth: 110, flex: 1.0, align: "left",   getText: (r) => r.name },
+    { key: "dailyWave", label: `${day}号音浪`,    minWidth: 220, flex: 2.5, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "totalWave", label: "累计总音浪",     minWidth: 130, flex: 1.2, align: "center", getText: (r) => formatWave(r.totalWave) },
+    { key: "tier",      label: "等级",           minWidth: 100, flex: 0.9, align: "center", getText: (r) => r.tier || "" },
+    { key: "duration",  label: "有效时长",       minWidth: 100, flex: 1.0, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
+    { key: "master",    label: "师傅",           minWidth: 90,  flex: 0.9, align: "center", getText: (r) => r.masterName || "—" },
   ];
 
   const defs = allDefs.filter((c) => visibleColumns.includes(c.key));
@@ -414,7 +438,9 @@ function buildColumns(
   return result;
 }
 
-/* ────────────────── 主绘制函数 ────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+ *  主绘制函数 — Kawaii Minimal 风格
+ * ═══════════════════════════════════════════════════════════════ */
 
 export interface DrawReportOptions {
   date: string;
@@ -422,11 +448,8 @@ export interface DrawReportOptions {
   gender: "male" | "female";
   customTitle?: string;
   scale?: number;
-  /** 需要展示的列（默认全部） */
   visibleColumns?: ColumnKey[];
-  /** 各主播的升降趋势（rank 差，正=上升名次，0=不变，负=下降） */
   trends?: Record<string, number>;
-  /** 标题副标题（"Data Report • 2026-07-01"） */
   subtitle?: string;
 }
 
@@ -440,25 +463,25 @@ export function drawReportToCanvas(
   const { date, rows, gender, customTitle = "", scale = 2, visibleColumns = DEFAULT_VISIBLE_COLUMNS, trends = {}, subtitle } = opts;
 
   const parts = date.split("-");
-  const year = parseInt(parts[0]) || 2026;
+  const year  = parseInt(parts[0]) || 2026;
   const month = parseInt(parts[1]) || 1;
-  const day = parseInt(parts[2]) || 1;
+  const day   = parseInt(parts[2]) || 1;
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
-  const genderText = gender === "male" ? "男" : "女";
-  const titleText = customTitle || "薇笑传媒主播数据统计";
+  const genderText  = gender === "male" ? "男" : "女";
+  const titleText   = customTitle || "薇笑传媒主播数据统计";
   const subtitleText = subtitle || `Data Report • ${formattedDate}`;
 
   // ── 尺寸 ──
-  const cardW = 950 * scale;
-  const margin = 30 * scale;
-  const cornerRadius = 0;
-  const containerW = cardW + margin * 2;
+  const cardW       = 950 * scale;
+  const margin      = 30 * scale;
+  const cornerRadius = K.radiusLg * scale;  // 32px 超大圆角
+  const containerW  = cardW + margin * 2;
 
-  const headerHeight = 100 * scale;
+  const headerHeight      = 110 * scale;
   const tableHeaderHeight = 54 * scale;
-  const rowHeight = 60 * scale;
-  const footerHeightBase = 100 * scale;
+  const rowHeight         = 62 * scale;
+  const footerHeightBase  = 110 * scale;
 
   const inactiveStreamers = rows.filter((r) => !r.isLive);
   const hasInactive = inactiveStreamers.length > 0;
@@ -475,33 +498,64 @@ export function drawReportToCanvas(
 
   const totalH = margin + headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight + margin;
 
-  canvas.width = containerW;
+  canvas.width  = containerW;
   canvas.height = totalH;
-  // ════ 纯色背景（去除弥散光渐变） ════
-  ctx.fillStyle = "#f0f2f5";
+
+  // ═════════════════════════════════════════════════════════════
+  //  1. 背景 — 奶油白 → 淡粉 柔和渐变
+  // ═════════════════════════════════════════════════════════════
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, totalH);
+  bgGrad.addColorStop(0, K.bgWhite);
+  bgGrad.addColorStop(0.5, K.bgCream);
+  bgGrad.addColorStop(1, K.pinkLight);
+  ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, containerW, totalH);
 
-  // ════ 卡片：纯白背景（去除玻璃拟态） ════
+  // 装饰圆点（散落糖果色圆点）
+  drawDot(ctx, margin + cardW * 0.05, margin * 0.5, 12 * scale, K.pink, 0.15);
+  drawDot(ctx, containerW - margin - cardW * 0.08, margin * 0.6, 8 * scale, K.purple, 0.20);
+  drawDot(ctx, margin + cardW * 0.02, totalH - margin * 0.7, 10 * scale, K.green, 0.15);
+  drawDot(ctx, containerW - margin - cardW * 0.04, totalH - margin * 0.5, 6 * scale, K.yellow.replace("#", ""), 0.25);
+  drawDot(ctx, containerW * 0.5, totalH - margin * 0.3, 5 * scale, K.pink, 0.20);
+
+  // 小星星装饰
+  drawStar(ctx, margin * 1.5, margin * 1.8, 8 * scale, K.pink);
+  drawStar(ctx, containerW - margin * 1.5, margin * 1.5, 6 * scale, K.purple);
+  drawStar(ctx, containerW - margin * 2, totalH - margin * 1.5, 7 * scale, K.green);
+
+  // ═════════════════════════════════════════════════════════════
+  //  2. 主卡片 — 纯白 + 超大圆角 + 柔和粉色阴影
+  // ═════════════════════════════════════════════════════════════
   const cardX = margin;
   const cardY = margin;
   const cardH = totalH - margin * 2;
 
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.08)";
-  ctx.shadowBlur = 30 * scale;
-  ctx.shadowOffsetY = 8 * scale;
-  ctx.fillStyle = "#ffffff";
+  ctx.shadowColor = K.shadowPink;
+  ctx.shadowBlur = 40 * scale;
+  ctx.shadowOffsetY = 12 * scale;
+  ctx.fillStyle = K.bgWhite;
   ctx.beginPath();
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
   ctx.fill();
   ctx.restore();
 
-  // 卡片边框（浅灰）
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
-  ctx.lineWidth = 1 * scale;
+  // 渐变边框（彩虹色细边）
+  ctx.save();
   ctx.beginPath();
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
-  ctx.stroke();
+  ctx.clip();
+
+  // 顶部彩虹条
+  const rainbowGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0);
+  rainbowGrad.addColorStop(0,    K.pink);
+  rainbowGrad.addColorStop(0.33, K.purple);
+  rainbowGrad.addColorStop(0.66, K.green);
+  rainbowGrad.addColorStop(1,    K.yellow);
+  ctx.fillStyle = rainbowGrad;
+  ctx.fillRect(cardX, cardY, cardW, 6 * scale);
+
+  ctx.restore();
 
   // 裁剪到卡片内部
   ctx.save();
@@ -509,56 +563,70 @@ export function drawReportToCanvas(
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
   ctx.clip();
 
-  let y = cardY;
+  let y = cardY + 6 * scale;  // 跳过彩虹条
 
-  // ══════ 头部 ══════
+  // ═════════════════════════════════════════════════════════════
+  //  3. 头部 — 渐变标题 + 副标题
+  // ═════════════════════════════════════════════════════════════
   const headerGrad = ctx.createLinearGradient(cardX, y, cardX + cardW, y);
-  headerGrad.addColorStop(0, "rgba(255,255,255,0.4)");
-  headerGrad.addColorStop(1, "rgba(255,255,255,0.1)");
+  headerGrad.addColorStop(0, K.pinkLight);
+  headerGrad.addColorStop(0.5, K.purpleLight);
+  headerGrad.addColorStop(1, K.greenLight);
   ctx.fillStyle = headerGrad;
   ctx.fillRect(cardX, y, cardW, headerHeight);
 
-  // 头部底部分隔
-  ctx.strokeStyle = C.separator;
+  // 头部分隔线（柔和粉色）
+  ctx.strokeStyle = K.separator;
   ctx.lineWidth = 1 * scale;
   ctx.beginPath();
-  ctx.moveTo(cardX, y + headerHeight);
-  ctx.lineTo(cardX + cardW, y + headerHeight);
+  ctx.moveTo(cardX + 20 * scale, y + headerHeight);
+  ctx.lineTo(cardX + cardW - 20 * scale, y + headerHeight);
   ctx.stroke();
 
-  // 标题渐变
-  ctx.font = `800 ${28 * scale}px "PingFang SC", -apple-system, sans-serif`;
+  // 装饰小圆点（头部内）
+  drawDot(ctx, cardX + cardW * 0.15, y + headerHeight * 0.3, 4 * scale, K.pink, 0.4);
+  drawDot(ctx, cardX + cardW * 0.85, y + headerHeight * 0.7, 3 * scale, K.purple, 0.4);
+
+  // 主标题 — 粉紫渐变文字
+  ctx.font = `800 ${30 * scale}px "PingFang SC", -apple-system, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  const titleY = y + 35 * scale;
+  const titleY = y + 42 * scale;
 
   const titleGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0);
-  titleGrad.addColorStop(0, "#1e1b4b");
-  titleGrad.addColorStop(0.5, "#4338ca");
-  titleGrad.addColorStop(1, "#be185d");
+  titleGrad.addColorStop(0,    "#FF8FAB");
+  titleGrad.addColorStop(0.5,  "#C8A2E8");
+  titleGrad.addColorStop(1,    "#8FE38F");
   ctx.fillStyle = titleGrad;
+  ctx.save();
+  ctx.shadowColor = K.shadowPink;
+  ctx.shadowBlur = 6 * scale;
+  ctx.shadowOffsetY = 2 * scale;
   ctx.fillText(titleText, cardX + cardW / 2, titleY);
+  ctx.restore();
 
   // 副标题
-  ctx.fillStyle = C.textSub;
+  ctx.fillStyle = K.textMedium;
   ctx.font = `500 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.fillText(subtitleText, cardX + cardW / 2, titleY + 28 * scale);
+  ctx.fillText(subtitleText, cardX + cardW / 2, titleY + 30 * scale);
 
   y += headerHeight;
 
-  // ══════ 表头 ══════
-  ctx.fillStyle = C.thBg;
+  // ═════════════════════════════════════════════════════════════
+  //  4. 表头 — 薰衣草浅底 + 胶囊标签风格
+  // ═════════════════════════════════════════════════════════════
+  ctx.fillStyle = K.purpleLight;
   ctx.fillRect(cardX, y, cardW, tableHeaderHeight);
 
   // 表头底分隔
-  ctx.strokeStyle = "rgba(0,0,0,0.08)";
+  ctx.strokeStyle = "rgba(230, 213, 255, 0.3)";
   ctx.lineWidth = 2 * scale;
   ctx.beginPath();
   ctx.moveTo(cardX, y + tableHeaderHeight);
   ctx.lineTo(cardX + cardW, y + tableHeaderHeight);
   ctx.stroke();
 
-  ctx.fillStyle = C.textSub;
+  ctx.fillStyle = K.textMedium;
   ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
   ctx.textBaseline = "middle";
   cols.forEach((col) => {
@@ -576,7 +644,9 @@ export function drawReportToCanvas(
   });
   y += tableHeaderHeight;
 
-  // ══════ 数据行 ══════
+  // ═════════════════════════════════════════════════════════════
+  //  5. 数据行
+  // ═════════════════════════════════════════════════════════════
   const maxWave = rows.filter((r) => r.isLive).length > 0
     ? Math.max(...rows.filter((r) => r.isLive).map((r) => r.dailyWave))
     : 1;
@@ -586,22 +656,22 @@ export function drawReportToCanvas(
     const isTop3 = rank <= 3;
     const isInactive = !row.isLive;
 
-    // 行底色（前3名极微弱高亮）
+    // 行底色（前3名糖果色高亮）
     let rowBg: string | null = null;
-    if (rank === 1) rowBg = C.top1RowBg;
-    else if (rank === 2) rowBg = C.top2RowBg;
-    else if (rank === 3) rowBg = C.top3RowBg;
+    if (rank === 1) rowBg = K.top1RowBg;
+    else if (rank === 2) rowBg = K.top2RowBg;
+    else if (rank === 3) rowBg = K.top3RowBg;
     if (rowBg) {
       ctx.fillStyle = rowBg;
       ctx.fillRect(cardX, y, cardW, rowHeight);
     }
 
-    // 行底分隔线
-    ctx.strokeStyle = C.separator;
+    // 行分隔线（极淡粉色）
+    ctx.strokeStyle = K.separator;
     ctx.lineWidth = 1 * scale;
     ctx.beginPath();
-    ctx.moveTo(cardX, y + rowHeight);
-    ctx.lineTo(cardX + cardW, y + rowHeight);
+    ctx.moveTo(cardX + 20 * scale, y + rowHeight);
+    ctx.lineTo(cardX + cardW - 20 * scale, y + rowHeight);
     ctx.stroke();
 
     // 各列
@@ -610,26 +680,30 @@ export function drawReportToCanvas(
       const cy = y + rowHeight / 2;
 
       if (col.key === "rank") {
-        // 排名：前三名画奖杯，其余画数字方块
+        // 排名：前三名奖杯，其余纯文字
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
-        const badgeSize = 32 * scale;
+        const badgeSize = 34 * scale;
         const badgeX = drawX + (col.width - badgeSize) / 2 - (trends[row.anchorId] !== undefined ? 16 * scale : 0);
-        const badgeY = cy - badgeSize / 2;
 
         if (isTop3) {
-          // ════ 奖杯图标 (Gold / Silver / Bronze) ════
+          // 奖杯 — 糖果金/银/铜
           let mainColor: string, accentColor: string;
-          if (rank === 1) { mainColor = "#f6d365"; accentColor = "#fda085"; }
-          else if (rank === 2) { mainColor = "#c0c8d8"; accentColor = "#94a3b8"; }
-          else { mainColor = "#f0b6d0"; accentColor = "#a6c1ee"; }
+          if (rank === 1) { mainColor = "#FFD580"; accentColor = "#FFB6D9"; }   // 蜜桃金
+          else if (rank === 2) { mainColor = "#E6D5FF"; accentColor = "#C8A2E8"; } // 薰衣草银
+          else { mainColor = "#D4F1D4"; accentColor = "#8FE38F"; }                 // 薄荷铜
 
           drawTrophy(ctx, badgeX + badgeSize / 2, cy, badgeSize, mainColor, accentColor, scale);
+
+          // 奖杯旁小星星
+          if (rank === 1) {
+            drawStar(ctx, badgeX + badgeSize + 4 * scale, cy - badgeSize * 0.3, 5 * scale, K.pink);
+          }
         } else {
-          // ════ 普通排名：纯文字（无方块背景） ════
-          ctx.fillStyle = C.topNormalText;
-          ctx.font = `800 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
+          // 纯文字序号
+          ctx.fillStyle = K.textLight;
+          ctx.font = `700 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
           const rankStr = rank < 10 ? `0${rank}` : String(rank);
           ctx.fillText(rankStr, badgeX + badgeSize / 2, cy);
         }
@@ -641,92 +715,125 @@ export function drawReportToCanvas(
           ctx.font = `700 ${12 * scale}px "PingFang SC", -apple-system, sans-serif`;
           ctx.textAlign = "left";
           if (trend > 0) {
-            ctx.fillStyle = C.trendUp;
+            ctx.fillStyle = K.trendUp;
             ctx.fillText(`↑${trend}`, trendX, cy);
           } else if (trend < 0) {
-            ctx.fillStyle = C.trendDown;
+            ctx.fillStyle = K.trendDown;
             ctx.fillText(`↓${Math.abs(trend)}`, trendX, cy);
           } else {
-            ctx.fillStyle = C.trendFlat;
-            ctx.fillText("-", trendX + 4 * scale, cy);
+            ctx.fillStyle = K.trendFlat;
+            ctx.fillText("—", trendX + 4 * scale, cy);
           }
         }
       } else if (col.key === "name") {
         ctx.textAlign = "left";
-        ctx.fillStyle = C.textMain;
+        ctx.fillStyle = K.textDark;
         ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
         const text = truncateCanvasText(ctx, row.name, col.width - 40 * scale);
         ctx.fillText(text, drawX + 18 * scale, cy);
       } else if (col.key === "dailyWave") {
         if (isInactive) {
+          // 未开播 — 柔和粉色胶囊
           ctx.textAlign = "center";
-          ctx.fillStyle = C.textDanger;
-          ctx.font = `700 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
+          ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
+          const textW = ctx.measureText("未开播").width;
+          const padX = 16 * scale;
+          const pw = textW + padX * 2;
+          const ph = 30 * scale;
+          const px = drawX + (col.width - pw) / 2;
+          const py = cy - ph / 2;
+
+          ctx.fillStyle = K.pinkLight;
+          ctx.beginPath();
+          drawRoundRect(ctx, px, py, pw, ph, K.radiusPill * scale);
+          ctx.fill();
+
+          ctx.fillStyle = K.danger;
+          ctx.textBaseline = "middle";
           ctx.fillText("未开播", drawX + col.width / 2, cy);
         } else {
-          // 进度条
+          // 进度条 — 糖果色渐变 + 大圆角
           const barW = col.width - 40 * scale;
-          const barH = 32 * scale;
+          const barH = 34 * scale;
           const barLeft = drawX + 20 * scale;
           const barTop = cy - barH / 2;
           const fillPercent = (row.dailyWave / maxWave) * 0.85;
           const fillW = Math.max(barW * fillPercent, 30 * scale);
+          const barRadius = K.radiusPill * scale;
 
-          // 轨道
-          ctx.fillStyle = C.barTrack;
+          // 轨道（极淡粉色）
+          ctx.fillStyle = K.barTrack;
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, barW, barH, 0);
+          drawRoundRect(ctx, barLeft, barTop, barW, barH, barRadius);
           ctx.fill();
 
-          // 进度条
+          // 进度条（粉紫渐变）
           const barGrad = ctx.createLinearGradient(barLeft, 0, barLeft + fillW, 0);
-          barGrad.addColorStop(0, C.barGrad[0]);
-          barGrad.addColorStop(1, C.barGrad[1]);
+          barGrad.addColorStop(0, K.barGrad[0]);
+          barGrad.addColorStop(1, K.barGrad[1]);
           ctx.fillStyle = barGrad;
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, fillW, barH, 0);
+          drawRoundRect(ctx, barLeft, barTop, fillW, barH, barRadius);
           ctx.fill();
 
-          // 文字（白色 + 阴影）
+          // 进度条高光（顶部白色半透明）
+          ctx.globalAlpha = 0.25;
           ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          drawRoundRect(ctx, barLeft, barTop, fillW, barH * 0.4, barRadius);
+          ctx.fill();
+          ctx.globalAlpha = 1.0;
+
+          // 文字（白色 + 阴影）
+          ctx.fillStyle = K.barText;
           ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.save();
-          ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+          ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
           ctx.shadowBlur = 3 * scale;
           ctx.fillText(formatWave(row.dailyWave), drawX + col.width / 2, cy);
           ctx.restore();
         }
       } else if (col.key === "totalWave") {
         ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
         ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-        ctx.fillStyle = C.textSub;
+        ctx.fillStyle = K.textMedium;
         ctx.fillText(formatWave(row.totalWave), drawX + col.width / 2, cy);
       } else if (col.key === "tier") {
         if (row.tier) {
           const ls = getLevelStyle(row.tier);
           ctx.font = `800 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
           const textW = ctx.measureText(row.tier).width;
-          const padX = 14 * scale;
+          const padX = 16 * scale;
           const bw = textW + padX * 2;
           const bh = 32 * scale;
           const bl = drawX + (col.width - bw) / 2;
           const bt = cy - bh / 2;
 
+          // 胶囊形等级标签
           ctx.save();
-          ctx.shadowColor = "rgba(0, 0, 0, 0.1)";
-          ctx.shadowBlur = 10 * scale;
-          ctx.shadowOffsetY = 4 * scale;
+          ctx.shadowColor = K.shadowPink;
+          ctx.shadowBlur = 8 * scale;
+          ctx.shadowOffsetY = 3 * scale;
 
           const lvlGrad = ctx.createLinearGradient(bl, bt, bl + bw, bt + bh);
           lvlGrad.addColorStop(0, ls.grad[0]);
           lvlGrad.addColorStop(1, ls.grad[1]);
           ctx.fillStyle = lvlGrad;
           ctx.beginPath();
-          drawRoundRect(ctx, bl, bt, bw, bh, 0);
+          drawRoundRect(ctx, bl, bt, bw, bh, K.radiusPill * scale);
           ctx.fill();
           ctx.restore();
+
+          // 高光
+          ctx.globalAlpha = 0.20;
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          drawRoundRect(ctx, bl, bt, bw, bh * 0.4, K.radiusPill * scale);
+          ctx.fill();
+          ctx.globalAlpha = 1.0;
 
           ctx.fillStyle = ls.text;
           ctx.textAlign = "center";
@@ -739,12 +846,13 @@ export function drawReportToCanvas(
         const dText = row.isLive && row.dailyDuration > 0
           ? formatDurationText(row.dailyDuration)
           : "—";
-        ctx.fillStyle = row.isLive && row.dailyDuration > 0 ? C.textMain : C.textSub;
+        ctx.fillStyle = row.isLive && row.dailyDuration > 0 ? K.textDark : K.textLight;
         ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
         ctx.fillText(dText, drawX + col.width / 2, cy);
       } else if (col.key === "master") {
         ctx.textAlign = "center";
-        ctx.fillStyle = C.textSub;
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = K.textMedium;
         ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
         const text = truncateCanvasText(ctx, row.masterName || "—", col.width - 20 * scale);
         ctx.fillText(text, drawX + col.width / 2, cy);
@@ -754,43 +862,47 @@ export function drawReportToCanvas(
     y += rowHeight;
   });
 
-  // ══════ 底部 ══════
+  // ═════════════════════════════════════════════════════════════
+  //  6. 底部 — 柔和渐变 + 统计信息
+  // ═════════════════════════════════════════════════════════════
   const footerGrad = ctx.createLinearGradient(cardX, y, cardX + cardW, y + footerHeight);
-  footerGrad.addColorStop(0, "rgba(255, 255, 255, 0.4)");
-  footerGrad.addColorStop(1, "rgba(255, 255, 255, 0.2)");
+  footerGrad.addColorStop(0, K.pinkLight);
+  footerGrad.addColorStop(0.5, K.purpleLight);
+  footerGrad.addColorStop(1, K.greenLight);
   ctx.fillStyle = footerGrad;
   ctx.fillRect(cardX, y, cardW, footerHeight);
 
-  ctx.strokeStyle = C.separator;
+  // 顶部分隔
+  ctx.strokeStyle = K.separator;
   ctx.lineWidth = 1 * scale;
   ctx.beginPath();
-  ctx.moveTo(cardX, y);
-  ctx.lineTo(cardX + cardW, y);
+  ctx.moveTo(cardX + 20 * scale, y);
+  ctx.lineTo(cardX + cardW - 20 * scale, y);
   ctx.stroke();
 
   const footerPadX = 32 * scale;
 
   // 左栏：人数 + 导出日期
-  ctx.fillStyle = C.footerTitle;
+  ctx.fillStyle = K.textDark;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.font = `800 ${18 * scale}px "PingFang SC", -apple-system, sans-serif`;
   ctx.fillText(`${genderText}主播 ${rows.length} 人`, cardX + footerPadX, y + 38 * scale);
 
-  ctx.font = `600 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.fillStyle = C.footerSub;
+  ctx.font = `500 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
+  ctx.fillStyle = K.textMedium;
   ctx.fillText(`导出日期 ${formattedDate}`, cardX + footerPadX, y + 62 * scale);
 
   // 中栏：未开播
   if (hasInactive) {
     const centerX = cardX + cardW / 2;
-    ctx.fillStyle = C.footerInactive;
+    ctx.fillStyle = K.danger;
     ctx.textAlign = "center";
     ctx.font = `800 ${18 * scale}px "PingFang SC", -apple-system, sans-serif`;
     ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, centerX, y + 38 * scale);
 
-    ctx.font = `600 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
-    ctx.fillStyle = C.footerInactive;
+    ctx.font = `500 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
+    ctx.fillStyle = K.danger;
     ctx.textBaseline = "top";
     inactiveLines.forEach((line, i) => {
       ctx.fillText(line, centerX, y + (54 + i * 20) * scale);
@@ -798,8 +910,11 @@ export function drawReportToCanvas(
     ctx.textBaseline = "alphabetic";
   }
 
-  // 右栏：占位 100px
-  const rightX = cardX + cardW - footerPadX - 100 * scale;
+  // 右栏：小装饰
+  const rightX = cardX + cardW - footerPadX;
+  drawStar(ctx, rightX - 10 * scale, y + 35 * scale, 6 * scale, K.pink);
+  drawDot(ctx, rightX - 25 * scale, y + 55 * scale, 4 * scale, K.purple, 0.4);
+  drawDot(ctx, rightX - 5 * scale, y + 65 * scale, 3 * scale, K.green, 0.4);
 
   ctx.restore();
 }
