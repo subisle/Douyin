@@ -129,7 +129,7 @@ const C = {
 
 /* ────────────────── 列定义 ────────────────── */
 
-type ColumnKey = "rank" | "name" | "dailyWave" | "totalWave" | "tier" | "duration" | "master";
+export type ColumnKey = "rank" | "name" | "dailyWave" | "totalWave" | "tier" | "duration" | "master";
 
 interface ColumnDef {
   key: ColumnKey;
@@ -140,32 +140,41 @@ interface ColumnDef {
   getText: (row: DailyReportRow, index: number) => string;
 }
 
+export const ALL_COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
+  { key: "rank", label: "序号", defaultVisible: true },
+  { key: "name", label: "主播姓名", defaultVisible: true },
+  { key: "dailyWave", label: "当日音浪", defaultVisible: true },
+  { key: "totalWave", label: "累计总音浪", defaultVisible: true },
+  { key: "tier", label: "等级", defaultVisible: true },
+  { key: "duration", label: "有效时长", defaultVisible: true },
+  { key: "master", label: "师傅", defaultVisible: true },
+];
+
+export const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ALL_COLUMNS.map((c) => c.key);
+
 function buildColumns(
   ctx: CanvasRenderingContext2D,
   scale: number,
   cardWidth: number,
   date: string,
   rows: DailyReportRow[],
-  showDuration: boolean,
-  showMaster: boolean
+  visibleColumns: ColumnKey[]
 ): (ColumnDef & { x: number; width: number })[] {
   const parts = date.split("-");
   const day = parseInt(parts[2] || "1", 10) || 1;
 
-  const defs: ColumnDef[] = [
+  const allDefs: ColumnDef[] = [
     { key: "rank", label: "序号", minWidth: 80, flex: 0.8, align: "center", getText: (_, i) => String(i + 1) },
     { key: "name", label: "主播姓名", minWidth: 120, flex: 1.5, align: "left", getText: (r) => r.name },
     { key: "dailyWave", label: `${day}号音浪`, minWidth: 200, flex: 3.0, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
     { key: "totalWave", label: "累计总音浪", minWidth: 130, flex: 1.8, align: "center", getText: (r) => formatWave(r.totalWave) },
     { key: "tier", label: "等级", minWidth: 80, flex: 1.0, align: "center", getText: (r) => r.tier || "" },
+    { key: "duration", label: "有效时长", minWidth: 100, flex: 1.2, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
+    { key: "master", label: "师傅", minWidth: 80, flex: 1.0, align: "center", getText: (r) => r.masterName || "—" },
   ];
 
-  if (showDuration) {
-    defs.push({ key: "duration", label: "有效时长", minWidth: 100, flex: 1.2, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" });
-  }
-  if (showMaster) {
-    defs.push({ key: "master", label: "师傅", minWidth: 80, flex: 1.0, align: "center", getText: (r) => r.masterName || "—" });
-  }
+  const defs = allDefs.filter((c) => visibleColumns.includes(c.key));
+  if (defs.length === 0) defs.push(allDefs[0]); // 至少保留序号
 
   ctx.save();
   let widths = defs.map((col) => {
@@ -204,8 +213,8 @@ export interface DrawReportOptions {
   gender: "male" | "female";
   customTitle?: string;
   scale?: number;
-  showDuration?: boolean;
-  showMaster?: boolean;
+  /** 需要展示的列（默认全部） */
+  visibleColumns?: ColumnKey[];
 }
 
 export function drawReportToCanvas(
@@ -215,7 +224,7 @@ export function drawReportToCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  const { date, rows, gender, customTitle = "", scale = 2, showDuration = false, showMaster = false } = opts;
+  const { date, rows, gender, customTitle = "", scale = 2, visibleColumns = DEFAULT_VISIBLE_COLUMNS } = opts;
 
   const parts = date.split("-");
   const year = parseInt(parts[0]) || 2026;
@@ -249,7 +258,7 @@ export function drawReportToCanvas(
     : footerHeightBase;
 
   // 一次性计算列宽，传入卡片实际宽度
-  const cols = buildColumns(ctx, scale, cardW, date, rows, showDuration, showMaster);
+  const cols = buildColumns(ctx, scale, cardW, date, rows, visibleColumns);
 
   const totalH = margin + headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight + margin;
 
