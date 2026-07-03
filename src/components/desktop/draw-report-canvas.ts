@@ -479,7 +479,7 @@ export function drawReportToCanvas(
         gradStops.addColorStop(1, grad[1]);
         ctx.fillStyle = gradStops;
         ctx.beginPath();
-        drawRoundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 0);
+        drawRoundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 12 * scale);
         ctx.fill();
         ctx.restore();
 
