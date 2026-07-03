@@ -716,17 +716,48 @@ export function drawReportToCanvas(
         const badgeX = drawX + (col.width - badgeSize) / 2 - (trends[row.anchorId] !== undefined ? 16 * scale : 0);
 
         if (isTop3) {
-          // 奖杯 — 糖果金/银/铜
-          let mainColor: string, accentColor: string;
-          if (rank === 1) { mainColor = "#FFD580"; accentColor = "#FFB6D9"; }   // 蜜桃金
-          else if (rank === 2) { mainColor = "#E6D5FF"; accentColor = "#C8A2E8"; } // 薰衣草银
-          else { mainColor = "#D4F1D4"; accentColor = "#8FE38F"; }                 // 薄荷铜
+          // 前三名 — 糖果色渐变圆球序号
+          let gradA: string, gradB: string;
+          if (rank === 1) { gradA = "#FFB6D9"; gradB = "#FF8FAB"; }       // 蜜桃粉
+          else if (rank === 2) { gradA = "#E6D5FF"; gradB = "#C8A2E8"; }    // 薰衣草紫
+          else { gradA = "#D4F1D4"; gradB = "#8FE38F"; }                    // 薄荷绿
 
-          drawCrown(ctx, badgeX + badgeSize / 2, cy, badgeSize, mainColor, accentColor, scale);
+          const ballR = badgeSize / 2;
+          const ballCx = badgeX + badgeSize / 2;
 
-          // 奖杯旁小星星
+          // 柔和阴影
+          ctx.save();
+          ctx.shadowColor = K.shadowPink;
+          ctx.shadowBlur = 6 * scale;
+          ctx.shadowOffsetY = 2 * scale;
+
+          const ballGrad = ctx.createLinearGradient(ballCx - ballR, cy - ballR, ballCx + ballR, cy + ballR);
+          ballGrad.addColorStop(0, gradA);
+          ballGrad.addColorStop(1, gradB);
+          ctx.fillStyle = ballGrad;
+          ctx.beginPath();
+          ctx.arc(ballCx, cy, ballR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+
+          // 顶部高光
+          ctx.globalAlpha = 0.35;
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(ballCx - ballR * 0.25, cy - ballR * 0.35, ballR * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1.0;
+
+          // 数字
+          ctx.fillStyle = rank === 2 ? "#FFFFFF" : "#333333";
+          if (rank === 1) ctx.fillStyle = "#FFFFFF";
+          if (rank === 3) ctx.fillStyle = "#2D5F2D";
+          ctx.font = `800 ${15 * scale}px "PingFang SC", -apple-system, sans-serif`;
+          ctx.fillText(String(rank), ballCx, cy);
+
+          // 第1名旁小星星
           if (rank === 1) {
-            drawStar(ctx, badgeX + badgeSize + 4 * scale, cy - badgeSize * 0.3, 5 * scale, K.pink);
+            drawStar(ctx, badgeX + badgeSize + 6 * scale, cy - badgeSize * 0.25, 5 * scale, K.pink);
           }
         } else {
           // 纯文字序号
