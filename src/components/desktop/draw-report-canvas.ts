@@ -154,9 +154,11 @@ function drawRoundRect(
 
 /* ═══════════════════════════════════════════════════════════════
  *  可爱奖杯 — 糖果色版
+/* ═══════════════════════════════════════════════════════════════
+ *  可爱皇冠 — 糖果色版 👑
  * ═══════════════════════════════════════════════════════════════ */
 
-function drawTrophy(
+function drawCrown(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number,
   size: number,
@@ -164,7 +166,7 @@ function drawTrophy(
   scale: number
 ) {
   const s = size;
-  const lw = 1.8 * scale;
+  const lw = 1.5 * scale;
 
   ctx.save();
   ctx.translate(cx, cy);
@@ -174,141 +176,167 @@ function drawTrophy(
   ctx.shadowBlur = 8 * scale;
   ctx.shadowOffsetY = 3 * scale;
 
-  // ── 杯身（贝塞尔曲线） ──
-  const cupTopW = s * 0.50;
-  const cupMidW = s * 0.40;
-  const cupBotW = s * 0.34;
-  const cupH    = s * 0.38;
-  const cupTop  = -s * 0.12;
+  // ── 皇冠主体（带三个尖角的齿状冠） ──
+  // 尺寸：宽 s*0.72, 高 s*0.42
+  const crownW = s * 0.72;
+  const crownH = s * 0.42;
+  const baseH  = s * 0.14;  // 底座环高度
+  const topY   = -s * 0.20; // 顶部 Y
+  const baseY  = topY + crownH - baseH; // 底座顶部 Y
 
-  const cupGrad = ctx.createLinearGradient(0, cupTop, 0, cupTop + cupH);
-  cupGrad.addColorStop(0, mainColor);
-  cupGrad.addColorStop(1, accentColor);
-  ctx.fillStyle = cupGrad;
+  // 渐变填充
+  const crownGrad = ctx.createLinearGradient(0, topY, 0, topY + crownH);
+  crownGrad.addColorStop(0, mainColor);
+  crownGrad.addColorStop(1, accentColor);
 
+  // ── 皇冠形状（五个尖角） ──
+  ctx.fillStyle = crownGrad;
   ctx.beginPath();
-  ctx.moveTo(-cupTopW / 2, cupTop);
-  ctx.bezierCurveTo(
-    -cupTopW / 2 - s * 0.03, cupTop + cupH * 0.25,
-    -cupMidW / 2 - s * 0.02, cupTop + cupH * 0.55,
-    -cupBotW / 2, cupTop + cupH
-  );
-  ctx.lineTo(cupBotW / 2, cupTop + cupH);
-  ctx.bezierCurveTo(
-    cupMidW / 2 + s * 0.02, cupTop + cupH * 0.55,
-    cupTopW / 2 + s * 0.03, cupTop + cupH * 0.25,
-    cupTopW / 2, cupTop
-  );
+
+  // 左下角起点
+  const leftEdge  = -crownW / 2;
+  const rightEdge =  crownW / 2;
+
+  ctx.moveTo(leftEdge, baseY);
+
+  // ── 左尖角 ──
+  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.25);
+  // 左尖角顶点（带小圆球）
+  const peak1X = leftEdge + crownW * 0.10;
+  const peak1Y = topY;
+  ctx.lineTo(peak1X, peak1Y);
+
+  // ── 左谷 ──
+  const valley1X = leftEdge + crownW * 0.25;
+  const valley1Y = topY + crownH * 0.38;
+  ctx.lineTo(valley1X, valley1Y);
+
+  // ── 中尖角（最高） ──
+  const peak2X = leftEdge + crownW * 0.50;
+  const peak2Y = topY - s * 0.04;  // 中间稍高
+  ctx.lineTo(peak2X, peak2Y);
+
+  // ── 右谷 ──
+  const valley2X = leftEdge + crownW * 0.75;
+  const valley2Y = topY + crownH * 0.38;
+  ctx.lineTo(valley2X, valley2Y);
+
+  // ── 右尖角 ──
+  const peak3X = leftEdge + crownW * 0.90;
+  const peak3Y = topY;
+  ctx.lineTo(peak3X, peak3Y);
+
+  // 右下
+  ctx.lineTo(rightEdge - crownW * 0.05, topY + crownH * 0.25);
+  ctx.lineTo(rightEdge, baseY);
+
+  // 底边
   ctx.closePath();
   ctx.fill();
 
+  // 取消阴影
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
   ctx.shadowOffsetY = 0;
 
-  // ── 高光 ──
-  ctx.globalAlpha = 0.30;
+  // ── 皇冠高光（左半部分白色半透明） ──
+  ctx.globalAlpha = 0.25;
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.moveTo(-cupTopW / 2 + s * 0.04, cupTop + s * 0.04);
-  ctx.bezierCurveTo(
-    -cupTopW / 2 + s * 0.02, cupTop + cupH * 0.35,
-    -cupBotW / 2 + s * 0.03, cupTop + cupH - s * 0.04,
-    -cupBotW / 2 + s * 0.12, cupTop + cupH - s * 0.02
-  );
-  ctx.lineTo(-cupBotW / 2 + s * 0.08, cupTop + cupH - s * 0.02);
-  ctx.bezierCurveTo(
-    -cupTopW / 2 + s * 0.05, cupTop + cupH * 0.35,
-    -cupTopW / 2 + s * 0.07, cupTop + s * 0.06,
-    -cupTopW / 2 + s * 0.09, cupTop + s * 0.03
-  );
+  ctx.moveTo(leftEdge + s * 0.02, baseY - s * 0.01);
+  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.30);
+  ctx.lineTo(peak1X - s * 0.01, peak1Y + s * 0.02);
+  ctx.lineTo(valley1X - s * 0.01, valley1Y);
+  ctx.lineTo(peak2X - s * 0.02, peak2Y + s * 0.02);
+  ctx.lineTo(peak2X - s * 0.06, topY + crownH * 0.20);
+  ctx.lineTo(leftEdge + s * 0.04, baseY - s * 0.01);
   ctx.closePath();
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
-  // ── 杯口描边 ──
-  ctx.strokeStyle = accentColor;
-  ctx.lineWidth = lw * 0.7;
-  ctx.lineCap = "round";
+  // ── 尖角顶端小圆球（三颗糖果） ──
+  const ballR = s * 0.055;
+  // 左球
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.moveTo(-cupTopW / 2, cupTop);
-  ctx.bezierCurveTo(
-    -cupTopW / 2 - s * 0.03, cupTop + cupH * 0.25,
-    -cupMidW / 2 - s * 0.02, cupTop + cupH * 0.55,
-    -cupBotW / 2, cupTop + cupH
-  );
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cupTopW / 2, cupTop);
-  ctx.bezierCurveTo(
-    cupTopW / 2 + s * 0.03, cupTop + cupH * 0.25,
-    cupMidW / 2 + s * 0.02, cupTop + cupH * 0.55,
-    cupBotW / 2, cupTop + cupH
-  );
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(-cupTopW / 2 + s * 0.02, cupTop);
-  ctx.lineTo(cupTopW / 2 - s * 0.02, cupTop);
-  ctx.stroke();
-
-  // ── 把手 ──
-  const handR  = s * 0.15;
-  const handCy = cupTop + cupH * 0.38;
-  ctx.lineWidth = lw;
-  ctx.beginPath();
-  ctx.arc(-cupTopW / 2 + s * 0.01, handCy, handR, -Math.PI * 0.55, Math.PI * 0.25, true);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cupTopW / 2 - s * 0.01, handCy, handR, -Math.PI * 0.25, Math.PI * 0.55, true);
-  ctx.stroke();
-
-  // ── 底座（两层，大圆角） ──
-  const baseTopW = s * 0.46;
-  const baseBotW = s * 0.54;
-  const baseH    = s * 0.11;
-  const baseY    = cupTop + cupH + s * 0.01;
-
-  const baseGrad = ctx.createLinearGradient(0, baseY, 0, baseY + baseH);
-  baseGrad.addColorStop(0, mainColor);
-  baseGrad.addColorStop(1, accentColor);
-  ctx.fillStyle = baseGrad;
-
-  ctx.beginPath();
-  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.025);
+  ctx.arc(peak1X, peak1Y - ballR * 0.3, ballR, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = accentColor;
   ctx.beginPath();
-  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.025);
+  ctx.arc(peak1X, peak1Y - ballR * 0.3, ballR * 0.6, 0, Math.PI * 2);
   ctx.fill();
 
+  // 中球（最大）
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(peak2X, peak2Y - ballR * 0.5, ballR * 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(peak2X, peak2Y - ballR * 0.5, ballR * 0.7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 右球
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(peak3X, peak3Y - ballR * 0.3, ballR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(peak3X, peak3Y - ballR * 0.3, ballR * 0.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ── 底座环（圆角矩形） ──
+  ctx.fillStyle = crownGrad;
+  ctx.beginPath();
+  drawRoundRect(ctx, leftEdge - s * 0.02, baseY, crownW + s * 0.04, baseH, s * 0.03);
+  ctx.fill();
+
+  // 底座高光
   ctx.globalAlpha = 0.20;
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  drawRoundRect(ctx, -baseTopW / 2 + s * 0.03, baseY + s * 0.01, baseTopW * 0.35, baseH * 0.30, s * 0.01);
+  drawRoundRect(ctx, leftEdge, baseY + s * 0.015, crownW * 0.4, baseH * 0.35, s * 0.015);
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
+  // 底座描边
   ctx.strokeStyle = accentColor;
   ctx.lineWidth = lw * 0.4;
   ctx.beginPath();
-  drawRoundRect(ctx, -baseTopW / 2, baseY, baseTopW, baseH * 0.5, s * 0.025);
-  ctx.stroke();
-  ctx.beginPath();
-  drawRoundRect(ctx, -baseBotW / 2, baseY + baseH * 0.45, baseBotW, baseH * 0.55, s * 0.025);
+  drawRoundRect(ctx, leftEdge - s * 0.02, baseY, crownW + s * 0.04, baseH, s * 0.03);
   ctx.stroke();
 
-  // ── 台座 ──
-  const pedW = s * 0.30;
-  const pedH = s * 0.05;
-  const pedY = baseY + baseH + s * 0.01;
-  ctx.fillStyle = accentColor;
-  ctx.globalAlpha = 0.65;
+  // ── 皇冠描边（整体轮廓） ──
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = lw * 0.35;
+  ctx.lineJoin = "round";
   ctx.beginPath();
-  drawRoundRect(ctx, -pedW / 2, pedY, pedW, pedH, s * 0.02);
+  ctx.moveTo(leftEdge, baseY);
+  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.25);
+  ctx.lineTo(peak1X, peak1Y);
+  ctx.lineTo(valley1X, valley1Y);
+  ctx.lineTo(peak2X, peak2Y);
+  ctx.lineTo(valley2X, valley2Y);
+  ctx.lineTo(peak3X, peak3Y);
+  ctx.lineTo(rightEdge - crownW * 0.05, topY + crownH * 0.25);
+  ctx.lineTo(rightEdge, baseY);
+  ctx.stroke();
+
+  // ── 底部小台座 ──
+  const pedW2 = crownW * 0.85;
+  const pedH2 = s * 0.04;
+  const pedY2 = baseY + baseH + s * 0.005;
+  ctx.fillStyle = accentColor;
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  drawRoundRect(ctx, -pedW2 / 2, pedY2, pedW2, pedH2, s * 0.015);
   ctx.fill();
   ctx.globalAlpha = 1.0;
 
   ctx.restore();
 }
+
 
 /* ═══════════════════════════════════════════════════════════════
  *  可爱装饰元素
@@ -694,7 +722,7 @@ export function drawReportToCanvas(
           else if (rank === 2) { mainColor = "#E6D5FF"; accentColor = "#C8A2E8"; } // 薰衣草银
           else { mainColor = "#D4F1D4"; accentColor = "#8FE38F"; }                 // 薄荷铜
 
-          drawTrophy(ctx, badgeX + badgeSize / 2, cy, badgeSize, mainColor, accentColor, scale);
+          drawCrown(ctx, badgeX + badgeSize / 2, cy, badgeSize, mainColor, accentColor, scale);
 
           // 奖杯旁小星星
           if (rank === 1) {
