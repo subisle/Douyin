@@ -2,12 +2,13 @@
   "name": "douyin",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.12.1",
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint src electron next.config.ts",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "cross-env ELECTRON=true next build",
@@ -41,8 +42,10 @@
       ]
     },
     "publish": {
-      "provider": "generic",
-      "url": "https://github.akams.cn/https://github.com/subisle/douyin-updater/releases/latest/download"
+      "provider": "github",
+      "owner": "subisle",
+      "repo": "douyin-updater",
+      "releaseType": "release"
     },
     "extraMetadata": {}
   },
@@ -72,11 +75,14 @@
     "concurrently": "^10.0.3",
     "cross-env": "^10.1.0",
     "electron": "^42.4.1",
-    "electron-builder": "^25.1.8",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "^15.3.4",
     "tailwindcss": "^4",
     "typescript": "^5",
     "wait-on": "^9.0.10"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
   }
 }

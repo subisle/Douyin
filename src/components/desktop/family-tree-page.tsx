@@ -1,14 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Crown, Download } from "lucide-react";
+import { Crown, Download, UsersRound } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useElectronData } from "./use-electron-data";
 import type { FamilyNode } from "@/types/electron";
-import { exportElementAsImage } from "./export-image";
 import { exportFamilyPoster } from "./export-family-poster";
+import {
+  FAMILY_COL_GAP as COL_GAP,
+  FAMILY_NODE_H as NODE_H,
+  FAMILY_NODE_W as NODE_W,
+  FAMILY_PAD as PAD,
+  FAMILY_ROW_GAP as ROW_GAP,
+  getFamilyDisplayName,
+  getFamilyGenerationText,
+} from "./family-tree-style";
 import {
   BrowserModeState,
   EmptyState,
@@ -20,12 +28,6 @@ export interface TreeNode extends FamilyNode {
   children: TreeNode[];
   descendantCount: number;
 }
-
-const NODE_W = 84;
-const NODE_H = 38;
-const COL_GAP = 28; // 列间距（辈分之间）
-const ROW_GAP = 4; // 行间距（同列节点之间）
-const PAD = 16;
 
 interface Placed {
   node: TreeNode;
@@ -177,12 +179,22 @@ function Wrap({ children }: { children: React.ReactNode }) {
 function TreeCard({ roots }: { roots: TreeNode[] }) {
   const { placed, edges, width, height } = useMemo(() => layoutAll(roots), [roots]);
   const rootSet = useMemo(() => new Set(roots.map((r) => r.id)), [roots]);
+  const stats = useMemo(() => {
+    const generations = placed
+      .map((p) => p.node.generation)
+      .filter((g): g is number => g != null);
+    return {
+      roots: roots.length,
+      generations: generations.length > 0 ? Math.max(...generations) - Math.min(...generations) + 1 : 0,
+      descendants: placed.reduce((sum, p) => sum + p.node.children.length, 0),
+    };
+  }, [placed, roots.length]);
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [exporting, setExporting] = useState(false);
 
-  // 自动缩放：让整棵树在一页内完整显示，同时考虑宽度和高度约束
+  // 自动缩放：优先保证可读性，过大的树允许滚动查看。
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -190,7 +202,7 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
       const availW = el.clientWidth;
       const availH = el.clientHeight;
       if (availW <= 0 || availH <= 0 || width <= 0 || height <= 0) return;
-      setScale(Math.min(1, availW / width, availH / height));
+      setScale(Math.max(0.68, Math.min(1, availW / width, availH / height)));
     };
     update();
     const ro = new ResizeObserver(update);
@@ -221,6 +233,13 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
               {placed.length} 人
             </Badge>
           </CardTitle>
+          <div className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">
+            <span>{stats.roots} 个家族</span>
+            <span className="h-3 w-px bg-border" />
+            <span>{stats.generations} 代</span>
+            <span className="h-3 w-px bg-border" />
+            <span>{stats.descendants} 条关系</span>
+          </div>
           <button
             onClick={handleExport}
             disabled={exporting}
@@ -232,12 +251,12 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
         </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
-        <div ref={containerRef} className="h-full w-full overflow-hidden">
+        <div ref={containerRef} className="h-full w-full overflow-auto rounded-lg border border-border/70 bg-muted/20">
           {/* 缩放后占位高度，避免底部留白 */}
-          <div style={{ height: height * scale }}>
+          <div style={{ width: width * scale, height: height * scale }}>
             <div
               ref={contentRef}
-              className="relative origin-top-left bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:22px_22px]"
+              className="relative origin-top-left bg-[radial-gradient(color-mix(in_srgb,var(--border)_72%,transparent)_1px,transparent_1px)] [background-size:24px_24px]"
               style={{
                 width,
                 height,
@@ -257,7 +276,9 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
                       d={`M ${e.px} ${e.py} H ${midX} V ${e.cy} H ${e.cx}`}
                       fill="none"
                       stroke="var(--border)"
-                      strokeWidth={1.5}
+                      strokeWidth={1.4}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
                     />
                   );
                 })}
@@ -286,29 +307,64 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
 }
 
 function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
+  const displayName = getFamilyDisplayName(node, isRoot);
+  const rawName = node.name.trim() || "未命名";
+  const isFemale = node.gender === "female";
+  const relationText =
+    node.children.length > 0
+      ? `${node.children.length}徒`
+      : node.masterId
+        ? "成员"
+        : "单人";
+
   return (
-    <div className="flex size-full select-none flex-col items-center justify-center gap-0.5 text-center">
-      <div className="flex items-center gap-1">
-        {isRoot && <Crown className="size-3 text-primary" />}
+    <div
+      className={cn(
+        "relative flex size-full select-none flex-col justify-between overflow-hidden rounded-lg border bg-card px-2.5 py-2 shadow-sm",
+        isRoot
+          ? "border-primary/45 bg-primary/10 shadow-primary/10"
+          : isFemale
+            ? "border-rose-300/50 bg-rose-50/70 dark:border-rose-500/35 dark:bg-rose-950/20"
+            : "border-border/80 bg-background"
+      )}
+      title={rawName !== displayName ? `${displayName}（原始: ${rawName}）` : displayName}
+    >
+      <div
+        className={cn(
+          "absolute inset-y-0 left-0 w-1",
+          isRoot ? "bg-primary" : isFemale ? "bg-rose-400" : "bg-sky-400"
+        )}
+      />
+      <div className="flex min-w-0 items-center gap-1.5 pl-0.5">
+        {isRoot && <Crown className="size-3.5 shrink-0 text-primary" />}
         <span
           className={cn(
-            "whitespace-nowrap text-[13px] font-semibold leading-none",
+            "min-w-0 flex-1 truncate text-[14px] font-semibold leading-5",
             isRoot
               ? "text-primary"
-              : node.gender === "female"
-                ? "text-chart-1"
+              : isFemale
+                ? "text-rose-600 dark:text-rose-300"
                 : "text-foreground"
           )}
         >
-          {node.name}
+          {displayName}
         </span>
       </div>
-      <div className="flex items-center gap-1 leading-none">
-        {node.children.length > 0 && (
-          <span className="text-[10px] text-muted-foreground">
-            · {node.children.length}徒
-          </span>
-        )}
+      <div className="flex min-w-0 items-center justify-between gap-1.5 pl-0.5">
+        <span className="truncate text-[10px] leading-4 text-muted-foreground">
+          {getFamilyGenerationText(node)}
+        </span>
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none",
+            node.children.length > 0
+              ? "border-primary/25 bg-primary/10 text-primary"
+              : "border-border bg-muted text-muted-foreground"
+          )}
+        >
+          <UsersRound className="size-2.5" />
+          {relationText}
+        </span>
       </div>
     </div>
   );

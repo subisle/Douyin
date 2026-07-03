@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Download, Loader2, Waves, Clock, Users } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { downloadCsv } from "./csv";
 import { BrowserModeState } from "./states";

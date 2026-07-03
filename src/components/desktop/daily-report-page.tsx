@@ -5,8 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileText, Download, FileSpreadsheet, Settings, Save, Columns3, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatWave } from "./format";
 import { drawReportToCanvas, ALL_COLUMNS, DEFAULT_VISIBLE_COLUMNS, type ColumnKey } from "./draw-report-canvas";
+import { downloadCanvasAsPng } from "./export-image";
 import type { TierRule, DailyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
@@ -36,9 +36,21 @@ function loadVisibleColumns(): ColumnKey[] {
   return DEFAULT_VISIBLE_COLUMNS;
 }
 
+function formatRankDelta(delta: number | null | undefined): string {
+  if (delta === null || delta === undefined) return "";
+  if (delta > 0) return `上升${delta}`;
+  if (delta < 0) return `下降${Math.abs(delta)}`;
+  return "";
+}
+
+function escapeCsvCell(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 export function DailyReportPage() {
   const [date, setDate] = useState(todayStr());
-  const [gender, setGender] = useState<GenderView>("female");
+  const [gender, setGender] = useState<GenderView>("male");
   const [report, setReport] = useState<DailyReportData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,7 +101,7 @@ export function DailyReportPage() {
     setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
   };
 
-  const rows = report?.rows || [];
+  const rows = useMemo(() => report?.rows ?? [], [report?.rows]);
 
   const fetchReport = useCallback(async (d: string, g: string) => {
     const api = window.electronAPI;
@@ -153,10 +165,17 @@ export function DailyReportPage() {
     setExporting(true);
     try {
       const genderText = gender === "male" ? "男" : "女";
-      const link = document.createElement("a");
-      link.download = `${date}_${genderText}_${rows.length}人.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      await downloadCanvasAsPng(canvas, `${date}_${genderText}_${rows.length}人.png`, () => {
+        drawReportToCanvas(canvas, {
+          date,
+          rows,
+          gender,
+          customTitle: "薇笑传媒主播数据统计",
+          subtitle: `Data Report • ${date}`,
+          scale: 2,
+          visibleColumns,
+        });
+      });
     } catch (e) {
       console.error("导出图片失败", e);
       alert("导出失败: " + String(e));
@@ -171,6 +190,8 @@ export function DailyReportPage() {
     try {
       const headers = [
         "排名",
+        "上期排名",
+        "排名变化",
         "主播ID",
         "主播姓名",
         "当日音浪",
@@ -182,6 +203,8 @@ export function DailyReportPage() {
       ];
       const csvRows = rows.map((r, i) => [
         i + 1,
+        r.previousRank || "",
+        formatRankDelta(r.rankDelta),
         r.anchorId,
         r.name,
         r.isLive ? r.dailyWave : 0,
@@ -192,7 +215,7 @@ export function DailyReportPage() {
         date,
       ]);
       const csv = [headers, ...csvRows]
-        .map((r) => r.map((c) => `"${c}"`).join(","))
+        .map((r) => r.map(escapeCsvCell).join(","))
         .join("\n");
 
       const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
@@ -260,9 +283,24 @@ export function DailyReportPage() {
               <FileText className="size-5 text-primary" />
               <CardTitle className="text-base">每日报告</CardTitle>
               {report && (
-                <Badge variant="secondary">
-                  {gender === "male" ? "男队" : "女队"} {report.summary.total} 人
-                </Badge>
+                <>
+                  <Badge variant="secondary">
+                    {gender === "male" ? "男队" : "女队"} {report.summary.total} 人
+                  </Badge>
+                  {report.summary.notLiveCount > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
+                    >
+                      未开播 {report.summary.notLiveCount} 人
+                    </Badge>
+                  )}
+                  {report.summary.previousDate && (
+                    <Badge variant="outline">
+                      对比 {report.summary.previousDate}
+                    </Badge>
+                  )}
+                </>
               )}
             </div>
             <div className="app-no-drag flex items-center gap-2">

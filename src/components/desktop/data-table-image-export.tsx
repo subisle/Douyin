@@ -1,20 +1,12 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { X, Image as ImageIcon, FileSpreadsheet } from "lucide-react";
 import type { DailyReportData, DailyReportRow } from "@/types/electron";
 import { formatWave } from "./format";
-import { exportElementAsImage } from "./export-image";
-import DataTableStyle2Template, {
-  type DataTableStyle2Row,
-} from "./data-table-style2-template";
+import { downloadCanvasAsPng } from "./export-image";
 
 /* ────────────────── 工具函数 ────────────────── */
-
-function todayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 function formatDurationText(minutes: number): string {
   if (minutes >= 60) {
@@ -139,19 +131,8 @@ export function DataTableImageExport({
   const [showTier, setShowTier] = useState(true);
   const [showDuration, setShowDuration] = useState(true);
   const [showMaster, setShowMaster] = useState(true);
-  const [exportStyle, setExportStyle] = useState<"style1" | "style2">(() => {
-    if (typeof window === "undefined") return "style1";
-    return window.localStorage.getItem("dataTableImageExportStyle") === "style2"
-      ? "style2"
-      : "style1";
-  });
-
-  useEffect(() => {
-    window.localStorage.setItem("dataTableImageExportStyle", exportStyle);
-  }, [exportStyle]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const style2Ref = useRef<HTMLDivElement>(null);
 
   const date = report.date;
   const rows = report.rows;
@@ -488,54 +469,11 @@ export function DataTableImageExport({
       });
       ctx.textBaseline = "middle";
     }
-  }, [rows, date, gender, customTitle, showWave, showTotalWave, showTier, showDuration, showMaster, buildColumns]);
+  }, [rows, date, gender, customTitle, buildColumns]);
 
   useEffect(() => {
-    if (exportStyle === "style1") drawCanvas();
-  }, [drawCanvas, exportStyle]);
-
-  /* ── 样式二数据准备 ── */
-  const style2Data = useMemo(() => {
-    const parts = date.split("-");
-    const year = parseInt(parts[0], 10) || 2026;
-    const month = parseInt(parts[1], 10) || 1;
-    const day = parseInt(parts[2], 10) || 1;
-    const formattedDate = `${year}年${month}月${day}日`;
-    const genderText = gender === "male" ? "男" : "女";
-    const title = customTitle.trim() || `${genderText}主播数据统计`;
-
-    const liveWaves = rows.filter((r) => r.isLive).map((r) => r.dailyWave);
-    const maxWave = liveWaves.length > 0 ? Math.max(...liveWaves) : 1;
-    const inactiveNames = rows.filter((r) => !r.isLive).map((r) => r.name);
-    const totalDailyWave = rows.reduce(
-      (sum, r) => sum + (r.isLive ? Math.max(r.dailyWave, 0) : 0),
-      0
-    );
-    const totalWave = rows.reduce((sum, r) => sum + Math.max(r.totalWave, 0), 0);
-
-    const style2Rows: DataTableStyle2Row[] = rows.map((r, i) => ({
-      rank: i + 1,
-      name: r.name,
-      waveText: r.isLive ? formatWave(r.dailyWave) : "未开播",
-      waveRatio: r.isLive ? r.dailyWave / maxWave : 0,
-      totalWaveText: formatWave(r.totalWave),
-      grade: r.tier || "",
-      durationText:
-        r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—",
-    }));
-
-    return {
-      title,
-      formattedDate,
-      genderText,
-      totalCount: rows.length,
-      inactiveCount: inactiveNames.length,
-      totalDailyWaveText: formatWave(totalDailyWave),
-      totalWaveText: formatWave(totalWave),
-      inactiveNames,
-      rows: style2Rows,
-    };
-  }, [rows, date, gender, customTitle]);
+    drawCanvas();
+  }, [drawCanvas]);
 
   /* ── 导出图片 ── */
   const handleExport = async () => {
@@ -543,35 +481,11 @@ export function DataTableImageExport({
     const genderText = gender === "male" ? "男" : "女";
     const filename = `${date}_${genderText}_${rows.length}人.png`;
 
-    if (exportStyle === "style2") {
-      const node = style2Ref.current;
-      if (!node) return;
-      setExporting(true);
-      try {
-        await exportElementAsImage(node, filename, {
-          width: 1080,
-          height: 1080,
-          pixelRatio: 2,
-          backgroundColor: "#020617",
-        });
-        onClose();
-      } catch (err) {
-        console.error("Export error:", err);
-        alert("导出失败: " + String(err));
-      } finally {
-        setExporting(false);
-      }
-      return;
-    }
-
     const canvas = canvasRef.current;
     if (!canvas) return;
     setExporting(true);
     try {
-      const link = document.createElement("a");
-      link.download = filename;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      await downloadCanvasAsPng(canvas, filename, drawCanvas);
       onClose();
     } catch (err) {
       console.error("Export error:", err);
@@ -656,35 +570,8 @@ export function DataTableImageExport({
                 />
               </div>
 
-              {/* 导出样式 */}
-              <div>
-                <label className="mb-2 block text-sm text-muted-foreground">导出样式</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setExportStyle("style1")}
-                    className={`rounded px-3 py-1 text-sm transition-colors ${
-                      exportStyle === "style1"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    }`}
-                  >
-                    样式一
-                  </button>
-                  <button
-                    onClick={() => setExportStyle("style2")}
-                    className={`rounded px-3 py-1 text-sm transition-colors ${
-                      exportStyle === "style2"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    }`}
-                  >
-                    样式二
-                  </button>
-                </div>
-              </div>
-
               {/* 可选列 */}
-              <div className={exportStyle === "style2" ? "opacity-50 pointer-events-none" : ""}>
+              <div>
                 <label className="mb-2 block text-sm text-muted-foreground">可选列</label>
                 <div className="flex flex-wrap gap-2">
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
@@ -714,48 +601,12 @@ export function DataTableImageExport({
 
           {/* 预览 */}
           <div className="flex justify-center overflow-auto">
-            {exportStyle === "style2" ? (
-              <div
-                style={{
-                  width: 540,
-                  height: 540,
-                  overflow: "hidden",
-                  border: "1px solid var(--border)",
-                  borderRadius: 4,
-                  background: "#020617",
-                }}
-              >
-                <div
-                  style={{
-                    width: 1080,
-                    height: 1080,
-                    transform: "scale(0.5)",
-                    transformOrigin: "top left",
-                  }}
-                >
-                  <DataTableStyle2Template {...style2Data} exportMode />
-                </div>
-              </div>
-            ) : (
-              <canvas
-                ref={canvasRef}
-                style={{ maxWidth: "100%", height: "auto", border: "1px solid var(--border)", borderRadius: "4px" }}
-              />
-            )}
+            <canvas
+              ref={canvasRef}
+              style={{ maxWidth: "100%", height: "auto", display: "block" }}
+            />
           </div>
         </div>
-
-        {/* 样式二离屏导出节点（1:1 原始尺寸） */}
-        {exportStyle === "style2" && (
-          <div
-            style={{ position: "fixed", left: -20000, top: 0, pointerEvents: "none" }}
-            aria-hidden
-          >
-            <div ref={style2Ref}>
-              <DataTableStyle2Template {...style2Data} exportMode />
-            </div>
-          </div>
-        )}
 
         {/* 底部按钮 */}
         <div className="flex shrink-0 gap-3 border-t border-border px-6 py-4">

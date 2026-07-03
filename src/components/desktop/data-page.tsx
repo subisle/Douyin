@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Upload, Download } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { ImportPage } from "./import-page";
+import { ImportPage, type DroppedImportFile } from "./import-page";
 import { ExportPage } from "./export-page";
 import { DailyReportPage } from "./daily-report-page";
 
@@ -16,8 +16,18 @@ const TABS: { id: Tab; label: string; icon: typeof FileText }[] = [
   { id: "export", label: "数据导出", icon: Download },
 ];
 
-export function DataPage() {
+export function DataPage({
+  incomingFile,
+  onIncomingFileConsumed,
+}: {
+  incomingFile?: DroppedImportFile | null;
+  onIncomingFileConsumed?: () => void;
+}) {
   const [tab, setTab] = useState<Tab>("report");
+
+  useEffect(() => {
+    if (incomingFile) setTab("import");
+  }, [incomingFile]);
 
   return (
     <div className="space-y-6">
@@ -50,7 +60,10 @@ export function DataPage() {
           {/* 导入区域 */}
           <Card>
             <CardContent className="space-y-6 pt-6 pb-8">
-              <ImportPage />
+              <ImportPage
+                incomingFile={incomingFile}
+                onIncomingFileConsumed={onIncomingFileConsumed}
+              />
             </CardContent>
           </Card>
           {/* 导出区域 */}

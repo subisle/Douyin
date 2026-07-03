@@ -2,80 +2,8 @@ import type { DailyReportRow } from "@/types/electron";
 import { formatWave } from "./format";
 
 /* ═══════════════════════════════════════════════════════════════
- *  Kawaii Minimal 糖果色配色系统
- *  Candy Color Palette — 高明度、中饱和度、温暖治愈
+ *  旧项目浅色 Canvas 表格绘制
  * ═══════════════════════════════════════════════════════════════ */
-
-const K = {
-  // ── 主色调 ──
-  pink:          "#FFB6D9",
-  pinkLight:     "#FFDBE9",
-  purple:        "#E6D5FF",
-  purpleLight:   "#F5EDFF",
-  green:         "#D4F1D4",
-  greenLight:    "#E8F8E8",
-  yellow:        "#FFF9E6",
-  cream:         "#FFF9F5",
-
-  // ── 中性色 ──
-  textDark:      "#333333",
-  textMedium:    "#666666",
-  textLight:     "#999999",
-  bgWhite:       "#FFFFFF",
-  bgCream:       "#FFF9F5",
-  bgGray:        "#F8F9FA",
-
-  // ── 渐变端点 ──
-  gradPrimary:   ["#FFB6D9", "#E6D5FF"] as [string, string],
-  gradSecondary: ["#FFB6D9", "#D4F1D4"] as [string, string],
-  gradRainbow:   ["#FFB6D9", "#E6D5FF", "#D4F1D4"] as [string, string, string],
-
-  // ── 阴影色（粉色调） ──
-  shadowPink:    "rgba(255, 182, 217, 0.25)",
-  shadowPurple:  "rgba(230, 213, 255, 0.20)",
-  shadowGreen:   "rgba(212, 241, 212, 0.15)",
-
-  // ── 圆角 ──
-  radiusSm:      16,
-  radiusMd:      24,
-  radiusLg:      32,
-  radiusPill:    9999,
-
-  // ── 特殊色 ──
-  danger:        "#FF6B6B",
-  dangerLight:   "#FFDBE9",
-  separator:     "rgba(255, 182, 217, 0.12)",
-
-  // ── 等级色（糖果色系） ──
-  levelA: { grad: ["#FFB6D9", "#FF8FAB"] as [string, string], text: "#FFFFFF" },
-  levelB: { grad: ["#E6D5FF", "#C8A2E8"] as [string, string], text: "#FFFFFF" },
-  levelC: { grad: ["#D4F1D4", "#8FE38F"] as [string, string], text: "#2D5F2D" },
-  levelD: { grad: ["#FFF9E6", "#FFE89A"] as [string, string], text: "#8B6914" },
-
-  // ── 前三名行底色 ──
-  top1RowBg: "rgba(255, 182, 217, 0.08)",
-  top2RowBg: "rgba(230, 213, 255, 0.08)",
-  top3RowBg: "rgba(212, 241, 212, 0.08)",
-
-  // ── 趋势色 ──
-  trendUp:   "#10B981",
-  trendDown: "#FF6B6B",
-  trendFlat: "#CBD5E1",
-
-  // ── 进度条 ──
-  barGrad: ["#FFB6D9", "#E6D5FF"] as [string, string],
-  barTrack: "rgba(255, 182, 217, 0.08)",
-  barText:  "#FFFFFF",
-};
-
-function getLevelStyle(level: string): { grad: [string, string]; text: string } {
-  if (!level) return K.levelD;
-  const ch = level.charAt(0).toUpperCase();
-  if (ch === "A") return K.levelA;
-  if (ch === "B") return K.levelB;
-  if (ch === "C") return K.levelC;
-  return K.levelD;
-}
 
 /* ────────────────── 工具函数 ────────────────── */
 
@@ -130,6 +58,19 @@ function wrapCanvasText(
   return lines;
 }
 
+function groupInactiveStreamers(rows: DailyReportRow[]): string {
+  const groups = new Map<string, string[]>();
+  for (const row of rows) {
+    const key = row.masterName?.trim() || "无师傅";
+    const list = groups.get(key) ?? [];
+    list.push(row.name);
+    groups.set(key, list);
+  }
+  return Array.from(groups.entries())
+    .map(([master, names]) => `${master}: ${names.join("、")}`)
+    .join("  /  ");
+}
+
 function drawRoundRect(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, w: number, h: number, r: number
@@ -152,240 +93,14 @@ function drawRoundRect(
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
- *  可爱奖杯 — 糖果色版
-/* ═══════════════════════════════════════════════════════════════
- *  可爱皇冠 — 糖果色版 👑
- * ═══════════════════════════════════════════════════════════════ */
-
-function drawCrown(
-  ctx: CanvasRenderingContext2D,
-  cx: number, cy: number,
-  size: number,
-  mainColor: string, accentColor: string,
-  scale: number
-) {
-  const s = size;
-  const lw = 1.5 * scale;
-
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  // ── 柔和阴影 ──
-  ctx.shadowColor = K.shadowPink;
-  ctx.shadowBlur = 8 * scale;
-  ctx.shadowOffsetY = 3 * scale;
-
-  // ── 皇冠主体（带三个尖角的齿状冠） ──
-  // 尺寸：宽 s*0.72, 高 s*0.42
-  const crownW = s * 0.72;
-  const crownH = s * 0.42;
-  const baseH  = s * 0.14;  // 底座环高度
-  const topY   = -s * 0.20; // 顶部 Y
-  const baseY  = topY + crownH - baseH; // 底座顶部 Y
-
-  // 渐变填充
-  const crownGrad = ctx.createLinearGradient(0, topY, 0, topY + crownH);
-  crownGrad.addColorStop(0, mainColor);
-  crownGrad.addColorStop(1, accentColor);
-
-  // ── 皇冠形状（五个尖角） ──
-  ctx.fillStyle = crownGrad;
-  ctx.beginPath();
-
-  // 左下角起点
-  const leftEdge  = -crownW / 2;
-  const rightEdge =  crownW / 2;
-
-  ctx.moveTo(leftEdge, baseY);
-
-  // ── 左尖角 ──
-  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.25);
-  // 左尖角顶点（带小圆球）
-  const peak1X = leftEdge + crownW * 0.10;
-  const peak1Y = topY;
-  ctx.lineTo(peak1X, peak1Y);
-
-  // ── 左谷 ──
-  const valley1X = leftEdge + crownW * 0.25;
-  const valley1Y = topY + crownH * 0.38;
-  ctx.lineTo(valley1X, valley1Y);
-
-  // ── 中尖角（最高） ──
-  const peak2X = leftEdge + crownW * 0.50;
-  const peak2Y = topY - s * 0.04;  // 中间稍高
-  ctx.lineTo(peak2X, peak2Y);
-
-  // ── 右谷 ──
-  const valley2X = leftEdge + crownW * 0.75;
-  const valley2Y = topY + crownH * 0.38;
-  ctx.lineTo(valley2X, valley2Y);
-
-  // ── 右尖角 ──
-  const peak3X = leftEdge + crownW * 0.90;
-  const peak3Y = topY;
-  ctx.lineTo(peak3X, peak3Y);
-
-  // 右下
-  ctx.lineTo(rightEdge - crownW * 0.05, topY + crownH * 0.25);
-  ctx.lineTo(rightEdge, baseY);
-
-  // 底边
-  ctx.closePath();
-  ctx.fill();
-
-  // 取消阴影
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
-
-  // ── 皇冠高光（左半部分白色半透明） ──
-  ctx.globalAlpha = 0.25;
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.moveTo(leftEdge + s * 0.02, baseY - s * 0.01);
-  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.30);
-  ctx.lineTo(peak1X - s * 0.01, peak1Y + s * 0.02);
-  ctx.lineTo(valley1X - s * 0.01, valley1Y);
-  ctx.lineTo(peak2X - s * 0.02, peak2Y + s * 0.02);
-  ctx.lineTo(peak2X - s * 0.06, topY + crownH * 0.20);
-  ctx.lineTo(leftEdge + s * 0.04, baseY - s * 0.01);
-  ctx.closePath();
-  ctx.fill();
-  ctx.globalAlpha = 1.0;
-
-  // ── 尖角顶端小圆球（三颗糖果） ──
-  const ballR = s * 0.055;
-  // 左球
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(peak1X, peak1Y - ballR * 0.3, ballR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = accentColor;
-  ctx.beginPath();
-  ctx.arc(peak1X, peak1Y - ballR * 0.3, ballR * 0.6, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 中球（最大）
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(peak2X, peak2Y - ballR * 0.5, ballR * 1.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = accentColor;
-  ctx.beginPath();
-  ctx.arc(peak2X, peak2Y - ballR * 0.5, ballR * 0.7, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 右球
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(peak3X, peak3Y - ballR * 0.3, ballR, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = accentColor;
-  ctx.beginPath();
-  ctx.arc(peak3X, peak3Y - ballR * 0.3, ballR * 0.6, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ── 底座环（圆角矩形） ──
-  ctx.fillStyle = crownGrad;
-  ctx.beginPath();
-  drawRoundRect(ctx, leftEdge - s * 0.02, baseY, crownW + s * 0.04, baseH, s * 0.03);
-  ctx.fill();
-
-  // 底座高光
-  ctx.globalAlpha = 0.20;
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  drawRoundRect(ctx, leftEdge, baseY + s * 0.015, crownW * 0.4, baseH * 0.35, s * 0.015);
-  ctx.fill();
-  ctx.globalAlpha = 1.0;
-
-  // 底座描边
-  ctx.strokeStyle = accentColor;
-  ctx.lineWidth = lw * 0.4;
-  ctx.beginPath();
-  drawRoundRect(ctx, leftEdge - s * 0.02, baseY, crownW + s * 0.04, baseH, s * 0.03);
-  ctx.stroke();
-
-  // ── 皇冠描边（整体轮廓） ──
-  ctx.strokeStyle = accentColor;
-  ctx.lineWidth = lw * 0.35;
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(leftEdge, baseY);
-  ctx.lineTo(leftEdge + crownW * 0.05, topY + crownH * 0.25);
-  ctx.lineTo(peak1X, peak1Y);
-  ctx.lineTo(valley1X, valley1Y);
-  ctx.lineTo(peak2X, peak2Y);
-  ctx.lineTo(valley2X, valley2Y);
-  ctx.lineTo(peak3X, peak3Y);
-  ctx.lineTo(rightEdge - crownW * 0.05, topY + crownH * 0.25);
-  ctx.lineTo(rightEdge, baseY);
-  ctx.stroke();
-
-  // ── 底部小台座 ──
-  const pedW2 = crownW * 0.85;
-  const pedH2 = s * 0.04;
-  const pedY2 = baseY + baseH + s * 0.005;
-  ctx.fillStyle = accentColor;
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  drawRoundRect(ctx, -pedW2 / 2, pedY2, pedW2, pedH2, s * 0.015);
-  ctx.fill();
-  ctx.globalAlpha = 1.0;
-
-  ctx.restore();
-}
-
-
-/* ═══════════════════════════════════════════════════════════════
- *  可爱装饰元素
- * ═══════════════════════════════════════════════════════════════ */
-
-// 画一个小星星 ✨
-function drawStar(
-  ctx: CanvasRenderingContext2D,
-  cx: number, cy: number,
-  size: number, color: string
-) {
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.6;
-
-  // 四角星
-  const spikes = 4;
-  const outerR = size;
-  const innerR = size * 0.3;
-
-  ctx.beginPath();
-  for (let i = 0; i < spikes * 2; i++) {
-    const r = i % 2 === 0 ? outerR : innerR;
-    const angle = (Math.PI / spikes) * i - Math.PI / 2;
-    const x = Math.cos(angle) * r;
-    const y = Math.sin(angle) * r;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.restore();
-}
-
-// 画一个圆点装饰
-function drawDot(
-  ctx: CanvasRenderingContext2D,
-  cx: number, cy: number,
-  radius: number, color: string, alpha: number = 0.3
-) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+function getRankDeltaMeta(delta: number | null | undefined): {
+  text: string;
+  color: string;
+} | null {
+  if (delta === null || delta === undefined) return null;
+  if (delta > 0) return { text: `↑${delta}`, color: "#16A34A" };
+  if (delta < 0) return { text: `↓${Math.abs(delta)}`, color: "#DC2626" };
+  return null;
 }
 
 /* ────────────────── 列定义 ────────────────── */
@@ -402,7 +117,7 @@ interface ColumnDef {
 }
 
 export const ALL_COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
-  { key: "rank",      label: "排名趋势",  defaultVisible: true },
+  { key: "rank",      label: "排名",      defaultVisible: true },
   { key: "name",      label: "主播姓名",  defaultVisible: true },
   { key: "dailyWave", label: "当日音浪",  defaultVisible: true },
   { key: "totalWave", label: "累计总音浪", defaultVisible: true },
@@ -425,13 +140,13 @@ function buildColumns(
   const day = parseInt(parts[2] || "1", 10) || 1;
 
   const allDefs: ColumnDef[] = [
-    { key: "rank",      label: "排名趋势",       minWidth: 130, flex: 1.2, align: "center", getText: (_, i) => String(i + 1) },
-    { key: "name",      label: "主播姓名",       minWidth: 110, flex: 1.0, align: "left",   getText: (r) => r.name },
-    { key: "dailyWave", label: `${day}号音浪`,    minWidth: 220, flex: 2.5, align: "center", getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-    { key: "totalWave", label: "累计总音浪",     minWidth: 130, flex: 1.2, align: "center", getText: (r) => formatWave(r.totalWave) },
-    { key: "tier",      label: "等级",           minWidth: 100, flex: 0.9, align: "center", getText: (r) => r.tier || "" },
-    { key: "duration",  label: "有效时长",       minWidth: 100, flex: 1.0, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
-    { key: "master",    label: "师傅",           minWidth: 90,  flex: 0.9, align: "center", getText: (r) => r.masterName || "—" },
+    { key: "rank",      label: "排名",           minWidth: 88,  flex: 0.8, align: "center", getText: (r, i) => `${i + 1}${r.rankDelta ? r.rankDelta : ""}` },
+    { key: "name",      label: "主播姓名",       minWidth: 150, flex: 1.4, align: "left",   getText: (r) => r.name },
+    { key: "dailyWave", label: `${day}号音浪`,    minWidth: 180, flex: 2.0, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "totalWave", label: "累计总音浪",     minWidth: 160, flex: 1.4, align: "right",  getText: (r) => formatWave(r.totalWave) },
+    { key: "tier",      label: "等级",           minWidth: 90,  flex: 0.8, align: "center", getText: (r) => r.tier || "" },
+    { key: "duration",  label: "有效时长",       minWidth: 110, flex: 1.0, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
+    { key: "master",    label: "师傅",           minWidth: 110, flex: 1.0, align: "left",   getText: (r) => r.masterName || "—" },
   ];
 
   const defs = allDefs.filter((c) => visibleColumns.includes(c.key));
@@ -467,7 +182,7 @@ function buildColumns(
 }
 
 /* ═══════════════════════════════════════════════════════════════
- *  主绘制函数 — Kawaii Minimal 风格
+ *  主绘制函数 — 旧项目浅色自适应表格
  * ═══════════════════════════════════════════════════════════════ */
 
 export interface DrawReportOptions {
@@ -488,7 +203,7 @@ export function drawReportToCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  const { date, rows, gender, customTitle = "", scale = 2, visibleColumns = DEFAULT_VISIBLE_COLUMNS, trends = {}, subtitle } = opts;
+  const { date, rows, gender, customTitle = "", scale = 2, visibleColumns = DEFAULT_VISIBLE_COLUMNS } = opts;
 
   const parts = date.split("-");
   const year  = parseInt(parts[0]) || 2026;
@@ -496,172 +211,88 @@ export function drawReportToCanvas(
   const day   = parseInt(parts[2]) || 1;
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
-  const genderText  = gender === "male" ? "男" : "女";
-  const titleText   = customTitle || "薇笑传媒主播数据统计";
-  const subtitleText = subtitle || `Data Report • ${formattedDate}`;
-
-  // ── 尺寸 ──
-  const cardW       = 950 * scale;
-  const margin      = 30 * scale;
-  const cornerRadius = K.radiusLg * scale;  // 32px 超大圆角
-  const containerW  = cardW + margin * 2;
-
-  const headerHeight      = 110 * scale;
-  const tableHeaderHeight = 54 * scale;
-  const rowHeight         = 62 * scale;
-  const footerHeightBase  = 110 * scale;
-
+  const genderText = gender === "male" ? "男" : "女";
+  const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
+  const titleText = `${titleBase} ${formattedDate}`;
+  const tablePaddingX = 20 * scale;
+  const headerHeight = 54 * scale;
+  const tableHeaderHeight = 32 * scale;
+  const rowHeight = 38 * scale;
   const inactiveStreamers = rows.filter((r) => !r.isLive);
   const hasInactive = inactiveStreamers.length > 0;
+  const liveRows = rows.filter((r) => r.isLive);
 
-  ctx.font = `${14 * scale}px sans-serif`;
+  ctx.font = `bold ${22 * scale}px sans-serif`;
+  const titleW = ctx.measureText(titleText).width;
+  const estimatedColumns = buildColumns(ctx, scale, 760 * scale, date, rows, visibleColumns);
+  const estimatedWidth = estimatedColumns.reduce((sum, column) => sum + column.width, 0);
+  const containerW = Math.max(
+    680 * scale,
+    Math.min(980 * scale, Math.max(titleW + 100 * scale, estimatedWidth + tablePaddingX * 2))
+  );
+
+  ctx.font = `${11 * scale}px sans-serif`;
   const inactiveLines = hasInactive
-    ? wrapCanvasText(ctx, inactiveStreamers.map((r) => r.name).join("、"), cardW * 0.3)
+    ? wrapCanvasText(
+        ctx,
+        groupInactiveStreamers(inactiveStreamers),
+        containerW / 2 - 40 * scale
+      )
     : [];
   const footerHeight = hasInactive
-    ? Math.max(footerHeightBase, (60 + inactiveLines.length * 20) * scale)
-    : footerHeightBase;
+    ? Math.max(96 * scale, (70 + inactiveLines.length * 18) * scale)
+    : 64 * scale;
 
-  const cols = buildColumns(ctx, scale, cardW, date, rows, visibleColumns);
-
-  const totalH = margin + headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight + margin;
+  const cols = buildColumns(ctx, scale, containerW - tablePaddingX * 2, date, rows, visibleColumns);
+  const totalH = headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight;
 
   canvas.width  = containerW;
   canvas.height = totalH;
 
-  // ═════════════════════════════════════════════════════════════
-  //  1. 背景 — 奶油白 → 淡粉 柔和渐变
-  // ═════════════════════════════════════════════════════════════
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, totalH);
-  bgGrad.addColorStop(0, K.bgWhite);
-  bgGrad.addColorStop(0.5, K.bgCream);
-  bgGrad.addColorStop(1, K.pinkLight);
-  ctx.fillStyle = bgGrad;
+  ctx.fillStyle = "#F8FAFC";
   ctx.fillRect(0, 0, containerW, totalH);
 
-  // 装饰圆点（散落糖果色圆点）
-  drawDot(ctx, margin + cardW * 0.05, margin * 0.5, 12 * scale, K.pink, 0.15);
-  drawDot(ctx, containerW - margin - cardW * 0.08, margin * 0.6, 8 * scale, K.purple, 0.20);
-  drawDot(ctx, margin + cardW * 0.02, totalH - margin * 0.7, 10 * scale, K.green, 0.15);
-  drawDot(ctx, containerW - margin - cardW * 0.04, totalH - margin * 0.5, 6 * scale, K.yellow, 0.25);
-  drawDot(ctx, containerW * 0.5, totalH - margin * 0.3, 5 * scale, K.pink, 0.20);
+  let y = 0;
 
-  // 小星星装饰
-  drawStar(ctx, margin * 1.5, margin * 1.8, 8 * scale, K.pink);
-  drawStar(ctx, containerW - margin * 1.5, margin * 1.5, 6 * scale, K.purple);
-  drawStar(ctx, containerW - margin * 2, totalH - margin * 1.5, 7 * scale, K.green);
-
-  // ═════════════════════════════════════════════════════════════
-  //  2. 主卡片 — 纯白 + 超大圆角 + 柔和粉色阴影
-  // ═════════════════════════════════════════════════════════════
-  const cardX = margin;
-  const cardY = margin;
-  const cardH = totalH - margin * 2;
-
-  ctx.save();
-  ctx.shadowColor = K.shadowPink;
-  ctx.shadowBlur = 40 * scale;
-  ctx.shadowOffsetY = 12 * scale;
-  ctx.fillStyle = K.bgWhite;
-  ctx.beginPath();
-  drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
-  ctx.fill();
-  ctx.restore();
-
-  // 渐变边框（彩虹色细边）
-  ctx.save();
-  ctx.beginPath();
-  drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
-  ctx.clip();
-
-  // 顶部彩虹条
-  const rainbowGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0);
-  rainbowGrad.addColorStop(0,    K.pink);
-  rainbowGrad.addColorStop(0.33, K.purple);
-  rainbowGrad.addColorStop(0.66, K.green);
-  rainbowGrad.addColorStop(1,    K.yellow);
-  ctx.fillStyle = rainbowGrad;
-  ctx.fillRect(cardX, cardY, cardW, 6 * scale);
-
-  ctx.restore();
-
-  // 裁剪到卡片内部
-  ctx.save();
-  ctx.beginPath();
-  drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
-  ctx.clip();
-
-  let y = cardY + 6 * scale;  // 跳过彩虹条
-
-  // ═════════════════════════════════════════════════════════════
-  //  3. 头部 — 渐变标题 + 副标题
-  // ═════════════════════════════════════════════════════════════
-  const headerGrad = ctx.createLinearGradient(cardX, y, cardX + cardW, y);
-  headerGrad.addColorStop(0, K.pinkLight);
-  headerGrad.addColorStop(0.5, K.purpleLight);
-  headerGrad.addColorStop(1, K.greenLight);
-  ctx.fillStyle = headerGrad;
-  ctx.fillRect(cardX, y, cardW, headerHeight);
-
-  // 头部分隔线（柔和粉色）
-  ctx.strokeStyle = K.separator;
-  ctx.lineWidth = 1 * scale;
-  ctx.beginPath();
-  ctx.moveTo(cardX + 20 * scale, y + headerHeight);
-  ctx.lineTo(cardX + cardW - 20 * scale, y + headerHeight);
-  ctx.stroke();
-
-  // 装饰小圆点（头部内）
-  drawDot(ctx, cardX + cardW * 0.15, y + headerHeight * 0.3, 4 * scale, K.pink, 0.4);
-  drawDot(ctx, cardX + cardW * 0.85, y + headerHeight * 0.7, 3 * scale, K.purple, 0.4);
-
-  // 主标题 — 粉紫渐变文字
-  ctx.font = `800 ${30 * scale}px "PingFang SC", -apple-system, sans-serif`;
+  ctx.fillStyle = "#1E293B";
+  ctx.fillRect(0, y, containerW, headerHeight);
+  ctx.fillStyle = "#F8FAFC";
+  ctx.font = `bold ${22 * scale}px sans-serif`;
   ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  const titleY = y + 42 * scale;
-
-  const titleGrad = ctx.createLinearGradient(cardX, 0, cardX + cardW, 0);
-  titleGrad.addColorStop(0,    "#FF8FAB");
-  titleGrad.addColorStop(0.5,  "#C8A2E8");
-  titleGrad.addColorStop(1,    "#8FE38F");
-  ctx.fillStyle = titleGrad;
-  ctx.save();
-  ctx.shadowColor = K.shadowPink;
-  ctx.shadowBlur = 6 * scale;
-  ctx.shadowOffsetY = 2 * scale;
-  ctx.fillText(titleText, cardX + cardW / 2, titleY);
-  ctx.restore();
-
-  // 副标题
-  ctx.fillStyle = K.textMedium;
-  ctx.font = `500 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.fillText(subtitleText, cardX + cardW / 2, titleY + 30 * scale);
-
+  ctx.textBaseline = "middle";
+  ctx.fillText(titleText, containerW / 2, y + headerHeight / 2);
+  if (hasInactive) {
+    const badgeText = `未开播 ${inactiveStreamers.length}`;
+    ctx.font = `bold ${12 * scale}px sans-serif`;
+    const badgeW = Math.max(82 * scale, ctx.measureText(badgeText).width + 24 * scale);
+    const badgeH = 24 * scale;
+    const badgeX = containerW - tablePaddingX - badgeW;
+    const badgeY = y + (headerHeight - badgeH) / 2;
+    ctx.fillStyle = "#FEE2E2";
+    ctx.beginPath();
+    drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scale);
+    ctx.fill();
+    ctx.strokeStyle = "#FCA5A5";
+    ctx.lineWidth = 1 * scale;
+    ctx.beginPath();
+    drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 12 * scale);
+    ctx.stroke();
+    ctx.fillStyle = "#B91C1C";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(badgeText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5 * scale);
+  }
   y += headerHeight;
 
-  // ═════════════════════════════════════════════════════════════
-  //  4. 表头 — 薰衣草浅底 + 胶囊标签风格
-  // ═════════════════════════════════════════════════════════════
-  ctx.fillStyle = K.purpleLight;
-  ctx.fillRect(cardX, y, cardW, tableHeaderHeight);
-
-  // 表头底分隔
-  ctx.strokeStyle = "rgba(230, 213, 255, 0.3)";
-  ctx.lineWidth = 2 * scale;
-  ctx.beginPath();
-  ctx.moveTo(cardX, y + tableHeaderHeight);
-  ctx.lineTo(cardX + cardW, y + tableHeaderHeight);
-  ctx.stroke();
-
-  ctx.fillStyle = K.textMedium;
-  ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#E2E8F0";
+  ctx.fillRect(0, y, containerW, tableHeaderHeight);
+  ctx.fillStyle = "#475569";
+  ctx.font = `bold ${13 * scale}px sans-serif`;
   cols.forEach((col) => {
-    const drawX = cardX + col.x;
+    const drawX = tablePaddingX + col.x;
     if (col.align === "left") {
       ctx.textAlign = "left";
-      ctx.fillText(col.label, drawX + 18 * scale, y + tableHeaderHeight / 2);
+      ctx.fillText(col.label, drawX + 12 * scale, y + tableHeaderHeight / 2);
     } else if (col.align === "right") {
       ctx.textAlign = "right";
       ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderHeight / 2);
@@ -672,308 +303,164 @@ export function drawReportToCanvas(
   });
   y += tableHeaderHeight;
 
-  // ═════════════════════════════════════════════════════════════
-  //  5. 数据行
-  // ═════════════════════════════════════════════════════════════
-  const maxWave = rows.filter((r) => r.isLive).length > 0
-    ? Math.max(...rows.filter((r) => r.isLive).map((r) => r.dailyWave))
+  const maxWave = liveRows.length > 0
+    ? Math.max(...liveRows.map((r) => r.dailyWave))
     : 1;
+  const safeMaxWave = maxWave > 0 ? maxWave : 1;
 
   rows.forEach((row, index) => {
     const rank = index + 1;
     const isTop3 = rank <= 3;
     const isInactive = !row.isLive;
 
-    // 行底色（前3名糖果色高亮）
-    let rowBg: string | null = null;
-    if (rank === 1) rowBg = K.top1RowBg;
-    else if (rank === 2) rowBg = K.top2RowBg;
-    else if (rank === 3) rowBg = K.top3RowBg;
-    if (rowBg) {
-      ctx.fillStyle = rowBg;
-      ctx.fillRect(cardX, y, cardW, rowHeight);
+    ctx.fillStyle = isInactive ? "#FEF2F2" :
+      rank === 1 ? "#FEF3C7" :
+      rank === 2 ? "#F8FAFC" :
+      rank === 3 ? "#FFEDD5" :
+      index % 2 === 0 ? "#FFFFFF" : "#F8FAFC";
+    ctx.fillRect(0, y, containerW, rowHeight);
+
+    if (isInactive) {
+      ctx.fillStyle = "#DC2626";
+      ctx.fillRect(0, y, 4 * scale, rowHeight);
     }
 
-    // 行分隔线（极淡粉色）
-    ctx.strokeStyle = K.separator;
-    ctx.lineWidth = 1 * scale;
+    ctx.strokeStyle = isInactive ? "#FECACA" : "#E2E8F0";
+    ctx.lineWidth = 0.5 * scale;
     ctx.beginPath();
-    ctx.moveTo(cardX + 20 * scale, y + rowHeight);
-    ctx.lineTo(cardX + cardW - 20 * scale, y + rowHeight);
+    ctx.moveTo(0, y);
+    ctx.lineTo(containerW, y);
     ctx.stroke();
 
-    // 各列
     cols.forEach((col) => {
-      const drawX = cardX + col.x;
+      const drawX = tablePaddingX + col.x;
       const cy = y + rowHeight / 2;
 
       if (col.key === "rank") {
-        // 排名：前三名奖杯，其余纯文字
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-
-        const badgeSize = 34 * scale;
-        const badgeX = drawX + (col.width - badgeSize) / 2 - (trends[row.anchorId] !== undefined ? 16 * scale : 0);
-
+        ctx.fillStyle = isInactive ? "#B91C1C" : "#334155";
+        const deltaMeta = getRankDeltaMeta(row.rankDelta);
+        const mainX = deltaMeta ? drawX + col.width / 2 - 8 * scale : drawX + col.width / 2;
         if (isTop3) {
-          // 前三名 — 糖果色渐变圆球序号
-          let gradA: string, gradB: string;
-          if (rank === 1) { gradA = "#FFB6D9"; gradB = "#FF8FAB"; }       // 蜜桃粉
-          else if (rank === 2) { gradA = "#E6D5FF"; gradB = "#C8A2E8"; }    // 薰衣草紫
-          else { gradA = "#D4F1D4"; gradB = "#8FE38F"; }                    // 薄荷绿
-
-          const ballR = badgeSize / 2;
-          const ballCx = badgeX + badgeSize / 2;
-
-          // 柔和阴影
-          ctx.save();
-          ctx.shadowColor = K.shadowPink;
-          ctx.shadowBlur = 6 * scale;
-          ctx.shadowOffsetY = 2 * scale;
-
-          const ballGrad = ctx.createLinearGradient(ballCx - ballR, cy - ballR, ballCx + ballR, cy + ballR);
-          ballGrad.addColorStop(0, gradA);
-          ballGrad.addColorStop(1, gradB);
-          ctx.fillStyle = ballGrad;
-          ctx.beginPath();
-          ctx.arc(ballCx, cy, ballR, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.restore();
-
-          // 顶部高光
-          ctx.globalAlpha = 0.35;
-          ctx.fillStyle = "#ffffff";
-          ctx.beginPath();
-          ctx.arc(ballCx - ballR * 0.25, cy - ballR * 0.35, ballR * 0.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.globalAlpha = 1.0;
-
-          // 数字
-          ctx.fillStyle = rank === 2 ? "#FFFFFF" : "#333333";
-          if (rank === 1) ctx.fillStyle = "#FFFFFF";
-          if (rank === 3) ctx.fillStyle = "#2D5F2D";
-          ctx.font = `800 ${15 * scale}px "PingFang SC", -apple-system, sans-serif`;
-          ctx.fillText(String(rank), ballCx, cy);
-
-          // 第1名旁小星星
-          if (rank === 1) {
-            drawStar(ctx, badgeX + badgeSize + 6 * scale, cy - badgeSize * 0.25, 5 * scale, K.pink);
-          }
+          ctx.font = `${20 * scale}px sans-serif`;
+          ctx.fillText(rank === 1 ? "🥇" : rank === 2 ? "🥈" : "🥉", mainX, cy);
         } else {
-          // 纯文字序号
-          ctx.fillStyle = K.textLight;
-          ctx.font = `700 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-          const rankStr = rank < 10 ? `0${rank}` : String(rank);
-          ctx.fillText(rankStr, badgeX + badgeSize / 2, cy);
+          ctx.font = `italic bold ${15 * scale}px serif`;
+          ctx.fillText(String(rank).padStart(2, "0"), mainX, cy);
         }
-
-        // 趋势指示
-        const trend = trends[row.anchorId];
-        if (trend !== undefined) {
-          const trendX = badgeX + badgeSize + 12 * scale;
-          ctx.font = `700 ${12 * scale}px "PingFang SC", -apple-system, sans-serif`;
+        if (deltaMeta) {
           ctx.textAlign = "left";
-          if (trend > 0) {
-            ctx.fillStyle = K.trendUp;
-            ctx.fillText(`↑${trend}`, trendX, cy);
-          } else if (trend < 0) {
-            ctx.fillStyle = K.trendDown;
-            ctx.fillText(`↓${Math.abs(trend)}`, trendX, cy);
-          } else {
-            ctx.fillStyle = K.trendFlat;
-            ctx.fillText("—", trendX + 4 * scale, cy);
-          }
+          ctx.font = `bold ${10 * scale}px sans-serif`;
+          ctx.fillStyle = deltaMeta.color;
+          ctx.fillText(deltaMeta.text, mainX + 14 * scale, cy + 8 * scale);
         }
       } else if (col.key === "name") {
         ctx.textAlign = "left";
-        ctx.fillStyle = K.textDark;
-        ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-        const text = truncateCanvasText(ctx, row.name, col.width - 40 * scale);
-        ctx.fillText(text, drawX + 18 * scale, cy);
+        ctx.fillStyle = isInactive ? "#991B1B" : "#0F172A";
+        ctx.font = `${isInactive ? "bold " : ""}${15 * scale}px sans-serif`;
+        const text = truncateCanvasText(ctx, row.name, col.width - 24 * scale);
+        ctx.fillText(text, drawX + 12 * scale, cy);
       } else if (col.key === "dailyWave") {
-        if (isInactive) {
-          // 未开播 — 柔和粉色胶囊
-          ctx.textAlign = "center";
-          ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-          const textW = ctx.measureText("未开播").width;
-          const padX = 16 * scale;
-          const pw = textW + padX * 2;
-          const ph = 30 * scale;
-          const px = drawX + (col.width - pw) / 2;
-          const py = cy - ph / 2;
-
-          ctx.fillStyle = K.pinkLight;
+        if (!isInactive) {
+          const barW = Math.max(((col.width - 48 * scale) * row.dailyWave) / safeMaxWave, 24 * scale);
+          const barH = 18 * scale;
+          const barTop = y + (rowHeight - barH) / 2;
+          const barLeft = drawX + 10 * scale;
+          ctx.fillStyle = "#DBEAFE";
           ctx.beginPath();
-          drawRoundRect(ctx, px, py, pw, ph, K.radiusPill * scale);
+          drawRoundRect(ctx, barLeft, barTop, col.width - 24 * scale, barH, 6 * scale);
           ctx.fill();
-
-          ctx.fillStyle = K.danger;
-          ctx.textBaseline = "middle";
-          ctx.fillText("未开播", drawX + col.width / 2, cy);
-        } else {
-          // 进度条 — 糖果色渐变 + 大圆角
-          const barW = col.width - 40 * scale;
-          const barH = 34 * scale;
-          const barLeft = drawX + 20 * scale;
-          const barTop = cy - barH / 2;
-          const fillPercent = (row.dailyWave / maxWave) * 0.85;
-          const fillW = Math.max(barW * fillPercent, 30 * scale);
-          const barRadius = K.radiusPill * scale;
-
-          // 轨道（极淡粉色）
-          ctx.fillStyle = K.barTrack;
+          ctx.fillStyle = "#60A5FA";
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, barW, barH, barRadius);
+          drawRoundRect(ctx, barLeft, barTop, Math.min(barW, col.width - 24 * scale), barH, 6 * scale);
           ctx.fill();
-
-          // 进度条（粉紫渐变）
-          const barGrad = ctx.createLinearGradient(barLeft, 0, barLeft + fillW, 0);
-          barGrad.addColorStop(0, K.barGrad[0]);
-          barGrad.addColorStop(1, K.barGrad[1]);
-          ctx.fillStyle = barGrad;
-          ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, fillW, barH, barRadius);
-          ctx.fill();
-
-          // 进度条高光（顶部白色半透明）
-          ctx.globalAlpha = 0.25;
-          ctx.fillStyle = "#ffffff";
-          ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, fillW, barH * 0.4, barRadius);
-          ctx.fill();
-          ctx.globalAlpha = 1.0;
-
-          // 文字（白色 + 阴影）
-          ctx.fillStyle = K.barText;
-          ctx.font = `700 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.save();
-          ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
-          ctx.shadowBlur = 3 * scale;
-          ctx.fillText(formatWave(row.dailyWave), drawX + col.width / 2, cy);
-          ctx.restore();
         }
-      } else if (col.key === "totalWave") {
-        ctx.textAlign = "center";
+        ctx.textAlign = "right";
         ctx.textBaseline = "middle";
-        ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-        ctx.fillStyle = K.textMedium;
-        ctx.fillText(formatWave(row.totalWave), drawX + col.width / 2, cy);
+        ctx.font = `${14 * scale}px monospace`;
+        ctx.fillStyle = isInactive ? "#DC2626" : "#1E293B";
+        ctx.fillText(isInactive ? "未开播" : formatWave(row.dailyWave), drawX + col.width - 12 * scale, cy);
+      } else if (col.key === "totalWave") {
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.font = `${14 * scale}px monospace`;
+        ctx.fillStyle = "#475569";
+        ctx.fillText(formatWave(row.totalWave), drawX + col.width - 12 * scale, cy);
       } else if (col.key === "tier") {
         if (row.tier) {
-          const ls = getLevelStyle(row.tier);
-          ctx.font = `800 ${14 * scale}px "PingFang SC", -apple-system, sans-serif`;
-          const textW = ctx.measureText(row.tier).width;
-          const padX = 16 * scale;
-          const bw = textW + padX * 2;
-          const bh = 32 * scale;
+          const bw = Math.min(col.width - 20 * scale, 66 * scale);
+          const bh = 20 * scale;
           const bl = drawX + (col.width - bw) / 2;
           const bt = cy - bh / 2;
-
-          // 胶囊形等级标签
-          ctx.save();
-          ctx.shadowColor = K.shadowPink;
-          ctx.shadowBlur = 8 * scale;
-          ctx.shadowOffsetY = 3 * scale;
-
-          const lvlGrad = ctx.createLinearGradient(bl, bt, bl + bw, bt + bh);
-          lvlGrad.addColorStop(0, ls.grad[0]);
-          lvlGrad.addColorStop(1, ls.grad[1]);
-          ctx.fillStyle = lvlGrad;
+          ctx.fillStyle = "#E0F2FE";
+          if (isInactive) ctx.fillStyle = "#FEE2E2";
           ctx.beginPath();
-          drawRoundRect(ctx, bl, bt, bw, bh, K.radiusPill * scale);
+          drawRoundRect(ctx, bl, bt, bw, bh, 8 * scale);
           ctx.fill();
-          ctx.restore();
-
-          // 高光
-          ctx.globalAlpha = 0.20;
-          ctx.fillStyle = "#ffffff";
-          ctx.beginPath();
-          drawRoundRect(ctx, bl, bt, bw, bh * 0.4, K.radiusPill * scale);
-          ctx.fill();
-          ctx.globalAlpha = 1.0;
-
-          ctx.fillStyle = ls.text;
+          ctx.fillStyle = isInactive ? "#B91C1C" : "#0369A1";
+          ctx.font = `bold ${11 * scale}px sans-serif`;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(row.tier, drawX + col.width / 2, cy);
+          ctx.fillText(row.tier, drawX + col.width / 2, cy + 1 * scale);
         }
       } else if (col.key === "duration") {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        const dText = row.isLive && row.dailyDuration > 0
+        const durationText = row.isLive && row.dailyDuration > 0
           ? formatDurationText(row.dailyDuration)
           : "—";
-        ctx.fillStyle = row.isLive && row.dailyDuration > 0 ? K.textDark : K.textLight;
-        ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-        ctx.fillText(dText, drawX + col.width / 2, cy);
+        ctx.fillStyle = isInactive ? "#B91C1C" : "#7C3AED";
+        ctx.font = `${13 * scale}px sans-serif`;
+        ctx.fillText(durationText, drawX + col.width / 2, cy);
       } else if (col.key === "master") {
-        ctx.textAlign = "center";
+        ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillStyle = K.textMedium;
-        ctx.font = `600 ${16 * scale}px "PingFang SC", -apple-system, sans-serif`;
-        const text = truncateCanvasText(ctx, row.masterName || "—", col.width - 20 * scale);
-        ctx.fillText(text, drawX + col.width / 2, cy);
+        ctx.fillStyle = isInactive ? "#991B1B" : "#64748B";
+        ctx.font = `${13 * scale}px sans-serif`;
+        const text = truncateCanvasText(ctx, row.masterName || "—", col.width - 24 * scale);
+        ctx.fillText(text, drawX + 12 * scale, cy);
       }
     });
 
     y += rowHeight;
   });
 
-  // ═════════════════════════════════════════════════════════════
-  //  6. 底部 — 柔和渐变 + 统计信息
-  // ═════════════════════════════════════════════════════════════
-  const footerGrad = ctx.createLinearGradient(cardX, y, cardX + cardW, y + footerHeight);
-  footerGrad.addColorStop(0, K.pinkLight);
-  footerGrad.addColorStop(0.5, K.purpleLight);
-  footerGrad.addColorStop(1, K.greenLight);
-  ctx.fillStyle = footerGrad;
-  ctx.fillRect(cardX, y, cardW, footerHeight);
-
-  // 顶部分隔
-  ctx.strokeStyle = K.separator;
-  ctx.lineWidth = 1 * scale;
-  ctx.beginPath();
-  ctx.moveTo(cardX + 20 * scale, y);
-  ctx.lineTo(cardX + cardW - 20 * scale, y);
-  ctx.stroke();
-
-  const footerPadX = 32 * scale;
-
-  // 左栏：人数 + 导出日期
-  ctx.fillStyle = K.textDark;
+  ctx.fillStyle = "#E2E8F0";
+  ctx.fillRect(0, y, containerW, footerHeight);
+  ctx.fillStyle = "#334155";
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  ctx.font = `800 ${18 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.fillText(`${genderText}主播 ${rows.length} 人`, cardX + footerPadX, y + 38 * scale);
+  ctx.font = `bold ${18 * scale}px sans-serif`;
+  ctx.fillText(`${genderText}主播 ${rows.length} 人`, tablePaddingX, y + 26 * scale);
+  ctx.font = `${12 * scale}px sans-serif`;
+  ctx.fillStyle = "#64748B";
+  ctx.fillText(`导出日期 ${formattedDate}`, tablePaddingX, y + 50 * scale);
 
-  ctx.font = `500 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
-  ctx.fillStyle = K.textMedium;
-  ctx.fillText(`导出日期 ${formattedDate}`, cardX + footerPadX, y + 62 * scale);
-
-  // 中栏：未开播
   if (hasInactive) {
-    const centerX = cardX + cardW / 2;
-    ctx.fillStyle = K.danger;
-    ctx.textAlign = "center";
-    ctx.font = `800 ${18 * scale}px "PingFang SC", -apple-system, sans-serif`;
-    ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, centerX, y + 38 * scale);
+    const warnX = containerW / 2 - 8 * scale;
+    const warnY = y + 14 * scale;
+    const warnW = containerW / 2 - tablePaddingX + 8 * scale;
+    const warnH = footerHeight - 28 * scale;
+    ctx.fillStyle = "#FEF2F2";
+    ctx.beginPath();
+    drawRoundRect(ctx, warnX, warnY, warnW, warnH, 8 * scale);
+    ctx.fill();
+    ctx.strokeStyle = "#FECACA";
+    ctx.lineWidth = 1 * scale;
+    ctx.beginPath();
+    drawRoundRect(ctx, warnX, warnY, warnW, warnH, 8 * scale);
+    ctx.stroke();
 
-    ctx.font = `500 ${13 * scale}px "PingFang SC", -apple-system, sans-serif`;
-    ctx.fillStyle = K.danger;
+    ctx.fillStyle = "#DC2626";
+    ctx.font = `bold ${14 * scale}px sans-serif`;
+    ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, containerW / 2, y + 26 * scale);
+    ctx.font = `${11 * scale}px sans-serif`;
+    ctx.fillStyle = "#7F1D1D";
     ctx.textBaseline = "top";
     inactiveLines.forEach((line, i) => {
-      ctx.fillText(line, centerX, y + (54 + i * 20) * scale);
+      ctx.fillText(line, containerW / 2, y + (44 + i * 16) * scale);
     });
-    ctx.textBaseline = "alphabetic";
+    ctx.textBaseline = "middle";
   }
-
-  // 右栏：小装饰
-  const rightX = cardX + cardW - footerPadX;
-  drawStar(ctx, rightX - 10 * scale, y + 35 * scale, 6 * scale, K.pink);
-  drawDot(ctx, rightX - 25 * scale, y + 55 * scale, 4 * scale, K.purple, 0.4);
-  drawDot(ctx, rightX - 5 * scale, y + 65 * scale, 3 * scale, K.green, 0.4);
-
-  ctx.restore();
 }

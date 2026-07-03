@@ -3,10 +3,10 @@ import {
   LayoutDashboard,
   Network,
   Users,
-  FileText,
   Database,
   Flag,
   Swords,
+  Trophy,
 } from "lucide-react";
 
 export type PageId =
@@ -15,7 +15,8 @@ export type PageId =
   | "anchors"
   | "data"
   | "flag"
-  | "pk";
+  | "pk"
+  | "reward";
 
 export interface NavItem {
   id: PageId;
@@ -54,6 +55,12 @@ export const NAV_ITEMS: NavItem[] = [
     label: "PK名单",
     icon: Swords,
     description: "按月音浪分组",
+  },
+  {
+    id: "reward",
+    label: "奖励机制",
+    icon: Trophy,
+    description: "音浪与时长奖励结算",
   },
   {
     id: "family-tree",

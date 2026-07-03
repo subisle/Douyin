@@ -35,6 +35,63 @@ function getPool() {
   return pool;
 }
 
+async function ensureImportRecordsTable(db) {
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS import_records (
+       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+       kind VARCHAR(20) NOT NULL,
+       import_date DATE NOT NULL,
+       file_hash CHAR(32) NOT NULL,
+       data_hash CHAR(64) NOT NULL,
+       file_name VARCHAR(255) NOT NULL DEFAULT '',
+       row_count INT NOT NULL DEFAULT 0,
+       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       PRIMARY KEY (id),
+       UNIQUE KEY uq_import_kind_date_file (kind, import_date, file_hash),
+       KEY idx_import_kind_date_data (kind, import_date, data_hash)
+     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
+function normalizeImportMeta(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const fileHash = String(meta.fileHash || "").trim().toLowerCase();
+  const dataHash = String(meta.dataHash || "").trim().toLowerCase();
+  const fileName = String(meta.fileName || "").trim().slice(0, 255);
+  const rowCount = Number(meta.rowCount) || 0;
+  if (!/^[a-f0-9]{32}$/.test(fileHash) || !/^[a-f0-9]{64}$/.test(dataHash)) {
+    return null;
+  }
+  return { fileHash, dataHash, fileName, rowCount };
+}
+
+async function assertImportNotRecorded(db, kind, importDate, meta) {
+  if (!meta) return;
+  await ensureImportRecordsTable(db);
+  const [rows] = await db.query(
+    `SELECT file_hash, data_hash, file_name, created_at
+       FROM import_records
+      WHERE kind = ? AND import_date = ? AND (file_hash = ? OR data_hash = ?)
+      LIMIT 1`,
+    [kind, importDate, meta.fileHash, meta.dataHash]
+  );
+  if (rows.length > 0) {
+    const duplicatedBy = rows[0].file_hash === meta.fileHash ? "文件 MD5" : "导入数据";
+    throw new Error(`${duplicatedBy} 已导入过，已阻止重复导入`);
+  }
+}
+
+async function recordImport(db, kind, importDate, meta) {
+  if (!meta) return;
+  await ensureImportRecordsTable(db);
+  await db.query(
+    `INSERT IGNORE INTO import_records
+       (kind, import_date, file_hash, data_hash, file_name, row_count)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [kind, importDate, meta.fileHash, meta.dataHash, meta.fileName, meta.rowCount]
+  );
+}
+
 /**
  * 聚合 persons + accounts 为主播列表（与 DouyinLang buildAnchorsFromNewSchema 一致）
  */
@@ -245,21 +302,32 @@ async function getWaveTrendByGender() {
  * 批量导入音浪快照（按 anchor_id + import_date UPSERT，可重复导入覆盖）。
  * rows: [{ anchorId, waveValue, rank }]
  */
-async function importWaveSnapshots(importDate, rows) {
+async function importWaveSnapshots(importDate, rows, meta) {
   if (!rows || rows.length === 0) return { inserted: 0 };
   const db = getPool();
-  const values = rows.map((r) => [
-    r.anchorId,
-    importDate,
-    Math.round(r.waveValue) || 0,
-    Math.round(r.rank) || 0,
-  ]);
+  const importMeta = normalizeImportMeta(meta);
+  await assertImportNotRecorded(db, "wave", importDate, importMeta);
+  const values = rows
+    .map((r) => {
+      const anchorId = String(r.anchorId ?? "").trim();
+      const waveValue = Number(r.waveValue);
+      if (!anchorId || !Number.isFinite(waveValue)) return null;
+      return [
+        anchorId,
+        importDate,
+        Math.round(waveValue) || 0,
+        Math.round(Number(r.rank)) || 0,
+      ];
+    })
+    .filter(Boolean);
+  if (values.length === 0) return { inserted: 0 };
   const [res] = await db.query(
     `INSERT INTO wave_snapshots (anchor_id, import_date, wave_value, \`rank\`)
      VALUES ?
      ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`,
     [values]
   );
+  await recordImport(db, "wave", importDate, importMeta);
   return { inserted: res.affectedRows };
 }
 
@@ -267,21 +335,100 @@ async function importWaveSnapshots(importDate, rows) {
  * 批量导入时长快照（同上 UPSERT）。
  * rows: [{ anchorId, totalMinutes }]
  */
-async function importDurationSnapshots(importDate, rows) {
+async function importDurationSnapshots(importDate, rows, meta) {
   if (!rows || rows.length === 0) return { inserted: 0 };
   const db = getPool();
-  const values = rows.map((r) => [
-    r.anchorId,
-    importDate,
-    Math.round(r.totalMinutes) || 0,
-  ]);
+  const importMeta = normalizeImportMeta(meta);
+  await assertImportNotRecorded(db, "duration", importDate, importMeta);
+  const values = rows
+    .map((r) => {
+      const anchorId = String(r.anchorId ?? "").trim();
+      const totalMinutes = Number(r.totalMinutes);
+      if (!anchorId || !Number.isFinite(totalMinutes)) return null;
+      return [
+        anchorId,
+        importDate,
+        Math.round(totalMinutes) || 0,
+      ];
+    })
+    .filter(Boolean);
+  if (values.length === 0) return { inserted: 0 };
   const [res] = await db.query(
     `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
      VALUES ?
      ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`,
     [values]
   );
+  await recordImport(db, "duration", importDate, importMeta);
   return { inserted: res.affectedRows };
+}
+
+async function getImportPreview(kind, importDate, anchorIds, meta) {
+  const db = getPool();
+  const ids = Array.from(
+    new Set((Array.isArray(anchorIds) ? anchorIds : []).map((id) => String(id || "").trim()).filter(Boolean))
+  );
+  const importMeta = normalizeImportMeta(meta);
+  let duplicateFile = null;
+  let duplicateData = null;
+
+  if (importMeta) {
+    await ensureImportRecordsTable(db);
+    const [records] = await db.query(
+      `SELECT file_hash, data_hash, file_name, row_count, created_at
+         FROM import_records
+        WHERE kind = ? AND import_date = ? AND (file_hash = ? OR data_hash = ?)
+        ORDER BY created_at DESC
+        LIMIT 2`,
+      [kind, importDate, importMeta.fileHash, importMeta.dataHash]
+    );
+    for (const record of records) {
+      const item = {
+        fileName: record.file_name || "",
+        rowCount: Number(record.row_count) || 0,
+        createdAt: record.created_at || null,
+      };
+      if (record.file_hash === importMeta.fileHash) duplicateFile = item;
+      if (record.data_hash === importMeta.dataHash) duplicateData = item;
+    }
+  }
+
+  if (ids.length === 0) return { existing: [], duplicateFile, duplicateData };
+
+  const ph = ids.map(() => "?").join(",");
+  if (kind === "wave") {
+    const [rows] = await db.query(
+      `SELECT anchor_id, wave_value AS value, \`rank\`
+         FROM wave_snapshots
+        WHERE import_date = ? AND anchor_id IN (${ph})`,
+      [importDate, ...ids]
+    );
+    return {
+      existing: rows.map((r) => ({
+        anchorId: r.anchor_id,
+        value: Number(r.value) || 0,
+        rank: Number(r.rank) || 0,
+      })),
+      duplicateFile,
+      duplicateData,
+    };
+  }
+
+  const [rows] = await db.query(
+    `SELECT anchor_id, total_minutes AS value
+       FROM duration_snapshots
+      WHERE import_date = ? AND anchor_id IN (${ph})`,
+    [importDate, ...ids]
+  );
+  return {
+    existing: rows.map((r) => ({
+      anchorId: r.anchor_id,
+      value: Number(r.value) || 0,
+      rank: 0,
+    })),
+    duplicateFile,
+    duplicateData,
+  };
 }
 
 /**
@@ -1061,21 +1208,32 @@ async function getTierRules() {
  * 保存等级规则（全量替换）。在事务内先 DELETE 再批量 INSERT。
  */
 async function saveTierRules(rules) {
+  if (!Array.isArray(rules) || rules.length === 0) {
+    throw new Error("等级规则不能为空");
+  }
+  const sanitizedRules = rules.map((rule, index) => {
+    const label = String(rule?.label ?? "").trim();
+    const minWave = Number(rule?.minWave);
+    if (!label) throw new Error(`第 ${index + 1} 条等级规则缺少名称`);
+    if (!Number.isFinite(minWave) || minWave < 0) {
+      throw new Error(`第 ${index + 1} 条等级规则音浪门槛无效`);
+    }
+    return { label, minWave };
+  });
+
   const db = getPool();
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
     await conn.query("DELETE FROM tier_rules");
-    if (rules && rules.length > 0) {
-      const values = rules.map(() => "(?, ?, ?)");
-      const params = rules.flatMap((r, i) => [r.label, r.minWave, i + 1]);
-      await conn.query(
-        "INSERT INTO tier_rules (label, min_wave, sort_order) VALUES " + values.join(", "),
-        params
-      );
-    }
+    const values = sanitizedRules.map(() => "(?, ?, ?)");
+    const params = sanitizedRules.flatMap((r, i) => [r.label, r.minWave, i + 1]);
+    await conn.query(
+      "INSERT INTO tier_rules (label, min_wave, sort_order) VALUES " + values.join(", "),
+      params
+    );
     await conn.commit();
-    return { saved: rules ? rules.length : 0 };
+    return { saved: sanitizedRules.length };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -1192,7 +1350,41 @@ async function getDailyWaveReport(date, gender) {
   const totalDurMap = new Map();
   for (const r of totalDurs) totalDurMap.set(r.anchor_id, Number(r.total) || 0);
 
-  // 7. 组装行数据（每人指标 = 其名下所有 anchor 之和）
+  // 7. 查找同队当前日期之前最近一个有音浪快照的日期，用于计算排名变化。
+  const [prevDateRows] = await db.query(
+    "SELECT MAX(import_date) AS prev_date FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date < ?",
+    [...anchorIds, date]
+  );
+  const prevDateRaw = prevDateRows[0]?.prev_date;
+  const prevDate = prevDateRaw
+    ? (prevDateRaw instanceof Date ? prevDateRaw.toISOString().slice(0, 10) : String(prevDateRaw).slice(0, 10))
+    : null;
+  const previousRankByPerson = new Map();
+
+  if (prevDate) {
+    const [py, pm] = prevDate.split("-").map(Number);
+    const prevMonthStart = py + "-" + String(pm).padStart(2, "0") + "-01";
+    const [prevTotalWaves] = await db.query(
+      "SELECT anchor_id, COALESCE(SUM(wave_value), 0) AS total FROM wave_snapshots " +
+      "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
+      [...anchorIds, prevMonthStart, prevDate]
+    );
+    const prevTotalWaveMap = new Map();
+    for (const r of prevTotalWaves) prevTotalWaveMap.set(r.anchor_id, Number(r.total) || 0);
+
+    const prevRows = persons.map((p) => {
+      let totalWave = 0;
+      for (const aid of p.anchorIds) totalWave += prevTotalWaveMap.get(aid) || 0;
+      return { personId: p.person_id, totalWave };
+    });
+    prevRows.sort((a, b) => b.totalWave - a.totalWave || a.personId - b.personId);
+    for (let i = 0; i < prevRows.length; i++) {
+      previousRankByPerson.set(prevRows[i].personId, i + 1);
+    }
+  }
+
+  // 8. 组装行数据（每人指标 = 其名下所有 anchor 之和）
   const rows = persons.map(p => {
     let dw = 0, tw = 0, dd = 0, td = 0;
     for (const aid of p.anchorIds) {
@@ -1206,16 +1398,56 @@ async function getDailyWaveReport(date, gender) {
     for (const tr of tierRows) {
       if (tw >= Number(tr.min_wave)) { tier = tr.label; break; }
     }
-    return { rank: 0, name: p.name, anchorId: p.anchorIds[0] || "", dailyWave: dw, totalWave: tw, dailyDuration: dd, totalDuration: td, tier, isLive, masterName: p.master_id ? nameById.get(p.master_id) || null : null };
+    return {
+      _personId: p.person_id,
+      rank: 0,
+      previousRank: previousRankByPerson.get(p.person_id) || null,
+      rankDelta: null,
+      name: p.name,
+      anchorId: p.anchorIds[0] || "",
+      dailyWave: dw,
+      totalWave: tw,
+      dailyDuration: dd,
+      totalDuration: td,
+      tier,
+      isLive,
+      masterName: p.master_id ? nameById.get(p.master_id) || null : null,
+    };
   });
 
-  rows.sort((a, b) => b.totalWave - a.totalWave);
-  for (let i = 0; i < rows.length; i++) rows[i].rank = i + 1;
+  rows.sort((a, b) =>
+    b.totalWave - a.totalWave ||
+    b.dailyWave - a.dailyWave ||
+    b.totalDuration - a.totalDuration ||
+    b.dailyDuration - a.dailyDuration ||
+    a._personId - b._personId
+  );
+
+  const tierCounts = new Map();
+  for (const row of rows) {
+    const baseTier = String(row.tier || "").trim();
+    if (!baseTier || /\d+$/.test(baseTier)) continue;
+    tierCounts.set(baseTier, (tierCounts.get(baseTier) || 0) + 1);
+  }
+  const tierSeq = new Map();
+  for (const row of rows) {
+    const baseTier = String(row.tier || "").trim();
+    if (!baseTier || /\d+$/.test(baseTier) || (tierCounts.get(baseTier) || 0) <= 1) continue;
+    const next = (tierSeq.get(baseTier) || 0) + 1;
+    tierSeq.set(baseTier, next);
+    row.tier = `${baseTier}${next}`;
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    rows[i].rank = i + 1;
+    rows[i].rankDelta = rows[i].previousRank ? rows[i].previousRank - rows[i].rank : null;
+    delete rows[i]._personId;
+  }
 
   const notLive = rows.filter(r => !r.isLive);
   return {
     date, gender, rows,
-    summary: { total: rows.length, notLiveCount: notLive.length, notLiveNames: notLive.map(r => r.name) },
+    summary: { total: rows.length, notLiveCount: notLive.length, notLiveNames: notLive.map(r => r.name), previousDate: prevDate },
   };
 }
 
@@ -1225,6 +1457,7 @@ async function getDailyWaveReport(date, gender) {
  * 按总音浪降序返回男女分组列表。
  */
 async function getPkRoster(period, groupSize) {
+  void groupSize;
   // period 为空时默认当前月份
   if (!period) {
     const now = new Date();
@@ -1342,6 +1575,195 @@ async function getPkRoster(period, groupSize) {
   return { period, males, females };
 }
 
+const DEFAULT_REWARD_CONFIG = {
+  waveRules: [
+    { label: "600万以上", minWave: 6000000, maxWave: null, amount: 5000 },
+    { label: "400万-500万", minWave: 4000000, maxWave: 5000000, amount: 4000 },
+    { label: "200万-300万", minWave: 2000000, maxWave: 3000000, amount: 3000 },
+  ],
+  durationRule: { thresholdMinutes: 136 * 60, firstPrize: 500 },
+};
+
+function sanitizeRewardConfig(config) {
+  const source = config && typeof config === "object" ? config : DEFAULT_REWARD_CONFIG;
+  const rawRules = Array.isArray(source.waveRules) && source.waveRules.length > 0
+    ? source.waveRules
+    : DEFAULT_REWARD_CONFIG.waveRules;
+  const waveRules = rawRules.map((rule, index) => {
+    const label = String(rule?.label ?? "").trim() || `规则${index + 1}`;
+    const minWave = Number(rule?.minWave);
+    const maxWaveRaw = rule?.maxWave;
+    const maxWave = maxWaveRaw === null || maxWaveRaw === "" || maxWaveRaw === undefined
+      ? null
+      : Number(maxWaveRaw);
+    const amount = Number(rule?.amount);
+    if (!Number.isFinite(minWave) || minWave < 0) {
+      throw new Error(`第 ${index + 1} 条音浪规则门槛无效`);
+    }
+    if (maxWave !== null && (!Number.isFinite(maxWave) || maxWave < minWave)) {
+      throw new Error(`第 ${index + 1} 条音浪规则上限无效`);
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error(`第 ${index + 1} 条音浪规则金额无效`);
+    }
+    return { label, minWave, maxWave, amount };
+  });
+
+  const durationRule = source.durationRule || DEFAULT_REWARD_CONFIG.durationRule;
+  const thresholdMinutes = Number(durationRule.thresholdMinutes);
+  const firstPrize = Number(durationRule.firstPrize);
+  if (!Number.isFinite(thresholdMinutes) || thresholdMinutes < 0) {
+    throw new Error("时长门槛无效");
+  }
+  if (!Number.isFinite(firstPrize) || firstPrize < 0) {
+    throw new Error("时长奖励金额无效");
+  }
+
+  return { waveRules, durationRule: { thresholdMinutes, firstPrize } };
+}
+
+/**
+ * 奖励机制报表。
+ * period 格式 YYYY-MM。按人汇总当月累计音浪和时长。
+ */
+async function getRewardReport(period, config) {
+  if (!period) {
+    const now = new Date();
+    period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }
+  if (!/^\d{4}-\d{2}$/.test(period)) {
+    throw new Error("period 格式应为 YYYY-MM");
+  }
+  const rewardConfig = sanitizeRewardConfig(config);
+
+  const db = getPool();
+  const [y, m] = period.split("-").map(Number);
+  const monthStart = `${period}-01`;
+  const monthEnd = `${period}-${String(new Date(y, m, 0).getDate()).padStart(2, "0")}`;
+
+  const [personRows] = await db.query(
+    "SELECT p.id AS person_id, p.name, p.gender, a.anchor_id " +
+    "FROM persons p " +
+    "INNER JOIN accounts a ON a.person_id = p.id " +
+    "WHERE a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
+    "ORDER BY p.id"
+  );
+
+  const personMap = new Map();
+  const anchorToPerson = new Map();
+  for (const r of personRows) {
+    if (!personMap.has(r.person_id)) {
+      personMap.set(r.person_id, {
+        personId: r.person_id,
+        name: r.name,
+        gender: r.gender,
+        anchorIds: [],
+      });
+    }
+    personMap.get(r.person_id).anchorIds.push(r.anchor_id);
+    anchorToPerson.set(r.anchor_id, r.person_id);
+  }
+
+  const persons = Array.from(personMap.values());
+  if (persons.length === 0) {
+    return {
+      period,
+      rows: [],
+      waveRules: rewardConfig.waveRules,
+      durationRule: { ...rewardConfig.durationRule, qualified: false, winnerPersonId: null },
+      summary: { totalPeople: 0, waveWinners: 0, durationQualified: false, totalBonus: 0 },
+    };
+  }
+
+  const anchorIds = [];
+  for (const p of persons) anchorIds.push(...p.anchorIds);
+  const ph = anchorIds.map(() => "?").join(",");
+
+  const [waveRows] = await db.query(
+    "SELECT anchor_id, COALESCE(SUM(wave_value), 0) AS total_wave FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
+    [...anchorIds, monthStart, monthEnd]
+  );
+  const waveByPerson = new Map();
+  for (const r of waveRows) {
+    const pid = anchorToPerson.get(r.anchor_id);
+    if (pid == null) continue;
+    waveByPerson.set(pid, (waveByPerson.get(pid) || 0) + (Number(r.total_wave) || 0));
+  }
+
+  const [durationRows] = await db.query(
+    "SELECT anchor_id, COALESCE(SUM(total_minutes), 0) AS total_duration FROM duration_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
+    [...anchorIds, monthStart, monthEnd]
+  );
+  const durationByPerson = new Map();
+  for (const r of durationRows) {
+    const pid = anchorToPerson.get(r.anchor_id);
+    if (pid == null) continue;
+    durationByPerson.set(pid, (durationByPerson.get(pid) || 0) + (Number(r.total_duration) || 0));
+  }
+
+  const waveRules = rewardConfig.waveRules;
+
+  const rows = persons.map((p) => {
+    const wave = waveByPerson.get(p.personId) || 0;
+    const duration = durationByPerson.get(p.personId) || 0;
+    const matchedRule = waveRules.find((rule) => {
+      const maxOk = rule.maxWave == null || wave <= rule.maxWave;
+      return wave >= rule.minWave && maxOk;
+    });
+    return {
+      personId: p.personId,
+      name: p.name,
+      gender: p.gender,
+      anchorId: p.anchorIds[0] || "",
+      wave,
+      duration,
+      waveReward: matchedRule ? matchedRule.amount : 0,
+      waveRewardLabel: matchedRule ? matchedRule.label : "",
+      durationReward: 0,
+      totalReward: matchedRule ? matchedRule.amount : 0,
+      waveRank: 0,
+      durationRank: 0,
+    };
+  });
+
+  const waveSorted = [...rows].sort((a, b) => b.wave - a.wave || a.personId - b.personId);
+  for (let i = 0; i < waveSorted.length; i++) waveSorted[i].waveRank = i + 1;
+
+  const durationSorted = [...rows].sort((a, b) => b.duration - a.duration || a.personId - b.personId);
+  for (let i = 0; i < durationSorted.length; i++) durationSorted[i].durationRank = i + 1;
+
+  const thresholdMinutes = rewardConfig.durationRule.thresholdMinutes;
+  const durationQualified = rows.length > 0 && rows.every((r) => r.duration >= thresholdMinutes);
+  const durationWinner = durationQualified ? durationSorted[0] : null;
+  if (durationWinner) {
+    durationWinner.durationReward = rewardConfig.durationRule.firstPrize;
+    durationWinner.totalReward += rewardConfig.durationRule.firstPrize;
+  }
+
+  rows.sort((a, b) => b.totalReward - a.totalReward || b.wave - a.wave || a.personId - b.personId);
+
+  const totalBonus = rows.reduce((sum, r) => sum + r.totalReward, 0);
+  return {
+    period,
+    rows,
+    waveRules,
+    durationRule: {
+      thresholdMinutes,
+      firstPrize: rewardConfig.durationRule.firstPrize,
+      qualified: durationQualified,
+      winnerPersonId: durationWinner ? durationWinner.personId : null,
+    },
+    summary: {
+      totalPeople: rows.length,
+      waveWinners: rows.filter((r) => r.waveReward > 0).length,
+      durationQualified,
+      totalBonus,
+    },
+  };
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -1351,6 +1773,7 @@ module.exports = {
   getWaveTrendByGender,
   importWaveSnapshots,
   importDurationSnapshots,
+  getImportPreview,
   exportWaveSnapshots,
   exportDurationSnapshots,
   exportAnchors,
@@ -1372,4 +1795,5 @@ module.exports = {
   getDailyWaveReport,
   getPkRoster,
   getFlagWinner,
+  getRewardReport,
 };

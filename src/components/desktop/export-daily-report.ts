@@ -2,6 +2,7 @@
 // 与 export-family-poster.ts 使用完全一致的色彩体系和视觉风格
 import type { DailyReportRow } from "@/types/electron";
 import { formatWave, formatDuration } from "./format";
+import { downloadCanvasAsPng } from "./export-image";
 
 // 主题色 —— 与族谱海报完全一致
 const C = {
@@ -298,8 +299,6 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
       ctx.stroke();
     }
 
-    // 未开播行半透明
-    const rowAlpha = r.isLive ? 1 : 0.5;
     const rowYCenter = ry + rowH / 2;
 
     // 序号
@@ -473,9 +472,5 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   ctx.fillText(`导出日期 ${dateStr}`, panelX + panelW - 20, dotY);
 
   // ---- 9. 导出下载 ----
-  const dataUrl = canvas.toDataURL("image/png");
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = filename || `每日报告-${date}-${teamLabel}.png`;
-  a.click();
+  await downloadCanvasAsPng(canvas, filename || `每日报告-${date}-${teamLabel}.png`);
 }

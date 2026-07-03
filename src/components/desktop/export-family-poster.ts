@@ -1,10 +1,14 @@
 import type { TreeNode } from "./family-tree-page";
-
-const NODE_W = 84;
-const NODE_H = 38;
-const COL_GAP = 28;
-const ROW_GAP = 4;
-const PAD = 16;
+import { downloadCanvasAsPng } from "./export-image";
+import {
+  FAMILY_COL_GAP as COL_GAP,
+  FAMILY_NODE_H as NODE_H,
+  FAMILY_NODE_W as NODE_W,
+  FAMILY_PAD as PAD,
+  FAMILY_ROW_GAP as ROW_GAP,
+  getFamilyDisplayName,
+  getFamilyGenerationText,
+} from "./family-tree-style";
 
 interface Placed {
   node: TreeNode;
@@ -301,7 +305,7 @@ export async function exportFamilyPoster(
     // 名字
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "bold 13px sans-serif";
+    ctx.font = "bold 15px sans-serif";
     if (isRoot) {
       ctx.fillStyle = C.cyan;
     } else if (isFemale) {
@@ -310,19 +314,18 @@ export async function exportFamilyPoster(
       ctx.fillStyle = C.white92;
     }
 
-    const displayName = isRoot ? `👑 ${p.node.name}` : p.node.name;
-    ctx.fillText(displayName, nx + NODE_W / 2, ny + NODE_H / 2 - 4);
+    const displayName = getFamilyDisplayName(p.node, isRoot);
+    ctx.fillText(displayName, nx + NODE_W / 2, ny + 21);
 
-    // 徒弟数
-    if (p.node.children.length > 0) {
-      ctx.font = "10px sans-serif";
-      ctx.fillStyle = "rgba(0, 245, 212, 0.5)";
-      ctx.fillText(
-        `· ${p.node.children.length}徒`,
-        nx + NODE_W / 2,
-        ny + NODE_H / 2 + 10
-      );
-    }
+    // 代数与徒弟数
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = isRoot ? "rgba(0, 245, 212, 0.72)" : C.textMuted;
+    const relationText = p.node.children.length > 0 ? `${p.node.children.length}徒` : "成员";
+    ctx.fillText(
+      `${getFamilyGenerationText(p.node)} · ${relationText}`,
+      nx + NODE_W / 2,
+      ny + 40
+    );
   }
 
   // ---- 9. 底部面板 ----
@@ -370,9 +373,5 @@ export async function exportFamilyPoster(
   ctx.fillText(`导出日期 ${dateStr}`, panelX + panelW - 20, dotY);
 
   // ---- 10. 导出下载 ----
-  const dataUrl = canvas.toDataURL("image/png");
-  const a = document.createElement("a");
-  a.href = dataUrl;
-  a.download = filename;
-  a.click();
+  await downloadCanvasAsPng(canvas, filename);
 }

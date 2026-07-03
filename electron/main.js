@@ -47,8 +47,8 @@ function initAutoUpdater() {
     url: PROXY_REPO_URL + "/releases/latest/download",
   });
 
-  // 不自动下载，由用户确认
-  autoUpdater.autoDownload = true;
+  // 不自动下载，由用户通过「下载更新」确认
+  autoUpdater.autoDownload = false;
   // 不自动安装，由用户确认
   autoUpdater.autoInstallOnAppQuit = false;
 
@@ -67,7 +67,7 @@ function initAutoUpdater() {
     });
   });
 
-  autoUpdater.on("update-not-available", (info) => {
+  autoUpdater.on("update-not-available", () => {
     console.log("[updater] 当前已是最新版本");
     setUpdateStatus({ status: "not-available", info: null, error: null });
   });
@@ -226,11 +226,15 @@ ipcMain.handle("data:getWaveTrendByGender", wrap(() => db.getWaveTrendByGender()
 
 ipcMain.handle(
   "data:importWave",
-  wrap((date, rows) => db.importWaveSnapshots(date, rows))
+  wrap((date, rows, meta) => db.importWaveSnapshots(date, rows, meta))
 );
 ipcMain.handle(
   "data:importDuration",
-  wrap((date, rows) => db.importDurationSnapshots(date, rows))
+  wrap((date, rows, meta) => db.importDurationSnapshots(date, rows, meta))
+);
+ipcMain.handle(
+  "data:getImportPreview",
+  wrap((kind, date, anchorIds, meta) => db.getImportPreview(kind, date, anchorIds, meta))
 );
 ipcMain.handle(
   "data:exportWave",
@@ -300,6 +304,10 @@ ipcMain.handle(
 ipcMain.handle(
   "data:getFlagWinner",
   wrap((period) => db.getFlagWinner(period))
+);
+ipcMain.handle(
+  "data:getRewardReport",
+  wrap((period, config) => db.getRewardReport(period, config))
 );
 
 // ── 自动更新 IPC ──────────────────────────────────────────

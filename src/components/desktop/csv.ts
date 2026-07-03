@@ -17,7 +17,16 @@ export interface MatchedRow {
   rank: number;
 }
 
+export interface ImportableRow {
+  anchorId: string;
+  anchorName: string;
+  value: number;
+  rank: number;
+  matched: boolean;
+}
+
 export interface ParseSummary {
+  importable: ImportableRow[];
   matched: MatchedRow[];
   unmatched: { anchorIdRaw: string; anchorName: string; value: number }[];
   skipped: number; // 字段缺失/非法被跳过的行数
@@ -118,7 +127,8 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
   const byName = new Map<string, AnchorRow>();
   const nameDup = new Set<string>();
   for (const a of anchors) {
-    if (a.anchorId) byId.set(a.anchorId, a);
+    if (!a.anchorId) continue;
+    byId.set(a.anchorId, a);
     if (a.douyinNo) byDouyinNo.set(a.douyinNo, a);
     const nm = (a.name || "").trim();
     if (nm) {
@@ -127,6 +137,7 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
     }
   }
 
+  const importable: ImportableRow[] = [];
   const matched: MatchedRow[] = [];
   const unmatched: ParseSummary["unmatched"] = [];
   let skipped = 0;
@@ -146,6 +157,13 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
       anchor = byName.get(nm);
     }
     if (anchor) {
+      importable.push({
+        anchorId: anchor.anchorId,
+        anchorName: anchor.anchorName || anchor.name || r.anchorName,
+        value: r.value,
+        rank: r.rank,
+        matched: true,
+      });
       matched.push({
         anchorId: anchor.anchorId,
         name: anchor.anchorName || anchor.name || r.anchorName,
@@ -153,6 +171,13 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
         rank: r.rank,
       });
     } else {
+      importable.push({
+        anchorId: rawId,
+        anchorName: r.anchorName,
+        value: r.value,
+        rank: r.rank,
+        matched: false,
+      });
       unmatched.push({
         anchorIdRaw: rawId,
         anchorName: r.anchorName,
@@ -161,7 +186,7 @@ export function matchRows(rows: ParsedRow[], anchors: AnchorRow[]): ParseSummary
     }
   }
 
-  return { matched, unmatched, skipped, totalRows: rows.length };
+  return { importable, matched, unmatched, skipped, totalRows: rows.length };
 }
 
 /** 导出数据为 CSV 并触发下载（带 BOM 兼容 Excel 中文） */

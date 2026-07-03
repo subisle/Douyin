@@ -18,9 +18,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getWaveRanking: (limit) => ipcRenderer.invoke("data:getWaveRanking", limit),
   getWaveTrendByGender: () => ipcRenderer.invoke("data:getWaveTrendByGender"),
 
-  importWave: (date, rows) => ipcRenderer.invoke("data:importWave", date, rows),
-  importDuration: (date, rows) =>
-    ipcRenderer.invoke("data:importDuration", date, rows),
+  importWave: (date, rows, meta) => ipcRenderer.invoke("data:importWave", date, rows, meta),
+  importDuration: (date, rows, meta) =>
+    ipcRenderer.invoke("data:importDuration", date, rows, meta),
+  getImportPreview: (kind, date, anchorIds, meta) =>
+    ipcRenderer.invoke("data:getImportPreview", kind, date, anchorIds, meta),
   exportWave: (date) => ipcRenderer.invoke("data:exportWave", date),
   exportDuration: (date) => ipcRenderer.invoke("data:exportDuration", date),
   exportAnchors: () => ipcRenderer.invoke("data:exportAnchors"),
@@ -42,6 +44,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getDailyWaveReport: (date, gender) => ipcRenderer.invoke("data:getDailyWaveReport", date, gender),
   getPkRoster: (period, groupSize) => ipcRenderer.invoke("data:getPkRoster", period, groupSize),
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),
+  getRewardReport: (period, config) => ipcRenderer.invoke("data:getRewardReport", period, config),
 
   // ── 自动更新 ──
   checkForUpdates: () => ipcRenderer.invoke("updater:check"),

@@ -57,6 +57,31 @@ export interface ImportResult {
   inserted: number;
 }
 
+export interface ImportMeta {
+  fileHash: string;
+  dataHash: string;
+  fileName: string;
+  rowCount: number;
+}
+
+export interface ImportPreviewResult {
+  existing: {
+    anchorId: string;
+    value: number;
+    rank: number;
+  }[];
+  duplicateFile: {
+    fileName: string;
+    rowCount: number;
+    createdAt: string | null;
+  } | null;
+  duplicateData: {
+    fileName: string;
+    rowCount: number;
+    createdAt: string | null;
+  } | null;
+}
+
 export type IpcResult<T> =
   | { success: true; data: T }
   | { success: false; error: string };
@@ -90,6 +115,8 @@ export interface TierRule {
 
 export interface DailyReportRow {
   rank: number;
+  previousRank: number | null;
+  rankDelta: number | null;
   name: string;
   anchorId: string;
   dailyWave: number;
@@ -109,6 +136,7 @@ export interface DailyReportData {
     total: number;
     notLiveCount: number;
     notLiveNames: string[];
+    previousDate?: string | null;
   };
 }
 
@@ -160,6 +188,54 @@ export interface FlagWinnerData {
   settledAt: string | null;
 }
 
+export interface RewardRule {
+  label: string;
+  minWave: number;
+  maxWave: number | null;
+  amount: number;
+}
+
+export interface RewardRow {
+  personId: number;
+  name: string;
+  gender: string;
+  anchorId: string;
+  wave: number;
+  duration: number;
+  waveReward: number;
+  waveRewardLabel: string;
+  durationReward: number;
+  totalReward: number;
+  waveRank: number;
+  durationRank: number;
+}
+
+export interface RewardReportData {
+  period: string;
+  rows: RewardRow[];
+  waveRules: RewardRule[];
+  durationRule: {
+    thresholdMinutes: number;
+    firstPrize: number;
+    qualified: boolean;
+    winnerPersonId: number | null;
+  };
+  summary: {
+    totalPeople: number;
+    waveWinners: number;
+    durationQualified: boolean;
+    totalBonus: number;
+  };
+}
+
+export interface RewardConfig {
+  waveRules: RewardRule[];
+  durationRule: {
+    thresholdMinutes: number;
+    firstPrize: number;
+  };
+}
+
 export interface DuplicateAnchorPerson {
   id: number;
   name: string;
@@ -192,12 +268,20 @@ declare global {
     getWaveTrendByGender: () => Promise<IpcResult<WaveTrendByGender>>;
     importWave: (
       date: string,
-      rows: { anchorId: string; waveValue: number; rank: number }[]
+      rows: { anchorId: string; waveValue: number; rank: number }[],
+      meta?: ImportMeta
     ) => Promise<IpcResult<ImportResult>>;
     importDuration: (
       date: string,
-      rows: { anchorId: string; totalMinutes: number }[]
+      rows: { anchorId: string; totalMinutes: number }[],
+      meta?: ImportMeta
     ) => Promise<IpcResult<ImportResult>>;
+    getImportPreview: (
+      kind: "wave" | "duration",
+      date: string,
+      anchorIds: string[],
+      meta?: ImportMeta
+    ) => Promise<IpcResult<ImportPreviewResult>>;
     exportWave: (
       date?: string
     ) => Promise<IpcResult<Record<string, string | number>[]>>;
@@ -276,6 +360,7 @@ declare global {
       groupSize?: number
     ) => Promise<IpcResult<PkRosterData>>;
     getFlagWinner: (period: string) => Promise<IpcResult<FlagWinnerData | null>>;
+    getRewardReport: (period: string, config?: RewardConfig) => Promise<IpcResult<RewardReportData>>;
 
     // ── 自动更新 API ──
     checkForUpdates: () => Promise<IpcResult<{ status: string }>>;

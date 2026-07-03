@@ -80,7 +80,7 @@ export function DashboardPage() {
   const genderTrend = useElectronData((api) => api.getWaveTrendByGender());
   const totalTrend = useElectronData((api) => api.getWaveTrendTotal());
   const anchorsRes = useElectronData((api) => api.getAnchors());
-  const rankingRes = useElectronData((api) => api.getWaveRanking(5));
+  const rankingRes = useElectronData((api) => api.getWaveRanking(10));
   const [trendTab, setTrendTab] = useState<TrendTab>("person");
 
   // 多人趋势状态
@@ -124,23 +124,23 @@ export function DashboardPage() {
     );
   }, [anchorsRes.data]);
 
-  // 当主播列表加载完成后，默认选音浪榜前5（保证有数据），榜单为空时回退到列表前5
+  // 当主播列表加载完成后，默认选音浪榜前10（保证有数据），榜单为空时回退到列表前10
   useEffect(() => {
     if (selectedIds.length > 0) return;
     const topIds = (rankingRes.data ?? [])
       .map((r) => r.anchorId)
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, 10);
     if (topIds.length > 0) {
       setSelectedIds(topIds);
       fetchPersonTrends(topIds);
       return;
     }
-    // 榜单加载完成但为空（无音浪数据）时，回退到主播列表前5
+    // 榜单加载完成但为空（无音浪数据）时，回退到主播列表前10
     if (!rankingRes.loading && sortedAnchors.length > 0) {
-      const first5 = sortedAnchors.slice(0, 5).map((a) => a.anchorId);
-      setSelectedIds(first5);
-      fetchPersonTrends(first5);
+      const first10 = sortedAnchors.slice(0, 10).map((a) => a.anchorId);
+      setSelectedIds(first10);
+      fetchPersonTrends(first10);
     }
   }, [
     rankingRes.data,
@@ -321,118 +321,113 @@ export function DashboardPage() {
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <TrendTabs value={trendTab} onChange={setTrendTab} />
-            {/* 主播多选下拉（仅人员对比标签显示） */}
             {trendTab === "person" && (
               <div className="relative">
-              <button
-                onClick={() => setDropdownOpen((v) => !v)}
-                className="app-no-drag flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-accent"
-              >
-                <span className="max-w-[240px] truncate">
-                  {selectedIds.length === 0
-                    ? "选择主播"
-                    : `已选 ${selectedIds.length} 人`}
-                </span>
-                <ChevronDown className="size-4 text-muted-foreground" />
-              </button>
-              {dropdownOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-10"
-                    onClick={() => {
-                      setDropdownOpen(false);
-                      setSearchQuery("");
-                    }}
-                  />
-                  <div className="app-no-drag absolute right-0 top-full z-20 mt-1 w-80 rounded-xl border border-border bg-popover shadow-2xl">
-                    {/* 搜索框 */}
-                    <div className="border-b border-border p-2">
-                      <div className="flex items-center gap-2 rounded-lg bg-background px-3 py-1.5">
-                        <Search className="size-4 text-muted-foreground" />
-                        <input
-                          autoFocus
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="搜索主播名或ID…"
-                          className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                        />
+                <button
+                  onClick={() => setDropdownOpen((v) => !v)}
+                  className="app-no-drag flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-accent"
+                >
+                  <span className="max-w-[240px] truncate">
+                    {selectedIds.length === 0
+                      ? "选择主播"
+                      : `已选 ${selectedIds.length} 人`}
+                  </span>
+                  <ChevronDown className="size-4 text-muted-foreground" />
+                </button>
+                {dropdownOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => {
+                        setDropdownOpen(false);
+                        setSearchQuery("");
+                      }}
+                    />
+                    <div className="app-no-drag absolute right-0 top-full z-20 mt-1 w-80 rounded-xl border border-border bg-popover shadow-2xl">
+                      <div className="border-b border-border p-2">
+                        <div className="flex items-center gap-2 rounded-lg bg-background px-3 py-1.5">
+                          <Search className="size-4 text-muted-foreground" />
+                          <input
+                            autoFocus
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="搜索主播名或ID..."
+                            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                          />
+                        </div>
                       </div>
-                    </div>
-                    {/* 已选标签 */}
-                    {selectedIds.length > 0 && (
-                      <div className="flex flex-wrap gap-1 border-b border-border p-2">
-                        {selectedIds.map((id) => {
-                          const name = selectedMap.get(id) || id;
-                          const idx = selectedIds.indexOf(id);
-                          const color = PERSON_COLORS[idx % PERSON_COLORS.length];
-                          return (
-                            <span
-                              key={id}
-                              className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-                              style={{ backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`, color }}
-                            >
-                              {name}
-                              <button
-                                onClick={() => {
-                                  const anchor = sortedAnchors.find(
-                                    (a) => a.anchorId === id
-                                  );
-                                  if (anchor) toggleAnchor(anchor);
-                                }}
-                                className="hover:opacity-70"
+                      {selectedIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1 border-b border-border p-2">
+                          {selectedIds.map((id) => {
+                            const name = selectedMap.get(id) || id;
+                            const idx = selectedIds.indexOf(id);
+                            const color = PERSON_COLORS[idx % PERSON_COLORS.length];
+                            return (
+                              <span
+                                key={id}
+                                className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+                                style={{ backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`, color }}
                               >
-                                <X className="size-3" />
-                              </button>
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {/* 列表 */}
-                    <div className="max-h-60 overflow-auto p-1">
-                      {filteredAnchors.map((a) => {
-                        const isSelected = selectedIds.includes(a.anchorId);
-                        const idx = selectedIds.indexOf(a.anchorId);
-                        const color =
-                          PERSON_COLORS[idx % PERSON_COLORS.length];
-                        return (
-                          <button
-                            key={a.id}
-                            onClick={() => toggleAnchor(a)}
-                            className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent ${
-                              isSelected ? "bg-accent/50 font-medium" : ""
-                            }`}
-                          >
-                            <span className="flex items-center gap-2 truncate">
-                              {isSelected && (
-                                <span
-                                  className="size-2.5 shrink-0 rounded-full"
-                                  style={{ backgroundColor: color }}
-                                />
-                              )}
-                              <span className="truncate">{a.name}</span>
-                            </span>
-                            {a.gender === "male" ? (
-                              <Badge className="bg-chart-2/15 text-chart-2 hover:bg-chart-2/15 ml-2 shrink-0">
-                                男
-                              </Badge>
-                            ) : a.gender === "female" ? (
-                              <Badge className="bg-chart-1/15 text-chart-1 hover:bg-chart-1/15 ml-2 shrink-0">
-                                女
-                              </Badge>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                      {filteredAnchors.length === 0 && (
-                        <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                          未找到匹配主播
+                                {name}
+                                <button
+                                  onClick={() => {
+                                    const anchor = sortedAnchors.find(
+                                      (a) => a.anchorId === id
+                                    );
+                                    if (anchor) toggleAnchor(anchor);
+                                  }}
+                                  className="hover:opacity-70"
+                                >
+                                  <X className="size-3" />
+                                </button>
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
+                      <div className="max-h-60 overflow-auto p-1">
+                        {filteredAnchors.map((a) => {
+                          const isSelected = selectedIds.includes(a.anchorId);
+                          const idx = selectedIds.indexOf(a.anchorId);
+                          const color = PERSON_COLORS[idx % PERSON_COLORS.length];
+                          return (
+                            <button
+                              key={a.id}
+                              onClick={() => toggleAnchor(a)}
+                              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm hover:bg-accent ${
+                                isSelected ? "bg-accent/50 font-medium" : ""
+                              }`}
+                            >
+                              <span className="flex items-center gap-2 truncate">
+                                {isSelected && (
+                                  <span
+                                    className="size-2.5 shrink-0 rounded-full"
+                                    style={{ backgroundColor: color }}
+                                  />
+                                )}
+                                <span className="truncate">{a.name}</span>
+                              </span>
+                              {a.gender === "male" ? (
+                                <Badge className="ml-2 shrink-0 bg-chart-2/15 text-chart-2 hover:bg-chart-2/15">
+                                  男
+                                </Badge>
+                              ) : a.gender === "female" ? (
+                                <Badge className="ml-2 shrink-0 bg-chart-1/15 text-chart-1 hover:bg-chart-1/15">
+                                  女
+                                </Badge>
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                        {filteredAnchors.length === 0 && (
+                          <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                            未找到匹配主播
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -445,95 +440,92 @@ export function DashboardPage() {
               <ErrorState
                 message={personError}
                 onRetry={() => fetchPersonTrends(selectedIds)}
-            />
-          ) : !personTrends ||
-            personTrends.length === 0 ||
-            mergedTrendData.length === 0 ? (
-            <EmptyState label="暂无音浪数据" />
-          ) : (
-            <>
-              {/* 图例 */}
-              <div className="mb-3 flex flex-wrap items-center gap-3">
-                <Badge variant="secondary">{mergedTrendData.length} 期</Badge>
-                {personTrends!.map((pt, i) => {
-                  const color = PERSON_COLORS[i % PERSON_COLORS.length];
-                  const total = pt.data.reduce((s, p) => s + p.total, 0);
-                  return (
-                    <span
-                      key={pt.anchorId}
-                      className="flex items-center gap-1.5 text-xs font-medium"
-                      style={{ color }}
-                    >
+              />
+            ) : !personTrends ||
+              personTrends.length === 0 ||
+              mergedTrendData.length === 0 ? (
+              <EmptyState label="暂无音浪数据" />
+            ) : (
+              <>
+                <div className="mb-3 flex flex-wrap items-center gap-3">
+                  <Badge variant="secondary">{mergedTrendData.length} 期</Badge>
+                  {personTrends.map((pt, i) => {
+                    const color = PERSON_COLORS[i % PERSON_COLORS.length];
+                    const total = pt.data.reduce((s, p) => s + p.total, 0);
+                    return (
                       <span
-                        className="size-2.5 rounded-full"
-                        style={{ backgroundColor: color }}
-                      />
-                      {pt.name}
-                      <span className="text-muted-foreground">
-                        {formatWave(total)}
-                      </span>
-                    </span>
-                  );
-                })}
-              </div>
-              {/* 多线折线图 */}
-              <div className="h-[360px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
-                    data={mergedTrendData}
-                    margin={{ left: 4, right: 12, top: 8, bottom: 0 }}
-                  >
-                    <CartesianGrid
-                      vertical={false}
-                      strokeDasharray="3 3"
-                    />
-                    <XAxis
-                      dataKey="date"
-                      tickLine={false}
-                      axisLine={false}
-                      tickMargin={8}
-                      minTickGap={24}
-                      tickFormatter={(v: string) => v.slice(5)}
-                    />
-                    <YAxis
-                      tickLine={false}
-                      axisLine={false}
-                      width={56}
-                      tickFormatter={(v: number) => formatWave(v)}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        borderRadius: "8px",
-                        border: "1px solid var(--border)",
-                        backgroundColor: "var(--popover)",
-                      }}
-                      labelFormatter={(label) => `日期 ${label}`}
-                      formatter={(value, key) => {
-                        const name = selectedMap.get(String(key)) || String(key);
-                        return [formatWave(Number(value)), name];
-                      }}
-                    />
-                    {personTrends!.map((pt, i) => {
-                      const color =
-                        PERSON_COLORS[i % PERSON_COLORS.length];
-                      return (
-                        <Line
-                          key={pt.anchorId}
-                          dataKey={pt.anchorId}
-                          type="monotone"
-                          stroke={color}
-                          strokeWidth={2}
-                          dot={{ r: 3, fill: color }}
-                          activeDot={{ r: 5 }}
-                          connectNulls
+                        key={pt.anchorId}
+                        className="flex items-center gap-1.5 text-xs font-medium"
+                        style={{ color }}
+                      >
+                        <span
+                          className="size-2.5 rounded-full"
+                          style={{ backgroundColor: color }}
                         />
-                      );
-                    })}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </>
-              )
+                        {pt.name}
+                        <span className="text-muted-foreground">
+                          {formatWave(total)}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+                <div className="h-[360px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart
+                      data={mergedTrendData}
+                      margin={{ left: 4, right: 12, top: 8, bottom: 0 }}
+                    >
+                      <CartesianGrid
+                        vertical={false}
+                        strokeDasharray="3 3"
+                      />
+                      <XAxis
+                        dataKey="date"
+                        tickLine={false}
+                        axisLine={false}
+                        tickMargin={8}
+                        minTickGap={24}
+                        tickFormatter={(v: string) => v.slice(5)}
+                      />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        width={56}
+                        tickFormatter={(v: number) => formatWave(v)}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          borderRadius: "8px",
+                          border: "1px solid var(--border)",
+                          backgroundColor: "var(--popover)",
+                        }}
+                        labelFormatter={(label) => `日期 ${label}`}
+                        formatter={(value, key) => {
+                          const name = selectedMap.get(String(key)) || String(key);
+                          return [formatWave(Number(value)), name];
+                        }}
+                      />
+                      {personTrends.map((pt, i) => {
+                        const color = PERSON_COLORS[i % PERSON_COLORS.length];
+                        return (
+                          <Line
+                            key={pt.anchorId}
+                            dataKey={pt.anchorId}
+                            type="monotone"
+                            stroke={color}
+                            strokeWidth={2}
+                            dot={{ r: 3, fill: color }}
+                            activeDot={{ r: 5 }}
+                            connectNulls
+                          />
+                        );
+                      })}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )
           ) : (
             <SummaryTrend
               tab={trendTab}

@@ -924,7 +924,6 @@ function DuplicateAnchorsDialog({
 
   useEffect(() => {
     if (open) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const handleDelete = async (personId: number) => {
