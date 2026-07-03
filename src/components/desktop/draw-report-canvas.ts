@@ -216,50 +216,60 @@ function buildColumns(
 }
 
 /* ────────────────── 配色常量 ────────────────── */
+/* 暖白纸质底 + 靛蓝主色 + 琥珀/翠绿点缀 */
 
 const C = {
-  bg: "#F1F5F9",
-  cardBg: "#FFFFFF",
-  titleGradStart: "#0F172A",
-  titleGradEnd: "#334155",
-  headerBg: "#F8FAFC",
-  headerBorder: "#CBD5E1",
-  headerText: "#334155",
-  rowOdd: "#FFFFFF",
-  rowEven: "#F8FAFC",
-  rowBorder: "#E2E8F0",
-  rank1Bg: "#FEF3C7",
-  rank2Bg: "#F1F5F9",
-  rank3Bg: "#FFEDD5",
-  nameText: "#0F172A",
-  nameTop: "#0F172A",
-  waveTrackBg: "#E2E8F0",
-  waveBarGradStart: "#3B82F6",
-  waveBarGradEnd: "#60A5FA",
-  waveText: "#1E293B",
-  waveInactive: "#EF4444",
-  totalWaveText: "#475569",
+  // 外背景 — 暖灰白
+  bg: "#FAF9F6",
+  // 卡片底 — 纯白微暖
+  cardBg: "#FFFDF8",
+  // 标题栏 — 深靛蓝渐变
+  titleGradStart: "#1E1B4B",
+  titleGradEnd: "#3730A3",
+  // 表头
+  headerBg: "#F5F3FF",
+  headerBorder: "#C7D2FE",
+  headerText: "#3730A3",
+  // 数据行
+  rowOdd: "#FFFDF8",
+  rowEven: "#F8F7FE",
+  rowBorder: "#E9E7F4",
+  // 前3名行底色
+  rank1Bg: "#FEFCE8",
+  rank2Bg: "#F8F7FE",
+  rank3Bg: "#FFF7ED",
+  // 文字
+  nameText: "#1E1B4B",
+  nameTop: "#1E1B4B",
+  // 音浪进度条
+  waveTrackBg: "#E9E7F4",
+  waveBarGradStart: "#4F46E5",
+  waveBarGradEnd: "#818CF8",
+  waveText: "#1E1B4B",
+  waveInactive: "#DC2626",
+  totalWaveText: "#5B5694",
   durationText: "#7C3AED",
-  masterText: "#64748B",
-  footerBg: "#F8FAFC",
-  footerBorder: "#E2E8F0",
-  footerTitle: "#0F172A",
-  footerMeta: "#64748B",
+  masterText: "#8B89A6",
+  // 底部
+  footerBg: "#F5F3FF",
+  footerBorder: "#C7D2FE",
+  footerTitle: "#1E1B4B",
+  footerMeta: "#8B89A6",
   footerInactive: "#DC2626",
   footerInactiveText: "#991B1B",
 };
 
 const TIER_COLORS: Record<string, { bg: string; border: string; text: string }> = {
-  A: { bg: "rgba(16, 185, 129, 0.12)", border: "rgba(16, 185, 129, 0.3)", text: "#059669" },
-  B: { bg: "rgba(59, 130, 246, 0.12)", border: "rgba(59, 130, 246, 0.3)", text: "#2563EB" },
-  C: { bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.3)", text: "#D97706" },
-  D: { bg: "rgba(244, 63, 94, 0.12)", border: "rgba(244, 63, 94, 0.3)", text: "#E11D48" },
+  A: { bg: "rgba(20, 184, 166, 0.12)", border: "rgba(20, 184, 166, 0.35)", text: "#0D9488" },
+  B: { bg: "rgba(79, 70, 229, 0.12)", border: "rgba(79, 70, 229, 0.35)", text: "#4338CA" },
+  C: { bg: "rgba(245, 158, 11, 0.12)", border: "rgba(245, 158, 11, 0.35)", text: "#B45309" },
+  D: { bg: "rgba(239, 68, 68, 0.10)", border: "rgba(239, 68, 68, 0.30)", text: "#B91C1C" },
 };
 
 const RANK_MEDAL_COLORS: Record<number, { gradStart: string; gradEnd: string; text: string }> = {
-  1: { gradStart: "#F59E0B", gradEnd: "#FBBF24", text: "#78350F" },
-  2: { gradStart: "#94A3B8", gradEnd: "#CBD5E1", text: "#334155" },
-  3: { gradStart: "#D97706", gradEnd: "#F59E0B", text: "#78350F" },
+  1: { gradStart: "#D97706", gradEnd: "#FBBF24", text: "#78350F" },
+  2: { gradStart: "#64748B", gradEnd: "#94A3B8", text: "#334155" },
+  3: { gradStart: "#B45309", gradEnd: "#D97706", text: "#78350F" },
 };
 
 /* ────────────────── 主绘制函数 ────────────────── */
@@ -368,8 +378,8 @@ export function drawReportToCanvas(
   // 标题左侧装饰条
   const decoW = 5 * scale;
   const decoGrad = ctx.createLinearGradient(0, y, 0, y + headerHeight);
-  decoGrad.addColorStop(0, "#3B82F6");
-  decoGrad.addColorStop(1, "#60A5FA");
+  decoGrad.addColorStop(0, "#818CF8");
+  decoGrad.addColorStop(1, "#C4B5FD");
   ctx.fillStyle = decoGrad;
   ctx.fillRect(cardX + tablePaddingX, y + headerHeight * 0.25, decoW, headerHeight * 0.5);
 
