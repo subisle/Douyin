@@ -12,7 +12,7 @@ export function getFamilyDisplayName(node: { name: string; generation: number | 
 
   const placeholder = raw.match(ROOT_PLACEHOLDER_NAME_RE);
   if (isRoot && node.generation === 0 && placeholder) {
-    return `${placeholder[1]}系`;
+    return `${placeholder[1]}字辈`;
   }
 
   return raw;

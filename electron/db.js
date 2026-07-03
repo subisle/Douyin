@@ -111,7 +111,7 @@ async function getAnchors() {
     byPerson.get(acc.person_id).push(acc);
   }
 
-  return persons.map((p) => {
+  return persons.filter((p) => (byPerson.get(p.id) || []).length > 0).map((p) => {
     const list = byPerson.get(p.id) || [];
     const primary = list.find((a) => a.is_primary === 1) || list[0];
     const aliases = primary
@@ -134,15 +134,53 @@ async function getAnchors() {
 }
 
 /**
- * 族谱：返回带师父名字的人员关系
+ * 族谱：返回带师父名字的主播关系。
+ * 只展示主播列表中有账号绑定的人员，并过滤不再参与族谱展示的历史分支。
  */
 async function getFamilyTree() {
   const db = getPool();
   const [persons] = await db.query(
     "SELECT id, name, gender, master_id, generation FROM persons ORDER BY generation IS NULL, generation, id"
   );
-  const nameById = new Map(persons.map((p) => [p.id, p.name]));
-  return persons.map((p) => ({
+
+  const [accounts] = await db.query(
+    "SELECT DISTINCT person_id FROM accounts WHERE person_id IS NOT NULL AND anchor_id IS NOT NULL AND anchor_id != ''"
+  );
+  const anchorPersonIds = new Set(accounts.map((a) => Number(a.person_id)));
+  const hiddenNames = new Set(["狼帅", "狼彬"]);
+  const hiddenIds = new Set();
+  const childrenByMaster = new Map();
+
+  for (const p of persons) {
+    if (p.master_id == null) continue;
+    const masterId = Number(p.master_id);
+    if (!childrenByMaster.has(masterId)) childrenByMaster.set(masterId, []);
+    childrenByMaster.get(masterId).push(Number(p.id));
+  }
+
+  const markHiddenBranch = (rootId) => {
+    const stack = [Number(rootId)];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (hiddenIds.has(id)) continue;
+      hiddenIds.add(id);
+      const children = childrenByMaster.get(id) || [];
+      stack.push(...children);
+    }
+  };
+
+  for (const p of persons) {
+    const name = String(p.name || "").trim();
+    if (/^晓[0０]$/.test(name)) markHiddenBranch(p.id);
+    if (hiddenNames.has(name)) hiddenIds.add(Number(p.id));
+  }
+
+  const visiblePersons = persons.filter(
+    (p) => anchorPersonIds.has(Number(p.id)) && !hiddenIds.has(Number(p.id))
+  );
+  const nameById = new Map(visiblePersons.map((p) => [p.id, p.name]));
+
+  return visiblePersons.map((p) => ({
     id: p.id,
     name: p.name || "",
     gender: p.gender || "",
