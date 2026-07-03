@@ -140,7 +140,8 @@ export function DailyReportPage() {
       date,
       rows,
       gender: genderText === "男" ? "male" : "female",
-      customTitle: `${genderText}主播数据统计`,
+      customTitle: "薇笑传媒主播数据统计",
+      subtitle: `Data Report • ${date}`,
       scale: 2,
       visibleColumns,
     });
