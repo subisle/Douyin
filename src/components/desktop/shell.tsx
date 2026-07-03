@@ -36,6 +36,10 @@ export function DesktopShell() {
     let dragDepth = 0;
     const hasFiles = (event: DragEvent) =>
       Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const isImportDropZone = (event: DragEvent) => {
+      const target = event.target;
+      return target instanceof Element && Boolean(target.closest("[data-import-drop-zone='true']"));
+    };
     const onDragEnter = (event: DragEvent) => {
       if (!hasFiles(event)) return;
       event.preventDefault();
@@ -58,21 +62,22 @@ export function DesktopShell() {
       event.preventDefault();
       dragDepth = 0;
       setDraggingFile(false);
+      if (isImportDropZone(event)) return;
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       setDroppedImportFile({ id: Date.now(), file });
       setCurrentPage("data");
     };
 
-    window.addEventListener("dragenter", onDragEnter);
-    window.addEventListener("dragover", onDragOver);
-    window.addEventListener("dragleave", onDragLeave);
-    window.addEventListener("drop", onDrop);
+    window.addEventListener("dragenter", onDragEnter, true);
+    window.addEventListener("dragover", onDragOver, true);
+    window.addEventListener("dragleave", onDragLeave, true);
+    window.addEventListener("drop", onDrop, true);
     return () => {
-      window.removeEventListener("dragenter", onDragEnter);
-      window.removeEventListener("dragover", onDragOver);
-      window.removeEventListener("dragleave", onDragLeave);
-      window.removeEventListener("drop", onDrop);
+      window.removeEventListener("dragenter", onDragEnter, true);
+      window.removeEventListener("dragover", onDragOver, true);
+      window.removeEventListener("dragleave", onDragLeave, true);
+      window.removeEventListener("drop", onDrop, true);
     };
   }, []);
 

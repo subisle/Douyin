@@ -451,6 +451,7 @@ export function ImportPage({
           }}
         />
         <div
+          data-import-drop-zone="true"
           onDragEnter={(e) => {
             e.preventDefault();
             e.stopPropagation();
