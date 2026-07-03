@@ -282,19 +282,10 @@ function drawTrophy(
  *  配色 — 严格对照 HTML 模板 CSS 变量
  * ═══════════════════════════════════════════════════════════════ */
 
-// ── 弥散光背景（4个 radial-gradient） ──
-const BG_COLORS = [
-  { pos: [0.8, 0.0], color: "hsla(189,100%,75%,0.5)" },
-  { pos: [0.0, 0.5], color: "hsla(340,100%,86%,0.6)" },
-  { pos: [0.8, 1.0], color: "hsla(245,100%,82%,0.6)" },
-  { pos: [0.0, 0.0], color: "hsla(263,100%,86%,0.6)" },
-];
+// ── 背景已改为纯色，BG_COLORS 已移除 ──
 
 // ── 玻璃卡片 ──
 const C = {
-  bgBase: "#dfecfb",
-  glassBg: "rgba(255, 255, 255, 0.85)",
-  glassBorder: "rgba(255, 255, 255, 0.5)",
 
   textMain: "#1e293b",
   textSub: "#64748b",
@@ -486,40 +477,27 @@ export function drawReportToCanvas(
 
   canvas.width = containerW;
   canvas.height = totalH;
-
-  // ══════ 弥散光背景 ══════
-  ctx.fillStyle = C.bgBase;
+  // ════ 纯色背景（去除弥散光渐变） ════
+  ctx.fillStyle = "#f0f2f5";
   ctx.fillRect(0, 0, containerW, totalH);
 
-  BG_COLORS.forEach(({ pos, color }) => {
-    const cx = pos[0] * containerW;
-    const cy = pos[1] * totalH;
-    const radius = Math.max(containerW, totalH) * 0.7;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
-    grad.addColorStop(0, color);
-    grad.addColorStop(0.5, color.replace(/[\d.]+\)$/, "0)"));
-    grad.addColorStop(1, color.replace(/[\d.]+\)$/, "0)"));
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, containerW, totalH);
-  });
-
-  // ══════ 玻璃卡片 ══════
+  // ════ 卡片：纯白背景（去除玻璃拟态） ════
   const cardX = margin;
   const cardY = margin;
   const cardH = totalH - margin * 2;
 
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.15)";
-  ctx.shadowBlur = 50 * scale;
-  ctx.shadowOffsetY = 25 * scale;
-  ctx.fillStyle = C.glassBg;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.08)";
+  ctx.shadowBlur = 30 * scale;
+  ctx.shadowOffsetY = 8 * scale;
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
   ctx.fill();
   ctx.restore();
 
-  // 玻璃边框
-  ctx.strokeStyle = C.glassBorder;
+  // 卡片边框（浅灰）
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.06)";
   ctx.lineWidth = 1 * scale;
   ctx.beginPath();
   drawRoundRect(ctx, cardX, cardY, cardW, cardH, cornerRadius);
