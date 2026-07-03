@@ -515,7 +515,7 @@ export function drawReportToCanvas(
   drawDot(ctx, margin + cardW * 0.05, margin * 0.5, 12 * scale, K.pink, 0.15);
   drawDot(ctx, containerW - margin - cardW * 0.08, margin * 0.6, 8 * scale, K.purple, 0.20);
   drawDot(ctx, margin + cardW * 0.02, totalH - margin * 0.7, 10 * scale, K.green, 0.15);
-  drawDot(ctx, containerW - margin - cardW * 0.04, totalH - margin * 0.5, 6 * scale, K.yellow.replace("#", ""), 0.25);
+  drawDot(ctx, containerW - margin - cardW * 0.04, totalH - margin * 0.5, 6 * scale, K.yellow, 0.25);
   drawDot(ctx, containerW * 0.5, totalH - margin * 0.3, 5 * scale, K.pink, 0.20);
 
   // 小星星装饰
