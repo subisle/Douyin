@@ -55,24 +55,21 @@ export function DataPage({
 
       {tab === "report" ? (
         <DailyReportPage />
+      ) : tab === "import" ? (
+        <Card>
+          <CardContent className="space-y-6 pt-6 pb-8">
+            <ImportPage
+              incomingFile={incomingFile}
+              onIncomingFileConsumed={onIncomingFileConsumed}
+            />
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* 导入区域 */}
-          <Card>
-            <CardContent className="space-y-6 pt-6 pb-8">
-              <ImportPage
-                incomingFile={incomingFile}
-                onIncomingFileConsumed={onIncomingFileConsumed}
-              />
-            </CardContent>
-          </Card>
-          {/* 导出区域 */}
-          <Card>
-            <CardContent className="space-y-6 pt-6 pb-8">
-              <ExportPage />
-            </CardContent>
-          </Card>
-        </div>
+        <Card>
+          <CardContent className="space-y-6 pt-6 pb-8">
+            <ExportPage />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

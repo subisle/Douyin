@@ -33,6 +33,13 @@ export interface ParseSummary {
   totalRows: number;
 }
 
+function normalizeHeader(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_＿\-—–·.。:：/\\|()[\]{}（）【】<>《》]/g, "");
+}
+
 /** 音浪值：支持 "12.5万" / "125000" / "12,500" */
 function parseWaveValue(value: unknown): number {
   if (typeof value === "number") return value;
@@ -83,19 +90,61 @@ export function parseCsvFile(file: File, kind: ImportKind): Promise<ParsedRow[]>
         const rows: ParsedRow[] = [];
         // 列名映射：按优先级尝试多种可能的列名（大小写不敏感）
         const findCol = (...names: string[]) => {
+          const normalizedNames = names.map(normalizeHeader);
           for (const key of Object.keys(results.data[0] ?? {})) {
-            const k = key.trim();
-            if (names.some((n) => k.toLowerCase() === n.toLowerCase())) return key;
+            if (normalizedNames.includes(normalizeHeader(key))) return key;
           }
           return undefined;
+        };
+        const findNameCol = () => {
+          const direct = findCol(
+            "主播名",
+            "主播名称",
+            "主播昵称",
+            "昵称",
+            "用户昵称",
+            "用户名称",
+            "用户",
+            "姓名",
+            "名字",
+            "抖音昵称",
+            "抖音名",
+            "抖音名称",
+            "账号昵称",
+            "账号名称",
+            "达人昵称",
+            "达人名称",
+            "作者昵称",
+            "作者名称",
+            "成员",
+            "成员名称",
+            "主播",
+            "anchor_name",
+            "anchorName",
+            "name",
+            "nickname",
+            "nick_name",
+            "nickName"
+          );
+          if (direct) return direct;
+
+          return Object.keys(results.data[0] ?? {}).find((key) => {
+            const k = normalizeHeader(key);
+            if (!k) return false;
+            if (/(id|uid|rank|wave|duration|value|time)/i.test(k)) return false;
+            if (/[号码值数额次分秒时长音浪排名]/.test(k)) return false;
+            return ["昵称", "名称", "姓名", "名字", "主播名", "用户名", "达人名", "作者名"].some((token) =>
+              k.includes(token)
+            );
+          });
         };
 
         for (const row of results.data) {
           // 主播 ID：支持「主播id / 主播ID / 抖音号 / 抖音ID / anchor_id / uid」
-          const idCol = findCol("主播id", "主播ID", "抖音号", "抖音ID", "anchor_id", "uid");
+          const idCol = findCol("主播id", "主播ID", "主播账号", "抖音号", "抖音ID", "anchor_id", "anchorId", "uid");
           const anchorIdRaw = String(row[idCol ?? ""] ?? "").trim();
           // 名称（仅用于展示，不影响匹配）
-          const nameCol = findCol("主播名", "昵称", "主播", "anchor_name", "name");
+          const nameCol = findNameCol();
           const anchorName = String(row[nameCol ?? ""] ?? "").trim();
           // 数值列：音浪或时长
           const valCol = kind === "wave"
@@ -209,26 +258,63 @@ export interface AnchorImportRow {
   name: string;
 }
 
-export function parseAnchorsCsv(file: File): Promise<AnchorImportRow[]> {
+export interface AnchorImportSummary {
+  rows: AnchorImportRow[];
+  totalRows: number;
+  skipped: number;
+  duplicateRows: number;
+}
+
+export function parseAnchorsCsvWithSummary(file: File): Promise<AnchorImportSummary> {
   return new Promise((resolve, reject) => {
     Papa.parse<Record<string, string>>(file, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
         const findCol = (...names: string[]) => {
+          const normalizedNames = names.map(normalizeHeader);
           for (const key of Object.keys(results.data[0] ?? {})) {
-            const k = key.trim();
-            if (names.some((n) => k.toLowerCase() === n.toLowerCase())) return key;
+            if (normalizedNames.includes(normalizeHeader(key))) return key;
           }
           return undefined;
         };
 
         // anchorId 列：优先主播id/anchor_id/uid，回退到抖音号
-        const idCol = findCol("主播id", "主播ID", "anchor_id", "uid");
-        const dyCol = findCol("抖音号", "抖音ID", "douyin_no", "douyin_id");
-        const nameCol = findCol("主播名", "昵称", "主播", "anchor_name", "name");
+        const idCol = findCol("主播id", "主播ID", "主播账号", "anchor_id", "anchorId", "uid");
+        const dyCol = findCol("抖音号", "抖音ID", "douyin_no", "douyin_id", "douyinNo");
+        const nameCol = findCol(
+          "主播名",
+          "主播名称",
+          "主播昵称",
+          "昵称",
+          "用户昵称",
+          "用户名称",
+          "用户",
+          "姓名",
+          "名字",
+          "抖音昵称",
+          "抖音名",
+          "抖音名称",
+          "账号昵称",
+          "账号名称",
+          "达人昵称",
+          "达人名称",
+          "作者昵称",
+          "作者名称",
+          "成员",
+          "成员名称",
+          "主播",
+          "anchor_name",
+          "anchorName",
+          "name",
+          "nickname",
+          "nick_name",
+          "nickName"
+        );
 
         const map = new Map<string, AnchorImportRow>();
+        let skipped = 0;
+        let duplicateRows = 0;
 
         for (const row of results.data) {
           let anchorId = String(row[idCol ?? ""] ?? "").trim();
@@ -237,10 +323,14 @@ export function parseAnchorsCsv(file: File): Promise<AnchorImportRow[]> {
 
           // 如果没有主播id列，用抖音号作为 anchorId
           if (!anchorId && douyinNo) anchorId = douyinNo;
-          if (!anchorId) continue;
+          if (!anchorId) {
+            skipped++;
+            continue;
+          }
 
           const existing = map.get(anchorId);
           if (existing) {
+            duplicateRows++;
             // 合并：填充缺失字段
             if (!existing.name && name) existing.name = name;
             if (!existing.douyinNo && douyinNo) existing.douyinNo = douyinNo;
@@ -249,9 +339,18 @@ export function parseAnchorsCsv(file: File): Promise<AnchorImportRow[]> {
           }
         }
 
-        resolve(Array.from(map.values()));
+        resolve({
+          rows: Array.from(map.values()),
+          totalRows: results.data.length,
+          skipped,
+          duplicateRows,
+        });
       },
       error: (err) => reject(err),
     });
   });
+}
+
+export function parseAnchorsCsv(file: File): Promise<AnchorImportRow[]> {
+  return parseAnchorsCsvWithSummary(file).then((summary) => summary.rows);
 }

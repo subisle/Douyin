@@ -290,7 +290,7 @@ function GroupCard({
   );
 }
 
-/* ---------- 导出专用：Desktop风格两列对比 ---------- */
+/* ---------- 导出专用：精简分组名单 ---------- */
 function ExportCompareBoard({
   period,
   maleGroups,
@@ -300,203 +300,99 @@ function ExportCompareBoard({
   maleGroups: GroupState[];
   femaleGroups: GroupState[];
 }) {
-  const PANEL_BG = "#FFFFFF";
-  const CARD_BG = "#FFFFFF";
   const TEXT_MAIN = "#0F172A";
   const TEXT_MUTED = "#64748B";
-  const TEXT_SOFT = "#334155";
-  const YELLOW = "#B45309";
-  const GREEN = "#047857";
-  const RED = "#DC2626";
   const BORDER = "#E2E8F0";
-  const BLUE = {
-    text: "#0369A1",
-    soft: "#E0F2FE",
-    line: "#7DD3FC",
-    chip: "#BAE6FD",
-  };
-  const PINK = {
-    text: "#BE185D",
-    soft: "#FCE7F3",
-    line: "#F9A8D4",
-    chip: "#FBCFE8",
-  };
+  const BLUE = { text: "#0369A1", soft: "#E0F2FE", line: "#38BDF8" };
+  const PINK = { text: "#BE185D", soft: "#FCE7F3", line: "#F472B6" };
 
   const periodDisplay = (() => {
     const [y, m] = period.split("-");
     return `${y}年${parseInt(m, 10)}月`;
   })();
 
-  const summarize = (groups: GroupState[]) => {
-    const members = groups.flatMap((group) => group.members);
-    return {
-      members,
-      memberCount: members.length,
-      groupCount: groups.length,
-      totalWave: members.reduce((sum, member) => sum + member.wave, 0),
-      totalTrimmed: members.reduce((sum, member) => sum + member.trimmedAvg, 0),
-      activeCount: members.filter((member) => member.wave > 0).length,
-    };
-  };
-
-  const maleSummary = summarize(maleGroups);
-  const femaleSummary = summarize(femaleGroups);
   const maxGroupCount = Math.max(1, maleGroups.length, femaleGroups.length);
-  const boardWidth = Math.max(1600, maxGroupCount * 282 + 68);
-  const waveDiff = maleSummary.totalWave - femaleSummary.totalWave;
-  const waveLeadText = waveDiff === 0
-    ? "男女总音浪持平"
-    : `${waveDiff > 0 ? "男团领先" : "女团领先"} ${formatPkWave(Math.abs(waveDiff))}`;
-  const waveLeadColor = waveDiff === 0 ? TEXT_SOFT : waveDiff > 0 ? BLUE.text : PINK.text;
+  const boardWidth = Math.max(1280, maxGroupCount * 230 + 96);
 
-  const metricBox = (label: string, value: string, color: string) => (
-    <div style={{
-      border: `1px solid ${BORDER}`,
-      background: "#FFFFFF",
-      borderRadius: 8,
-      padding: "10px 12px",
-      minWidth: 118,
-    }}>
-      <div style={{ color: TEXT_MUTED, fontSize: 12, marginBottom: 4 }}>{label}</div>
-      <div style={{ color, fontSize: 18, fontWeight: 800, fontFamily: "DIN Alternate, Menlo, Consolas, monospace" }}>
-        {value}
-      </div>
-    </div>
-  );
-
-  const renderMemberRow = (
-    member: PkMember,
-    index: number,
-    captainId: number | null,
-    accent: typeof BLUE
-  ) => {
-    const isCaptain = captainId === member.personId;
-    return (
-      <div
-        key={member.personId}
-        style={{
-          display: "grid",
-          gridTemplateColumns: "30px minmax(0, 1fr) 76px 72px",
-          alignItems: "center",
-          gap: 7,
-          padding: "7px 8px",
-          borderRadius: 8,
-          background: index % 2 === 0 ? "#FFFFFF" : "#F8FAFC",
-          border: "1px solid #E2E8F0",
-        }}
-      >
-        <div style={{
-          color: accent.text,
-          fontWeight: 800,
-          fontSize: 14,
-          fontFamily: "DIN Alternate, Menlo, Consolas, monospace",
-        }}>
-          #{index + 1}
-        </div>
-        <div style={{
-          color: TEXT_MAIN,
-          fontSize: 14,
-          fontWeight: 700,
-          overflow: "hidden",
-          whiteSpace: "nowrap",
-          textOverflow: "ellipsis",
-        }}>
-          {member.name}
-          {isCaptain && <span style={{ color: YELLOW, marginLeft: 6, fontSize: 13 }}>队长</span>}
-        </div>
-        <div style={{
-          textAlign: "right",
-          color: member.wave > 0 ? YELLOW : RED,
-          fontSize: 14,
-          fontWeight: 800,
-          fontFamily: "DIN Alternate, Menlo, Consolas, monospace",
-        }}>
-          {member.wave > 0 ? formatPkWave(member.wave) : "未开播"}
-        </div>
-        <div style={{
-          textAlign: "right",
-          color: TEXT_SOFT,
-          fontSize: 13,
-          fontWeight: 700,
-          fontFamily: "DIN Alternate, Menlo, Consolas, monospace",
-        }}>
-          {member.wave > 0 ? formatPkWave(member.trimmedAvg) : "-"}
-        </div>
-      </div>
-    );
-  };
-
-  const renderGroup = (group: GroupState, index: number, accent: typeof BLUE) => {
-    const groupTotal = group.members.reduce((sum, member) => sum + member.wave, 0);
-    const groupTrimmed = group.members.reduce((sum, member) => sum + member.trimmedAvg, 0);
+  const renderGroup = (group: GroupState, accent: typeof BLUE) => {
     const captain = group.members.find((member) => member.personId === group.captainId);
-    const members = [...group.members].sort((left, right) => {
-      const waveDiff = right.wave - left.wave;
-      if (waveDiff !== 0) return waveDiff;
-      return right.trimmedAvg - left.trimmedAvg;
-    });
+    const members = [...group.members];
 
     return (
       <div
         key={group.key}
         style={{
-          background: CARD_BG,
+          background: "#FFFFFF",
           border: `1px solid ${BORDER}`,
-          borderLeft: `5px solid ${accent.line}`,
-          borderRadius: 12,
-          padding: 10,
-          boxShadow: "0 8px 18px rgba(15, 23, 42, 0.07)",
+          borderTop: `5px solid ${accent.line}`,
+          borderRadius: 14,
+          padding: 12,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-          <div>
-            <div style={{ color: accent.text, fontSize: 17, fontWeight: 900 }}>{group.label}</div>
-            <div style={{ color: TEXT_MUTED, fontSize: 12, marginTop: 2 }}>
-              队长 {captain?.name || "-"} · {group.members.length} 人
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{
-              color: YELLOW,
-              background: "#FEF3C7",
-              border: "1px solid #FDE68A",
-              borderRadius: 999,
-              padding: "5px 8px",
-              fontSize: 12,
-              fontWeight: 800,
-              fontFamily: "DIN Alternate, Menlo, Consolas, monospace",
-            }}>
-              {formatPkWave(groupTotal)}
-            </div>
-            <div style={{
-              color: GREEN,
-              background: "#DCFCE7",
-              border: "1px solid #BBF7D0",
-              borderRadius: 999,
-              padding: "5px 8px",
-              fontSize: 12,
-              fontWeight: 800,
-              fontFamily: "DIN Alternate, Menlo, Consolas, monospace",
-            }}>
-              日均 {formatPkWave(groupTrimmed)}
-            </div>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ color: accent.text, fontSize: 18, fontWeight: 900 }}>{group.label}</div>
+          <div style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 7,
+            padding: "5px 9px",
+            borderRadius: 999,
+            background: accent.soft,
+            color: accent.text,
+            fontSize: 13,
+            fontWeight: 800,
+          }}>
+            <span>队长</span>
+            <span>{captain?.name || "-"}</span>
           </div>
         </div>
         <div style={{
           display: "grid",
-          gridTemplateColumns: "30px minmax(0, 1fr) 76px 72px",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: 7,
-          color: TEXT_MUTED,
-          fontSize: 11,
-          padding: "0 8px 6px",
         }}>
-          <span>排名</span>
-          <span>主播</span>
-          <span style={{ textAlign: "right" }}>总音浪</span>
-          <span style={{ textAlign: "right" }}>分组分</span>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {members.map((member, memberIndex) => renderMemberRow(member, memberIndex, group.captainId, accent))}
+          {members.map((member) => {
+            const isCaptain = group.captainId === member.personId;
+            return (
+              <div
+                key={member.personId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
+                  border: `1px solid ${isCaptain ? accent.line : "#EEF2F7"}`,
+                  background: isCaptain ? accent.soft : "#F8FAFC",
+                  borderRadius: 9,
+                  padding: "7px 9px",
+                  minHeight: 34,
+                }}
+              >
+                <span style={{
+                  minWidth: 0,
+                  overflow: "hidden",
+                  whiteSpace: "nowrap",
+                  textOverflow: "ellipsis",
+                  color: TEXT_MAIN,
+                  fontSize: 14,
+                  fontWeight: isCaptain ? 900 : 700,
+                }}>
+                  {member.name}
+                </span>
+                {isCaptain && (
+                  <span style={{
+                    flexShrink: 0,
+                    color: accent.text,
+                    fontSize: 11,
+                    fontWeight: 900,
+                  }}>
+                    队长
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -504,63 +400,33 @@ function ExportCompareBoard({
 
   const renderBand = (groups: GroupState[], gender: "male" | "female") => {
     const accent = gender === "male" ? BLUE : PINK;
-    const summary = gender === "male" ? maleSummary : femaleSummary;
     const label = gender === "male" ? "男团" : "女团";
     return (
       <div style={{
-        background: PANEL_BG,
+        background: "#FFFFFF",
         border: `1px solid ${BORDER}`,
-        borderLeft: `6px solid ${accent.line}`,
         borderRadius: 16,
-        padding: 14,
+        padding: 16,
       }}>
         <div style={{
-          background: accent.soft,
-          border: `1px solid ${accent.line}`,
-          borderRadius: 12,
-          padding: "12px 14px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
           marginBottom: 14,
         }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <h3 style={{ margin: 0, color: accent.text, fontSize: 22, fontWeight: 900 }}>{label}</h3>
-            <div style={{ display: "flex", gap: 8 }}>
-              <span style={{
-                color: accent.text,
-                background: accent.chip,
-                borderRadius: 999,
-                padding: "5px 10px",
-                fontSize: 12,
-                fontWeight: 800,
-              }}>
-                {summary.groupCount} 组
-              </span>
-              <span style={{
-                color: TEXT_SOFT,
-                background: "#F8FAFC",
-                borderRadius: 999,
-                padding: "5px 10px",
-                fontSize: 12,
-                fontWeight: 800,
-              }}>
-                {summary.memberCount} 人
-              </span>
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginTop: 12 }}>
-            {metricBox("总音浪", formatPkWave(summary.totalWave), YELLOW)}
-            {metricBox("分组分合计", formatPkWave(summary.totalTrimmed), GREEN)}
-            {metricBox("开播人数", `${summary.activeCount}/${summary.memberCount}`, accent.text)}
+          <h3 style={{ margin: 0, color: accent.text, fontSize: 23, fontWeight: 950 }}>{label}</h3>
+          <div style={{ color: TEXT_MUTED, fontSize: 14, fontWeight: 700 }}>
+            {groups.length} 组 · {groups.reduce((sum, group) => sum + group.members.length, 0)} 人
           </div>
         </div>
-
         <div style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${Math.max(groups.length, 1)}, minmax(250px, 1fr))`,
-          gap: 10,
+          gridTemplateColumns: `repeat(${Math.max(groups.length, 1)}, minmax(210px, 1fr))`,
+          gap: 12,
           alignItems: "start",
         }}>
           {groups.length > 0 ? (
-            groups.map((group, index) => renderGroup(group, index, accent))
+            groups.map((group) => renderGroup(group, accent))
           ) : (
             <div style={{
               border: `1px dashed ${BORDER}`,
@@ -581,65 +447,71 @@ function ExportCompareBoard({
   return (
     <div style={{
       width: boardWidth,
-      background: [
-        "linear-gradient(180deg, #F8FAFC 0%, #EEF6FF 100%)",
-        "linear-gradient(90deg, rgba(224,242,254,0.72), rgba(252,231,243,0.58))",
-      ].join(", "),
+      background: "#F8FAFC",
       color: TEXT_MAIN,
       fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-      padding: 34,
+      padding: 30,
+      position: "relative",
+      overflow: "hidden",
     }}>
       <div style={{
-        display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "space-between",
-        gap: 24,
-        marginBottom: 22,
+        position: "absolute",
+        inset: 0,
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: 18,
+        transform: "rotate(-18deg) scale(1.15)",
+        transformOrigin: "center",
+        opacity: 0.08,
+        pointerEvents: "none",
       }}>
-        <div>
-          <div style={{
-            color: GREEN,
-            fontSize: 13,
-            fontWeight: 800,
-            letterSpacing: 0,
-            marginBottom: 8,
-          }}>
-            自动蛇形分组 · 去最高后日均作为分组分
+        {Array.from({ length: 28 }).map((_, index) => (
+          <div
+            key={index}
+            style={{
+              color: "#334155",
+              fontSize: 30,
+              fontWeight: 950,
+              whiteSpace: "nowrap",
+              textAlign: "center",
+            }}
+          >
+            内部数据 · 请勿外传
           </div>
-          <h2 style={{ margin: 0, fontSize: 34, lineHeight: 1.05, fontWeight: 950, color: TEXT_MAIN }}>
-            PK主播音浪自动分组
-          </h2>
-          <p style={{ margin: "10px 0 0", fontSize: 17, color: TEXT_MUTED }}>{periodDisplay} · 星势力</p>
-        </div>
+        ))}
+      </div>
+      <div style={{ position: "relative", zIndex: 1 }}>
         <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, auto)",
-          gap: 10,
-          alignItems: "stretch",
+          textAlign: "center",
+          marginBottom: 22,
         }}>
-          {metricBox("男团总音浪", formatPkWave(maleSummary.totalWave), BLUE.text)}
-          {metricBox("女团总音浪", formatPkWave(femaleSummary.totalWave), PINK.text)}
-          {metricBox("对比差值", waveLeadText, waveLeadColor)}
+          <h2 style={{ margin: 0, fontSize: 34, lineHeight: 1.1, fontWeight: 950, color: TEXT_MAIN }}>
+            PK名单分组
+          </h2>
+          <p style={{ margin: "8px 0 0", fontSize: 19, color: TEXT_MUTED, fontWeight: 800 }}>
+            {periodDisplay}
+          </p>
         </div>
-      </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {renderBand(maleGroups, "male")}
-        {renderBand(femaleGroups, "female")}
-      </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {renderBand(maleGroups, "male")}
+          {renderBand(femaleGroups, "female")}
+        </div>
 
-      <div style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        borderTop: `1px solid ${BORDER}`,
-        color: TEXT_MUTED,
-        fontSize: 12,
-        marginTop: 22,
-        paddingTop: 14,
-      }}>
-        <span>导出日期 {new Date().toLocaleDateString("zh-CN")}</span>
-        <span>每组最多 {DEFAULT_GROUP_SIZE} 人 · 队长为组内分组分最高者</span>
+        <div style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          borderTop: `1px solid ${BORDER}`,
+          color: TEXT_MAIN,
+          fontSize: 18,
+          fontWeight: 900,
+          marginTop: 22,
+          paddingTop: 14,
+        }}>
+          <span>PS：</span>
+          <span>一定要跟自己的队长联系，确认自己是哪个队伍。</span>
+        </div>
       </div>
     </div>
   );
@@ -805,7 +677,7 @@ export function PkRosterPage() {
   /** 下载预览图 */
   const handleDownloadPreview = useCallback(() => {
     if (!previewUrl) return;
-    void downloadDataUrlAsFile(previewUrl, `PK名单横图_${dataPeriod || period || currentMonth}.png`);
+    void downloadDataUrlAsFile(previewUrl, `PK名单分组_${dataPeriod || period || currentMonth}.png`);
   }, [previewUrl, dataPeriod, period, currentMonth]);
 
   const displayPeriod = dataPeriod || period || currentMonth;
@@ -841,13 +713,13 @@ export function PkRosterPage() {
           </Button>
           <Button size="sm" onClick={handleExportImage} disabled={exporting}>
             <Download className="size-4" />
-            {exporting ? "导出中…" : "导出横图"}
+            {exporting ? "导出中…" : "导出图片"}
           </Button>
         </div>
       </div>
 
       <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-        💡 系统按去最高后日均音浪自动蛇形分组，默认每组最多 {DEFAULT_GROUP_SIZE} 人；每组队长自动取本组分组分最高的成员。导出图片含音浪数据。
+        💡 系统按去最高后日均音浪自动蛇形分组，默认每组最多 {DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组、队长和成员名单。
       </div>
 
       {/* 内容 */}
@@ -962,7 +834,7 @@ export function PkRosterPage() {
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={handleDownloadPreview}>
                   <Download className="size-4" />
-                  下载横图
+                  下载图片
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setPreviewUrl(null)}>
                   关闭

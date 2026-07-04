@@ -3,6 +3,7 @@
 import type { DailyReportRow } from "@/types/electron";
 import { formatWave, formatDuration } from "./format";
 import { downloadCanvasAsPng } from "./export-image";
+import { formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
 
 // 主题色 —— 与族谱海报完全一致
 const C = {
@@ -80,12 +81,15 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
 
   const showDailyWave = visibleCols.dailyWave !== false;
   const showTotalWave = visibleCols.totalWave !== false;
-  const showDuration = visibleCols.duration !== false;
+  const showDuration = visibleCols.duration === true;
+  const showNotLiveDays = visibleCols.notLiveDays !== false;
+  const showMaster = visibleCols.master === true;
   const showTier = visibleCols.tier !== false;
 
   const maxDailyWave = rows.length > 0 ? Math.max(...rows.map((r) => r.dailyWave)) : 0;
   const genderLabel = gender === "male" ? "男主播" : "女主播";
   const teamLabel = gender === "male" ? "男队" : "女队";
+  const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
 
   // ---- 1. 尺寸计算 ----
   const posterW = 1080;
@@ -235,11 +239,13 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
 
   // 列宽计算
   const rankColW = 50;
-  const nameColW = 100;
+  const nameColW = 104;
   const tierColW = showTier ? 64 : 0;
   const durationColW = showDuration ? 90 : 0;
+  const masterColW = showMaster ? 72 : 0;
+  const notLiveDaysColW = showNotLiveDays ? 92 : 0;
   const totalWaveColW = showTotalWave ? 110 : 0;
-  const dailyWaveColW = tableW - rankColW - nameColW - tierColW - durationColW - totalWaveColW;
+  const dailyWaveColW = tableW - rankColW - nameColW - tierColW - durationColW - masterColW - notLiveDaysColW - totalWaveColW;
 
   // 绘制表头
   ctx.textBaseline = "middle";
@@ -255,9 +261,14 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   ctx.fillText("主播", colX + 12, tableY + tableHeaderH / 2);
   colX += nameColW;
 
+  if (showNotLiveDays) {
+    ctx.textAlign = "center";
+    ctx.fillText(notLiveDaysLabel, colX + notLiveDaysColW / 2, tableY + tableHeaderH / 2);
+    colX += notLiveDaysColW;
+  }
   if (showDailyWave) {
     ctx.textAlign = "center";
-    ctx.fillText("当日音浪", colX + dailyWaveColW / 2, tableY + tableHeaderH / 2);
+    ctx.fillText("日音浪", colX + dailyWaveColW / 2, tableY + tableHeaderH / 2);
     colX += dailyWaveColW;
   }
   if (showTotalWave) {
@@ -269,6 +280,11 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
     ctx.textAlign = "center";
     ctx.fillText("直播时长", colX + durationColW / 2, tableY + tableHeaderH / 2);
     colX += durationColW;
+  }
+  if (showMaster) {
+    ctx.textAlign = "left";
+    ctx.fillText("师傅", colX + 8, tableY + tableHeaderH / 2);
+    colX += masterColW;
   }
   if (showTier) {
     ctx.textAlign = "center";
@@ -324,8 +340,17 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
     ctx.textAlign = "left";
     ctx.font = "bold 13px sans-serif";
     ctx.fillStyle = r.isLive ? C.white92 : C.textMuted;
-    ctx.fillText(truncateText(ctx, r.name, nameColW - 16), colX + 12, rowYCenter);
+    ctx.fillText(truncateText(ctx, r.name, nameColW - 12), colX + 8, rowYCenter);
     colX += nameColW;
+
+    // 未开播天数
+    if (showNotLiveDays) {
+      ctx.textAlign = "center";
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = (r.notLiveDays ?? 0) > 0 ? "#f43f5e" : C.textMuted;
+      ctx.fillText(String(r.notLiveDays ?? 0), colX + notLiveDaysColW / 2, rowYCenter);
+      colX += notLiveDaysColW;
+    }
 
     // 当日音浪
     if (showDailyWave) {
@@ -385,6 +410,15 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
       colX += durationColW;
     }
 
+    // 师傅
+    if (showMaster) {
+      ctx.textAlign = "left";
+      ctx.font = "12px sans-serif";
+      ctx.fillStyle = C.textMuted;
+      ctx.fillText(truncateText(ctx, r.masterName || "—", masterColW - 10), colX + 8, rowYCenter);
+      colX += masterColW;
+    }
+
     // 等级
     if (showTier) {
       if (r.tier) {
@@ -425,7 +459,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   if (notLiveCount > 0) {
     ctx.textAlign = "right";
     ctx.fillStyle = "#f43f5e";
-    const notLiveText = `未开播 ${notLiveCount} 人：${notLiveNames.join("、")}`;
+    const notLiveText = `未开播人数 ${notLiveCount} 人：${notLiveNames.join("、")}`;
     ctx.fillText(truncateText(ctx, notLiveText, contentW - 200), padX + contentW - 4, summaryY + 12);
   }
 

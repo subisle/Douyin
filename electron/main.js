@@ -124,8 +124,13 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 960,
-    minHeight: 640,
+    resizable: false,
+    maximizable: false,
+    fullScreenable: false,
+    minWidth: 1280,
+    minHeight: 800,
+    maxWidth: 1280,
+    maxHeight: 800,
     frame: false,
     backgroundColor: "#f5f3ee",
     show: false,
@@ -221,6 +226,7 @@ function wrap(fn) {
 ipcMain.handle("data:getAnchors", wrap(() => db.getAnchors()));
 ipcMain.handle("data:getFamilyTree", wrap(() => db.getFamilyTree()));
 ipcMain.handle("data:getDashboardSummary", wrap(() => db.getDashboardSummary()));
+ipcMain.handle("data:getStartupHealth", wrap(() => db.getStartupHealth()));
 ipcMain.handle("data:getWaveRanking", wrap((limit) => db.getWaveRanking(limit)));
 ipcMain.handle("data:getWaveTrendByGender", wrap(() => db.getWaveTrendByGender()));
 
@@ -267,6 +273,22 @@ ipcMain.handle(
 ipcMain.handle(
   "data:updateAnchorName",
   wrap((payload) => db.updateAnchorName(payload))
+);
+ipcMain.handle(
+  "data:updateAnchorInfo",
+  wrap((payload) => db.updateAnchorInfo(payload))
+);
+ipcMain.handle(
+  "data:updateAnchorMaster",
+  wrap((payload) => db.updateAnchorMaster(payload))
+);
+ipcMain.handle(
+  "data:getAnchorDailySnapshot",
+  wrap((anchorId, date) => db.getAnchorDailySnapshot(anchorId, date))
+);
+ipcMain.handle(
+  "data:saveAnchorDailySnapshot",
+  wrap((payload) => db.saveAnchorDailySnapshot(payload))
 );
 ipcMain.handle(
   "data:getAnchorWaveTrend",

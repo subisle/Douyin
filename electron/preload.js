@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),
   getFamilyTree: () => ipcRenderer.invoke("data:getFamilyTree"),
   getDashboardSummary: () => ipcRenderer.invoke("data:getDashboardSummary"),
+  getStartupHealth: () => ipcRenderer.invoke("data:getStartupHealth"),
   getWaveRanking: (limit) => ipcRenderer.invoke("data:getWaveRanking", limit),
   getWaveTrendByGender: () => ipcRenderer.invoke("data:getWaveTrendByGender"),
 
@@ -34,6 +35,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getWaveTrendTotal: () => ipcRenderer.invoke("data:getWaveTrendTotal"),
   getAnchorCountTrend: () => ipcRenderer.invoke("data:getAnchorCountTrend"),
   updateAnchorName: (payload) => ipcRenderer.invoke("data:updateAnchorName", payload),
+  updateAnchorInfo: (payload) => ipcRenderer.invoke("data:updateAnchorInfo", payload),
+  updateAnchorMaster: (payload) => ipcRenderer.invoke("data:updateAnchorMaster", payload),
+  getAnchorDailySnapshot: (anchorId, date) =>
+    ipcRenderer.invoke("data:getAnchorDailySnapshot", anchorId, date),
+  saveAnchorDailySnapshot: (payload) => ipcRenderer.invoke("data:saveAnchorDailySnapshot", payload),
   getAnchorWaveTrend: (anchorId) => ipcRenderer.invoke("data:getAnchorWaveTrend", anchorId),
   getAnchorsWaveTrend: (anchorIds) => ipcRenderer.invoke("data:getAnchorsWaveTrend", anchorIds),
   getFlowingFlag: (personId) => ipcRenderer.invoke("data:getFlowingFlag", personId),

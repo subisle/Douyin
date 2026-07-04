@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Pencil, GitMerge, Trash2, Copy, Users } from "lucide-react";
+import { Search, Pencil, GitMerge, Trash2, Copy, Users, UserCog, Network, Activity } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,11 @@ import { AddAnchorDialog, MergeAccountsDialog, ImportAnchorsDialog } from "./anc
 type GenderFilter = "all" | "male" | "female";
 type MasterFilter = { mode: "none" } | { mode: "master"; personId: number } | { mode: "apprentice"; personId: number };
 const PAGE_SIZE = 15;
+
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export function AnchorsPage() {
   const { data, loading, error, unavailable, reload } = useElectronData((api) =>
@@ -58,8 +63,12 @@ export function AnchorsPage() {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    anchorId: number;
-    anchorName: string;
+    anchor: AnchorRow;
+  } | null>(null);
+  const [editInfoTarget, setEditInfoTarget] = useState<AnchorRow | null>(null);
+  const [masterTarget, setMasterTarget] = useState<AnchorRow | null>(null);
+  const [snapshotTarget, setSnapshotTarget] = useState<{
+    anchor: AnchorRow;
   } | null>(null);
   // 编辑姓名弹窗
   const [editTarget, setEditTarget] = useState<{
@@ -126,6 +135,7 @@ export function AnchorsPage() {
         (a) =>
           a.name.toLowerCase().includes(kw) ||
           a.anchorName.toLowerCase().includes(kw) ||
+          (a.masterName || "").toLowerCase().includes(kw) ||
           a.anchorId.includes(kw) ||
           a.douyinNo.includes(kw)
       );
@@ -151,15 +161,14 @@ export function AnchorsPage() {
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
-      anchorId: anchor.id,
-      anchorName: anchor.name,
+      anchor,
     });
   };
 
   /** 打开合并弹窗并预填被合并项 */
   const handleMergeFromContext = () => {
     if (!contextMenu) return;
-    setMergePrefillId(contextMenu.anchorId);
+    setMergePrefillId(contextMenu.anchor.id);
     setMergeOpen(true);
     setContextMenu(null);
   };
@@ -203,8 +212,8 @@ export function AnchorsPage() {
   const handleDeleteSingle = () => {
     if (!contextMenu) return;
     setDeleteTarget({
-      ids: [contextMenu.anchorId],
-      names: [contextMenu.anchorName],
+      ids: [contextMenu.anchor.id],
+      names: [contextMenu.anchor.name],
     });
     setContextMenu(null);
   };
@@ -339,7 +348,7 @@ export function AnchorsPage() {
                       <GenderBadge gender={a.gender} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {a.masterId ? (masterNameMap.get(a.masterId) || "—") : "—"}
+                      {a.masterName || (a.masterId ? (masterNameMap.get(a.masterId) || "—") : "—")}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {a.anchorId || "—"}
@@ -382,16 +391,36 @@ export function AnchorsPage() {
         >
           <button
             onClick={() => {
+              setEditInfoTarget(contextMenu.anchor);
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
+          >
+            <UserCog className="size-4 text-muted-foreground" />
+            编辑信息
+          </button>
+          <button
+            onClick={() => {
+              setMasterTarget(contextMenu.anchor);
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
+          >
+            <Network className="size-4 text-muted-foreground" />
+            设置师傅
+          </button>
+          <button
+            onClick={() => {
               setEditTarget({
-                personId: contextMenu.anchorId,
-                currentName: contextMenu.anchorName,
+                personId: contextMenu.anchor.id,
+                currentName: contextMenu.anchor.name,
               });
               setContextMenu(null);
             }}
             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
           >
             <Pencil className="size-4 text-muted-foreground" />
-            编辑姓名
+            修改姓名
           </button>
           <button
             onClick={handleMergeFromContext}
@@ -401,7 +430,18 @@ export function AnchorsPage() {
             合并到其他主播
           </button>
           <div className="mx-2 my-1 border-t border-border" />
-          {selectedIds.size > 0 && selectedIds.has(contextMenu.anchorId) && (
+          <button
+            onClick={() => {
+              setSnapshotTarget({ anchor: contextMenu.anchor });
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
+          >
+            <Activity className="size-4 text-muted-foreground" />
+            添加/修改音浪和时长
+          </button>
+          <div className="mx-2 my-1 border-t border-border" />
+          {selectedIds.size > 0 && selectedIds.has(contextMenu.anchor.id) && (
             <button
               onClick={handleDeleteSelected}
               className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-destructive hover:bg-destructive/10"
@@ -419,9 +459,34 @@ export function AnchorsPage() {
           </button>
           <div className="mx-2 my-1 border-t border-border" />
           <span className="block px-3 py-1 text-xs text-muted-foreground">
-            ID: {contextMenu.anchorId}
+            ID: {contextMenu.anchor.id}
           </span>
         </div>
+      )}
+
+      {editInfoTarget && (
+        <EditInfoDialog
+          anchor={editInfoTarget}
+          onClose={() => setEditInfoTarget(null)}
+          onSuccess={() => reload()}
+        />
+      )}
+
+      {masterTarget && (
+        <SetMasterDialog
+          anchor={masterTarget}
+          anchors={data}
+          onClose={() => setMasterTarget(null)}
+          onSuccess={() => reload()}
+        />
+      )}
+
+      {snapshotTarget && (
+        <DailySnapshotDialog
+          anchor={snapshotTarget.anchor}
+          onClose={() => setSnapshotTarget(null)}
+          onSuccess={() => reload()}
+        />
       )}
 
       {/* 编辑姓名弹窗 */}
@@ -476,6 +541,358 @@ export function AnchorsPage() {
         onClose={() => setDuplicateOpen(false)}
         onSuccess={() => reload()}
       />
+    </div>
+  );
+}
+
+/** 编辑完整信息对话框 */
+function EditInfoDialog({
+  anchor,
+  onClose,
+  onSuccess,
+}: {
+  anchor: AnchorRow;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [name, setName] = useState(anchor.name);
+  const [gender, setGender] = useState(anchor.gender);
+  const [anchorId, setAnchorId] = useState(anchor.anchorId);
+  const [douyinNo, setDouyinNo] = useState(anchor.douyinNo);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    const api = window.electronAPI;
+    if (!api) return;
+    const cleanName = name.trim();
+    const cleanAnchorId = anchorId.trim();
+    if (!cleanName || !cleanAnchorId) {
+      setError("主播姓名和抖音ID不能为空");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.updateAnchorInfo({
+        personId: anchor.id,
+        name: cleanName,
+        gender,
+        anchorId: cleanAnchorId,
+        douyinNo: douyinNo.trim(),
+      });
+      if (res.success) {
+        onSuccess();
+        onClose();
+      } else {
+        setError(res.error || "保存失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-border shadow-2xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">编辑主播信息</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium">主播姓名</label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} disabled={loading} />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">抖音ID</label>
+                <Input value={anchorId} onChange={(e) => setAnchorId(e.target.value)} disabled={loading} />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">抖音号</label>
+                <Input value={douyinNo} onChange={(e) => setDouyinNo(e.target.value)} disabled={loading} />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">性别</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ["male", "男"],
+                    ["female", "女"],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setGender(value)}
+                      className={cn(
+                        "rounded-md border px-3 py-2 text-sm transition",
+                        gender === value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:bg-accent"
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {error && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={onClose} disabled={loading}>
+                取消
+              </Button>
+              <Button onClick={submit} disabled={loading}>
+                {loading ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/** 设置师傅对话框 */
+function SetMasterDialog({
+  anchor,
+  anchors,
+  onClose,
+  onSuccess,
+}: {
+  anchor: AnchorRow;
+  anchors: AnchorRow[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [masterId, setMasterId] = useState<string>(anchor.masterId ? String(anchor.masterId) : "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const options = useMemo(
+    () => anchors.filter((a) => a.id !== anchor.id).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
+    [anchor.id, anchors]
+  );
+
+  const submit = async () => {
+    const api = window.electronAPI;
+    if (!api) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.updateAnchorMaster({
+        personId: anchor.id,
+        masterId: masterId ? Number(masterId) : null,
+      });
+      if (res.success) {
+        onSuccess();
+        onClose();
+      } else {
+        setError(res.error || "设置失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-border shadow-2xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">设置师傅</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <label className="mb-1 block text-sm font-medium">主播</label>
+              <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{anchor.name}</p>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">师傅</label>
+              <select
+                value={masterId}
+                onChange={(e) => setMasterId(e.target.value)}
+                disabled={loading}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">无师傅</option>
+                {options.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} {a.anchorId ? `(${a.anchorId})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {error && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={onClose} disabled={loading}>
+                取消
+              </Button>
+              <Button onClick={submit} disabled={loading}>
+                {loading ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/** 单日音浪/时长录入修改对话框 */
+function DailySnapshotDialog({
+  anchor,
+  onClose,
+  onSuccess,
+}: {
+  anchor: AnchorRow;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [date, setDate] = useState(todayStr());
+  const [waveValue, setWaveValue] = useState("");
+  const [rank, setRank] = useState("");
+  const [totalMinutes, setTotalMinutes] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api || !anchor.anchorId || !date) return;
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    api.getAnchorDailySnapshot(anchor.anchorId, date)
+      .then((res) => {
+        if (!alive) return;
+        if (res.success) {
+          setWaveValue(res.data.waveValue == null ? "" : String(res.data.waveValue));
+          setRank(res.data.rank == null ? "" : String(res.data.rank));
+          setTotalMinutes(res.data.totalMinutes == null ? "" : String(res.data.totalMinutes));
+        } else {
+          setError(res.error || "加载失败");
+        }
+      })
+      .catch((e) => {
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [anchor.anchorId, date]);
+
+  const submit = async () => {
+    const api = window.electronAPI;
+    if (!api) return;
+    if (!anchor.anchorId) {
+      setError("该主播没有抖音ID，不能录入数据");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.saveAnchorDailySnapshot({
+        anchorId: anchor.anchorId,
+        date,
+        waveValue: waveValue.trim() === "" ? null : waveValue,
+        rank: rank.trim() === "" ? null : rank,
+        totalMinutes: totalMinutes.trim() === "" ? null : totalMinutes,
+      });
+      if (res.success) {
+        onSuccess();
+        onClose();
+      } else {
+        setError(res.error || "保存失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-border shadow-2xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">
+              添加/修改音浪和时长
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium">主播</label>
+                <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  {anchor.name} {anchor.anchorId ? `(${anchor.anchorId})` : ""}
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">日期</label>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={loading || saving} />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">当日音浪</label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={waveValue}
+                  onChange={(e) => setWaveValue(e.target.value)}
+                  disabled={loading || saving}
+                  autoFocus
+                  placeholder="留空则不保存音浪"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium">排名</label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={rank}
+                  onChange={(e) => setRank(e.target.value)}
+                  disabled={loading || saving}
+                  placeholder="可选"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-sm font-medium">有效时长（分钟）</label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={totalMinutes}
+                  onChange={(e) => setTotalMinutes(e.target.value)}
+                  disabled={loading || saving}
+                  placeholder="留空则不保存时长"
+                />
+              </div>
+            </div>
+            {loading && <p className="text-sm text-muted-foreground">正在读取已存在的数据…</p>}
+            {error && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={onClose} disabled={saving}>
+                取消
+              </Button>
+              <Button onClick={submit} disabled={loading || saving}>
+                {saving ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

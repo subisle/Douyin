@@ -6,6 +6,7 @@ export interface AnchorRow {
   gender: string;
   generation: number | null;
   masterId: number | null;
+  masterName: string | null;
   anchorId: string;
   anchorName: string;
   douyinNo: string;
@@ -26,11 +27,32 @@ export interface FamilyNode {
 export interface DashboardSummary {
   totalAnchors: number;
   totalAccounts: number;
+  notLiveCount: number;
   totalWave: number;
   totalDuration: number;
   avgWave: number;
   avgDuration: number;
   dataCount: number;
+}
+
+export interface StartupHealthCheck {
+  key: string;
+  label: string;
+  status: "ok" | "warning" | "error";
+  detail: string;
+}
+
+export interface StartupHealthResult {
+  ok: boolean;
+  status: "ok" | "warning" | "error";
+  checks: StartupHealthCheck[];
+  counts: {
+    persons: number;
+    accounts: number;
+    waveSnapshots: number;
+    durationSnapshots: number;
+    importRecords: number;
+  };
 }
 
 export interface WaveRankRow {
@@ -123,6 +145,7 @@ export interface DailyReportRow {
   totalWave: number;
   dailyDuration: number;
   totalDuration: number;
+  notLiveDays: number;
   tier: string;
   isLive: boolean;
   masterName: string | null;
@@ -135,6 +158,7 @@ export interface DailyReportData {
   summary: {
     total: number;
     notLiveCount: number;
+    notLiveDays: number;
     notLiveNames: string[];
     previousDate?: string | null;
   };
@@ -264,6 +288,7 @@ declare global {
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;
+    getStartupHealth: () => Promise<IpcResult<StartupHealthResult>>;
     getWaveRanking: (limit?: number) => Promise<IpcResult<WaveRankRow[]>>;
     getWaveTrendByGender: () => Promise<IpcResult<WaveTrendByGender>>;
     importWave: (
@@ -312,6 +337,36 @@ declare global {
     updateAnchorName: (payload: {
       personId: number;
       name: string;
+    }) => Promise<IpcResult<{ ok: boolean }>>;
+    updateAnchorInfo: (payload: {
+      personId: number;
+      name: string;
+      gender: string;
+      anchorId: string;
+      douyinNo?: string;
+    }) => Promise<IpcResult<{ ok: boolean }>>;
+    updateAnchorMaster: (payload: {
+      personId: number;
+      masterId: number | null;
+    }) => Promise<IpcResult<{ ok: boolean }>>;
+    getAnchorDailySnapshot: (
+      anchorId: string,
+      date: string
+    ) => Promise<
+      IpcResult<{
+        anchorId: string;
+        date: string;
+        waveValue: number | null;
+        rank: number | null;
+        totalMinutes: number | null;
+      }>
+    >;
+    saveAnchorDailySnapshot: (payload: {
+      anchorId: string;
+      date: string;
+      waveValue?: number | string | null;
+      rank?: number | string | null;
+      totalMinutes?: number | string | null;
     }) => Promise<IpcResult<{ ok: boolean }>>;
     getAnchorWaveTrend: (
       anchorId: string

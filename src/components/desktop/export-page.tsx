@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Loader2, Waves, Clock, Users } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, Waves, Clock, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { downloadCsv } from "./csv";
 import { BrowserModeState } from "./states";
 
@@ -66,37 +68,44 @@ export function ExportPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-semibold">数据导出</h3>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-lg font-semibold">数据导出</h3>
+        <Badge variant="outline" className="font-mono text-[11px]">CSV</Badge>
+      </div>
 
-      <div className="grid gap-5 sm:grid-cols-3">
+      <div className="space-y-3">
         {OPTIONS.map((opt) => {
           const Icon = opt.icon;
+          const isBusy = busy === opt.kind;
           return (
             <div
               key={opt.kind}
-              className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-card p-6 text-center"
+              className={cn(
+                "flex items-center gap-3 rounded-xl border border-border bg-card p-3 transition-colors",
+                isBusy && "border-primary/40 bg-primary/5"
+              )}
             >
-              <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-secondary-foreground">
-                <Icon className="size-7" />
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                <Icon className="size-5" />
               </div>
-              <div>
+              <div className="min-w-0 flex-1 text-left">
                 <p className="font-semibold text-foreground">{opt.label}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{opt.desc}</p>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">{opt.desc}</p>
               </div>
               <Button
                 variant="outline"
-                size="lg"
+                size="sm"
                 onClick={() => onExport(opt)}
                 disabled={busy !== null}
-                className="w-full gap-2"
+                className="shrink-0 gap-1.5"
               >
-                {busy === opt.kind ? (
-                  <Loader2 className="size-5 animate-spin" />
+                {isBusy ? (
+                  <Loader2 className="size-4 animate-spin" />
                 ) : (
-                  <Download className="size-5" />
+                  <Download className="size-4" />
                 )}
-                导出 CSV
+                导出
               </Button>
             </div>
           );
@@ -105,12 +114,18 @@ export function ExportPage() {
 
       {msg && (
         <Card className="border-chart-2/40">
-          <CardContent className="py-4 text-sm text-chart-2">{msg}</CardContent>
+          <CardContent className="flex items-center gap-2 py-4 text-sm text-chart-2">
+            <CheckCircle2 className="size-4" />
+            {msg}
+          </CardContent>
         </Card>
       )}
       {error && (
         <Card className="border-destructive/40">
-          <CardContent className="py-4 text-sm text-destructive">{error}</CardContent>
+          <CardContent className="flex items-center gap-2 py-4 text-sm text-destructive">
+            <AlertTriangle className="size-4" />
+            {error}
+          </CardContent>
         </Card>
       )}
     </div>

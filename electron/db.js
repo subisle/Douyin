@@ -1,9 +1,16 @@
+const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
 
 // 复用根项目 .env（与 DouyinLang 同一套远程 MySQL）
+const envPaths = [
+  path.join(__dirname, "..", ".env"),
+  process.resourcesPath ? path.join(process.resourcesPath, ".env") : null,
+  path.join(process.cwd(), ".env"),
+].filter(Boolean);
+const envPath = envPaths.find((item) => fs.existsSync(item));
 require("dotenv").config({
-  path: path.join(__dirname, "..", ".env"),
+  path: envPath || envPaths[0],
   quiet: true,
 });
 
@@ -98,7 +105,11 @@ async function recordImport(db, kind, importDate, meta) {
 async function getAnchors() {
   const db = getPool();
   const [persons] = await db.query(
-    "SELECT id, name, gender, master_id, generation, created_at, updated_at FROM persons ORDER BY id"
+    `SELECT p.id, p.name, p.gender, p.master_id, m.name AS master_name,
+            p.generation, p.created_at, p.updated_at
+       FROM persons p
+       LEFT JOIN persons m ON m.id = p.master_id
+      ORDER BY p.id`
   );
   const [accounts] = await db.query(
     "SELECT id, person_id, anchor_id, douyin_no, anchor_name, is_primary, created_at FROM accounts"
@@ -123,6 +134,7 @@ async function getAnchors() {
       gender: p.gender || "",
       generation: p.generation ?? null,
       masterId: p.master_id ?? null,
+      masterName: p.master_name || null,
       anchorId: primary ? primary.anchor_id || "" : "",
       anchorName: primary ? primary.anchor_name || p.name || "" : p.name || "",
       douyinNo: primary ? primary.douyin_no || "" : "",
@@ -135,7 +147,7 @@ async function getAnchors() {
 
 /**
  * 族谱：返回带师父名字的主播关系。
- * 只展示主播列表中有账号绑定的人员，并过滤不再参与族谱展示的历史分支。
+ * 展示主播列表中有账号绑定的人员，并补齐这些人员的必要师傅节点。
  */
 async function getFamilyTree() {
   const db = getPool();
@@ -147,6 +159,7 @@ async function getFamilyTree() {
     "SELECT DISTINCT person_id FROM accounts WHERE person_id IS NOT NULL AND anchor_id IS NOT NULL AND anchor_id != ''"
   );
   const anchorPersonIds = new Set(accounts.map((a) => Number(a.person_id)));
+  const personById = new Map(persons.map((p) => [Number(p.id), p]));
   const hiddenNames = new Set(["狼帅", "狼彬"]);
   const hiddenIds = new Set();
   const childrenByMaster = new Map();
@@ -175,9 +188,23 @@ async function getFamilyTree() {
     if (hiddenNames.has(name)) hiddenIds.add(Number(p.id));
   }
 
-  const visiblePersons = persons.filter(
-    (p) => anchorPersonIds.has(Number(p.id)) && !hiddenIds.has(Number(p.id))
-  );
+  const visibleIds = new Set();
+  for (const p of persons) {
+    const id = Number(p.id);
+    if (!anchorPersonIds.has(id) || hiddenIds.has(id)) continue;
+    visibleIds.add(id);
+
+    let cursor = p.master_id ? Number(p.master_id) : null;
+    const visited = new Set([id]);
+    while (cursor && personById.has(cursor) && !hiddenIds.has(cursor) && !visited.has(cursor)) {
+      visibleIds.add(cursor);
+      visited.add(cursor);
+      const parent = personById.get(cursor);
+      cursor = parent?.master_id ? Number(parent.master_id) : null;
+    }
+  }
+
+  const visiblePersons = persons.filter((p) => visibleIds.has(Number(p.id)));
   const nameById = new Map(visiblePersons.map((p) => [p.id, p.name]));
 
   return visiblePersons.map((p) => ({
@@ -207,22 +234,279 @@ async function getDashboardSummary() {
   const [[durationAgg]] = await db.query(
     "SELECT COUNT(*) AS rows_count, COALESCE(SUM(total_minutes),0) AS total FROM duration_snapshots"
   );
+  const [[latestDataDateRow]] = await db.query(
+    `SELECT MAX(import_date) AS latest_date FROM (
+       SELECT import_date FROM wave_snapshots
+       UNION ALL
+       SELECT import_date FROM duration_snapshots
+     ) dates`
+  );
 
   const totalAnchors = Number(personCount.c) || 0;
   const totalWave = Number(waveAgg.total) || 0;
   const totalDuration = Number(durationAgg.total) || 0;
   const waveRows = Number(waveAgg.rows_count) || 0;
   const durationRows = Number(durationAgg.rows_count) || 0;
+  const normalizeDate = (value) =>
+    value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  const latestDataDate = latestDataDateRow?.latest_date
+    ? normalizeDate(latestDataDateRow.latest_date)
+    : null;
+  let notLiveCount = 0;
+
+  if (latestDataDate) {
+    const [liveRows] = await db.query(
+      `SELECT p.id AS person_id,
+              MAX(CASE
+                WHEN COALESCE(w.wave_value, 0) > 0 OR COALESCE(d.total_minutes, 0) > 0 THEN 1
+                ELSE 0
+              END) AS is_live
+         FROM persons p
+         INNER JOIN accounts a ON a.person_id = p.id
+          AND a.anchor_id IS NOT NULL
+          AND a.anchor_id != ''
+         LEFT JOIN wave_snapshots w ON w.anchor_id = a.anchor_id AND w.import_date = ?
+         LEFT JOIN duration_snapshots d ON d.anchor_id = a.anchor_id AND d.import_date = ?
+        GROUP BY p.id`,
+      [latestDataDate, latestDataDate]
+    );
+    notLiveCount = liveRows.filter((row) => Number(row.is_live) !== 1).length;
+  }
 
   return {
     totalAnchors,
     totalAccounts: Number(accountCount.c) || 0,
+    notLiveCount,
     totalWave,
     totalDuration,
     avgWave: totalAnchors ? totalWave / totalAnchors : 0,
     avgDuration: totalAnchors ? totalDuration / totalAnchors : 0,
     dataCount: waveRows + durationRows,
   };
+}
+
+function pushHealthCheck(checks, key, label, status, detail) {
+  checks.push({ key, label, status, detail });
+}
+
+function countStatus(checks) {
+  if (checks.some((check) => check.status === "error")) return "error";
+  if (checks.some((check) => check.status === "warning")) return "warning";
+  return "ok";
+}
+
+async function getStartupHealth() {
+  const checks = [];
+  const counts = {
+    persons: 0,
+    accounts: 0,
+    waveSnapshots: 0,
+    durationSnapshots: 0,
+    importRecords: 0,
+  };
+
+  let db;
+  try {
+    db = getPool();
+    await db.query("SELECT 1");
+    pushHealthCheck(checks, "database", "数据库连接", "ok", "连接正常");
+  } catch (error) {
+    pushHealthCheck(
+      checks,
+      "database",
+      "数据库连接",
+      "error",
+      error?.message || String(error)
+    );
+    return { ok: false, status: "error", checks, counts };
+  }
+
+  try {
+    await ensureImportRecordsTable(db);
+  } catch (error) {
+    pushHealthCheck(
+      checks,
+      "import-records",
+      "导入记录表",
+      "warning",
+      `导入记录表检查失败：${error?.message || String(error)}`
+    );
+  }
+
+  const requiredTables = [
+    "persons",
+    "accounts",
+    "wave_snapshots",
+    "duration_snapshots",
+    "tier_rules",
+    "flag_scores",
+    "flag_winners",
+    "import_records",
+  ];
+
+  let existingTables = new Set();
+  try {
+    const placeholders = requiredTables.map(() => "?").join(",");
+    const [rows] = await db.query(
+      `SELECT table_name AS name
+         FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name IN (${placeholders})`,
+      requiredTables
+    );
+    existingTables = new Set(rows.map((row) => row.name));
+    const missing = requiredTables.filter((table) => !existingTables.has(table));
+    pushHealthCheck(
+      checks,
+      "tables",
+      "关键数据表",
+      missing.length > 0 ? "error" : "ok",
+      missing.length > 0 ? `缺少表：${missing.join("、")}` : "关键表完整"
+    );
+  } catch (error) {
+    pushHealthCheck(
+      checks,
+      "tables",
+      "关键数据表",
+      "error",
+      `表结构检查失败：${error?.message || String(error)}`
+    );
+  }
+
+  const hasTables = (...tables) => tables.every((table) => existingTables.has(table));
+
+  if (hasTables("persons", "accounts")) {
+    const [[personCount]] = await db.query("SELECT COUNT(*) AS c FROM persons");
+    const [[accountCount]] = await db.query("SELECT COUNT(*) AS c FROM accounts");
+    counts.persons = Number(personCount.c) || 0;
+    counts.accounts = Number(accountCount.c) || 0;
+    pushHealthCheck(
+      checks,
+      "anchor-counts",
+      "主播账号数据",
+      counts.persons > 0 && counts.accounts > 0 ? "ok" : "warning",
+      `主播 ${counts.persons} 人，账号 ${counts.accounts} 个`
+    );
+
+    const [[orphanAccounts]] = await db.query(
+      `SELECT COUNT(*) AS c
+         FROM accounts a
+         LEFT JOIN persons p ON p.id = a.person_id
+        WHERE a.person_id IS NOT NULL
+          AND p.id IS NULL`
+    );
+    const [[orphanMasters]] = await db.query(
+      `SELECT COUNT(*) AS c
+         FROM persons p
+         LEFT JOIN persons m ON m.id = p.master_id
+        WHERE p.master_id IS NOT NULL
+          AND m.id IS NULL`
+    );
+    const orphanAccountCount = Number(orphanAccounts.c) || 0;
+    const orphanMasterCount = Number(orphanMasters.c) || 0;
+    pushHealthCheck(
+      checks,
+      "relations",
+      "人员关系完整性",
+      orphanAccountCount > 0 || orphanMasterCount > 0 ? "error" : "ok",
+      orphanAccountCount > 0 || orphanMasterCount > 0
+        ? `孤儿账号 ${orphanAccountCount} 个，失效师傅关系 ${orphanMasterCount} 个`
+        : "账号和师傅关系正常"
+    );
+
+    const [[duplicatePrimary]] = await db.query(
+      `SELECT COUNT(*) AS c
+         FROM (
+           SELECT person_id
+             FROM accounts
+            WHERE person_id IS NOT NULL
+              AND is_primary = 1
+            GROUP BY person_id
+           HAVING COUNT(*) > 1
+         ) t`
+    );
+    const [[duplicateAnchorIds]] = await db.query(
+      `SELECT COUNT(*) AS c
+         FROM (
+           SELECT anchor_id
+             FROM accounts
+            WHERE anchor_id IS NOT NULL
+              AND anchor_id != ''
+            GROUP BY anchor_id
+           HAVING COUNT(*) > 1
+         ) t`
+    );
+    const duplicatePrimaryCount = Number(duplicatePrimary.c) || 0;
+    const duplicateAnchorIdCount = Number(duplicateAnchorIds.c) || 0;
+    pushHealthCheck(
+      checks,
+      "duplicates",
+      "重复账号检查",
+      duplicatePrimaryCount > 0 || duplicateAnchorIdCount > 0 ? "warning" : "ok",
+      duplicatePrimaryCount > 0 || duplicateAnchorIdCount > 0
+        ? `重复主账号 ${duplicatePrimaryCount} 组，重复主播 ID ${duplicateAnchorIdCount} 组`
+        : "未发现重复主账号"
+    );
+  }
+
+  if (hasTables("wave_snapshots", "duration_snapshots")) {
+    const [[waveCount]] = await db.query("SELECT COUNT(*) AS c FROM wave_snapshots");
+    const [[durationCount]] = await db.query("SELECT COUNT(*) AS c FROM duration_snapshots");
+    counts.waveSnapshots = Number(waveCount.c) || 0;
+    counts.durationSnapshots = Number(durationCount.c) || 0;
+  }
+
+  if (hasTables("wave_snapshots", "duration_snapshots", "accounts")) {
+    const [[unmatchedWave]] = await db.query(
+      `SELECT COUNT(DISTINCT w.anchor_id) AS c
+         FROM wave_snapshots w
+         LEFT JOIN accounts a ON a.anchor_id = w.anchor_id
+        WHERE a.id IS NULL`
+    );
+    const [[unmatchedDuration]] = await db.query(
+      `SELECT COUNT(DISTINCT d.anchor_id) AS c
+         FROM duration_snapshots d
+         LEFT JOIN accounts a ON a.anchor_id = d.anchor_id
+        WHERE a.id IS NULL`
+    );
+    const unmatchedWaveCount = Number(unmatchedWave.c) || 0;
+    const unmatchedDurationCount = Number(unmatchedDuration.c) || 0;
+    pushHealthCheck(
+      checks,
+      "unmatched-snapshots",
+      "未匹配导入数据",
+      unmatchedWaveCount > 0 || unmatchedDurationCount > 0 ? "warning" : "ok",
+      unmatchedWaveCount > 0 || unmatchedDurationCount > 0
+        ? `未匹配音浪账号 ${unmatchedWaveCount} 个，未匹配时长账号 ${unmatchedDurationCount} 个`
+        : "导入数据均能匹配主播列表"
+    );
+  }
+
+  if (hasTables("wave_snapshots", "duration_snapshots")) {
+    const [[latestWave]] = await db.query("SELECT MAX(import_date) AS latest FROM wave_snapshots");
+    const [[latestDuration]] = await db.query(
+      "SELECT MAX(import_date) AS latest FROM duration_snapshots"
+    );
+    const latestWaveDate = latestWave.latest ? String(latestWave.latest).split("T")[0] : "无";
+    const latestDurationDate = latestDuration.latest
+      ? String(latestDuration.latest).split("T")[0]
+      : "无";
+    pushHealthCheck(
+      checks,
+      "latest-data",
+      "最新数据日期",
+      latestWave.latest || latestDuration.latest ? "ok" : "warning",
+      `音浪 ${latestWaveDate}，时长 ${latestDurationDate}`
+    );
+  }
+
+  if (hasTables("import_records")) {
+    const [[recordCount]] = await db.query("SELECT COUNT(*) AS c FROM import_records");
+    counts.importRecords = Number(recordCount.c) || 0;
+  }
+
+  const status = countStatus(checks);
+  return { ok: status !== "error", status, checks, counts };
 }
 
 /**
@@ -588,6 +872,7 @@ async function batchImportAnchors(rows) {
         skipped++;
         continue;
       }
+      await conn.query("SAVEPOINT batch_import_anchor_row");
       try {
         const [pRes] = await conn.query(
           "INSERT INTO persons (name, gender, master_id, generation, created_at, updated_at) VALUES (?, ?, NULL, NULL, NOW(), NOW())",
@@ -597,8 +882,11 @@ async function batchImportAnchors(rows) {
           "INSERT INTO accounts (person_id, anchor_id, anchor_name, douyin_no, is_primary, created_at) VALUES (?, ?, ?, ?, 1, NOW())",
           [pRes.insertId, anchorId, name, douyinNo]
         );
+        await conn.query("RELEASE SAVEPOINT batch_import_anchor_row");
         created++;
       } catch (err) {
+        await conn.query("ROLLBACK TO SAVEPOINT batch_import_anchor_row").catch(() => {});
+        await conn.query("RELEASE SAVEPOINT batch_import_anchor_row").catch(() => {});
         if (err.code === "ER_DUP_ENTRY") {
           skipped++;
         } else {
@@ -853,6 +1141,192 @@ async function updateAnchorName({ personId, name }) {
       "UPDATE accounts SET anchor_name = ? WHERE person_id = ? AND is_primary = 1",
       [name.trim(), personId]
     );
+    await conn.commit();
+    return { ok: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 更新主播基础信息：姓名、性别、主账号抖音ID、抖音号。
+ */
+async function updateAnchorInfo({ personId, name, gender, anchorId, douyinNo }) {
+  const id = Number(personId);
+  const cleanName = String(name || "").trim();
+  const cleanGender = String(gender || "").trim();
+  const cleanAnchorId = String(anchorId || "").trim();
+  const cleanDouyinNo = String(douyinNo || "").trim();
+  if (!id || !cleanName || !cleanAnchorId) throw new Error("主播姓名和抖音ID不能为空");
+  if (cleanGender && !["male", "female"].includes(cleanGender)) throw new Error("性别参数不正确");
+
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [persons] = await conn.query("SELECT id FROM persons WHERE id = ? FOR UPDATE", [id]);
+    if (persons.length === 0) throw new Error("主播不存在");
+
+    const [dup] = await conn.query(
+      "SELECT person_id FROM accounts WHERE anchor_id = ? AND person_id <> ? LIMIT 1",
+      [cleanAnchorId, id]
+    );
+    if (dup.length > 0) throw new Error("抖音ID已被其他主播使用");
+
+    await conn.query(
+      "UPDATE persons SET name = ?, gender = ?, updated_at = NOW() WHERE id = ?",
+      [cleanName, cleanGender, id]
+    );
+
+    const [primaryRows] = await conn.query(
+      "SELECT id, anchor_id FROM accounts WHERE person_id = ? ORDER BY is_primary DESC, id ASC LIMIT 1",
+      [id]
+    );
+    if (primaryRows.length === 0) {
+      await conn.query(
+        "INSERT INTO accounts (person_id, anchor_id, anchor_name, douyin_no, is_primary, created_at) VALUES (?, ?, ?, ?, 1, NOW())",
+        [id, cleanAnchorId, cleanName, cleanDouyinNo]
+      );
+    } else {
+      const oldAnchorId = String(primaryRows[0].anchor_id || "").trim();
+      if (oldAnchorId && oldAnchorId !== cleanAnchorId) {
+        await conn.query(
+          `INSERT INTO wave_snapshots (anchor_id, import_date, wave_value, \`rank\`)
+           SELECT ?, import_date, wave_value, \`rank\` FROM wave_snapshots WHERE anchor_id = ?
+           ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`,
+          [cleanAnchorId, oldAnchorId]
+        );
+        await conn.query("DELETE FROM wave_snapshots WHERE anchor_id = ?", [oldAnchorId]);
+        await conn.query(
+          `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
+           SELECT ?, import_date, total_minutes FROM duration_snapshots WHERE anchor_id = ?
+           ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`,
+          [cleanAnchorId, oldAnchorId]
+        );
+        await conn.query("DELETE FROM duration_snapshots WHERE anchor_id = ?", [oldAnchorId]);
+      }
+      await conn.query(
+        "UPDATE accounts SET anchor_id = ?, anchor_name = ?, douyin_no = ?, is_primary = 1 WHERE id = ?",
+        [cleanAnchorId, cleanName, cleanDouyinNo, primaryRows[0].id]
+      );
+    }
+    await conn.query(
+      "UPDATE accounts SET anchor_name = ? WHERE person_id = ? AND is_primary <> 1",
+      [cleanName, id]
+    );
+
+    await conn.commit();
+    return { ok: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * 设置师傅。传 null 可清空师傅；拒绝自指和循环关系。
+ */
+async function updateAnchorMaster({ personId, masterId }) {
+  const id = Number(personId);
+  const nextMasterId = masterId == null || masterId === "" ? null : Number(masterId);
+  if (!id) throw new Error("主播参数不完整");
+  if (nextMasterId && nextMasterId === id) throw new Error("不能把自己设置为师傅");
+
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [persons] = await conn.query("SELECT id, master_id, generation FROM persons");
+    const byId = new Map(persons.map((p) => [Number(p.id), p]));
+    if (!byId.has(id)) throw new Error("主播不存在");
+    if (nextMasterId && !byId.has(nextMasterId)) throw new Error("师傅不存在");
+
+    if (nextMasterId) {
+      let cursor = nextMasterId;
+      const visited = new Set();
+      while (cursor) {
+        if (cursor === id) throw new Error("不能设置循环师徒关系");
+        if (visited.has(cursor)) break;
+        visited.add(cursor);
+        cursor = byId.get(cursor)?.master_id ? Number(byId.get(cursor).master_id) : null;
+      }
+    }
+
+    const masterGeneration = nextMasterId ? byId.get(nextMasterId)?.generation : null;
+    const generation = Number.isFinite(Number(masterGeneration)) ? Number(masterGeneration) + 1 : null;
+    await conn.query(
+      "UPDATE persons SET master_id = ?, generation = ?, updated_at = NOW() WHERE id = ?",
+      [nextMasterId, generation, id]
+    );
+    await conn.commit();
+    return { ok: true };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function getAnchorDailySnapshot(anchorId, importDate) {
+  const cleanAnchorId = String(anchorId || "").trim();
+  const cleanDate = String(importDate || "").trim();
+  if (!cleanAnchorId || !cleanDate) throw new Error("主播ID和日期不能为空");
+  const db = getPool();
+  const [[wave]] = await db.query(
+    "SELECT wave_value, `rank` FROM wave_snapshots WHERE anchor_id = ? AND import_date = ? LIMIT 1",
+    [cleanAnchorId, cleanDate]
+  );
+  const [[duration]] = await db.query(
+    "SELECT total_minutes FROM duration_snapshots WHERE anchor_id = ? AND import_date = ? LIMIT 1",
+    [cleanAnchorId, cleanDate]
+  );
+  return {
+    anchorId: cleanAnchorId,
+    date: cleanDate,
+    waveValue: wave ? Number(wave.wave_value) || 0 : null,
+    rank: wave ? Number(wave.rank) || 0 : null,
+    totalMinutes: duration ? Number(duration.total_minutes) || 0 : null,
+  };
+}
+
+async function saveAnchorDailySnapshot({ anchorId, date, waveValue, rank, totalMinutes }) {
+  const cleanAnchorId = String(anchorId || "").trim();
+  const cleanDate = String(date || "").trim();
+  if (!cleanAnchorId || !cleanDate) throw new Error("主播ID和日期不能为空");
+
+  const hasWave = waveValue !== null && waveValue !== undefined && String(waveValue).trim() !== "";
+  const hasDuration = totalMinutes !== null && totalMinutes !== undefined && String(totalMinutes).trim() !== "";
+  if (!hasWave && !hasDuration) throw new Error("请至少填写音浪或时长");
+
+  const db = getPool();
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    if (hasWave) {
+      const wave = Math.max(0, Math.round(Number(waveValue) || 0));
+      const cleanRank = Math.max(0, Math.round(Number(rank) || 0));
+      await conn.query(
+        `INSERT INTO wave_snapshots (anchor_id, import_date, wave_value, \`rank\`)
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`,
+        [cleanAnchorId, cleanDate, wave, cleanRank]
+      );
+    }
+    if (hasDuration) {
+      const minutes = Math.max(0, Math.round(Number(totalMinutes) || 0));
+      await conn.query(
+        `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`,
+        [cleanAnchorId, cleanDate, minutes]
+      );
+    }
     await conn.commit();
     return { ok: true };
   } catch (err) {
@@ -1340,7 +1814,7 @@ async function getDailyWaveReport(date, gender) {
   const [allPersons] = await db.query("SELECT id, name FROM persons");
   const nameById = new Map(allPersons.map((p) => [p.id, p.name]));
   if (persons.length === 0) {
-    return { date, gender, rows: [], summary: { total: 0, notLiveCount: 0, notLiveNames: [] } };
+    return { date, gender, rows: [], summary: { total: 0, notLiveCount: 0, notLiveDays: 0, notLiveNames: [] } };
   }
 
   const anchorIds = [];
@@ -1388,6 +1862,47 @@ async function getDailyWaveReport(date, gender) {
   const totalDurMap = new Map();
   for (const r of totalDurs) totalDurMap.set(r.anchor_id, Number(r.total) || 0);
 
+  const [liveWaveDates] = await db.query(
+    "SELECT DISTINCT anchor_id, import_date FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? AND wave_value > 0",
+    [...anchorIds, monthStart, date]
+  );
+  const [liveDurationDates] = await db.query(
+    "SELECT DISTINCT anchor_id, import_date FROM duration_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? AND total_minutes > 0",
+    [...anchorIds, monthStart, date]
+  );
+  const liveDateSet = new Set();
+  const liveDatesByPerson = new Map();
+  const personIdByAnchor = new Map();
+  for (const p of persons) {
+    for (const aid of p.anchorIds) personIdByAnchor.set(aid, p.person_id);
+  }
+  const normalizeDate = (value) =>
+    value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  const addLiveDate = (row) => {
+    const key = normalizeDate(row.import_date);
+    liveDateSet.add(key);
+    const personId = personIdByAnchor.get(row.anchor_id);
+    if (!personId) return;
+    const dates = liveDatesByPerson.get(personId) ?? new Set();
+    dates.add(key);
+    liveDatesByPerson.set(personId, dates);
+  };
+  for (const row of liveWaveDates) addLiveDate(row);
+  for (const row of liveDurationDates) addLiveDate(row);
+  const dateToUtc = (value) => {
+    const [yy, mm, dd] = String(value).split("-").map(Number);
+    return Date.UTC(yy, mm - 1, dd);
+  };
+  let notLiveDays = 0;
+  const reportDates = [];
+  for (let cursor = dateToUtc(monthStart), end = dateToUtc(date); cursor <= end; cursor += 24 * 60 * 60 * 1000) {
+    const key = new Date(cursor).toISOString().slice(0, 10);
+    reportDates.push(key);
+    if (!liveDateSet.has(key)) notLiveDays++;
+  }
+
   // 7. 查找同队当前日期之前最近一个有音浪快照的日期，用于计算排名变化。
   const [prevDateRows] = await db.query(
     "SELECT MAX(import_date) AS prev_date FROM wave_snapshots " +
@@ -1432,6 +1947,8 @@ async function getDailyWaveReport(date, gender) {
       td += totalDurMap.get(aid) || 0;
     }
     const isLive = dw > 0 || dd > 0;
+    const personLiveDates = liveDatesByPerson.get(p.person_id) ?? new Set();
+    const personNotLiveDays = reportDates.filter((key) => !personLiveDates.has(key)).length;
     let tier = "";
     for (const tr of tierRows) {
       if (tw >= Number(tr.min_wave)) { tier = tr.label; break; }
@@ -1447,6 +1964,7 @@ async function getDailyWaveReport(date, gender) {
       totalWave: tw,
       dailyDuration: dd,
       totalDuration: td,
+      notLiveDays: personNotLiveDays,
       tier,
       isLive,
       masterName: p.master_id ? nameById.get(p.master_id) || null : null,
@@ -1485,7 +2003,7 @@ async function getDailyWaveReport(date, gender) {
   const notLive = rows.filter(r => !r.isLive);
   return {
     date, gender, rows,
-    summary: { total: rows.length, notLiveCount: notLive.length, notLiveNames: notLive.map(r => r.name), previousDate: prevDate },
+    summary: { total: rows.length, notLiveCount: notLive.length, notLiveDays, notLiveNames: notLive.map(r => r.name), previousDate: prevDate },
   };
 }
 
@@ -1807,6 +2325,7 @@ module.exports = {
   getAnchors,
   getFamilyTree,
   getDashboardSummary,
+  getStartupHealth,
   getWaveRanking,
   getWaveTrendByGender,
   importWaveSnapshots,
@@ -1823,6 +2342,10 @@ module.exports = {
   getWaveTrendTotal,
   getAnchorCountTrend,
   updateAnchorName,
+  updateAnchorInfo,
+  updateAnchorMaster,
+  getAnchorDailySnapshot,
+  saveAnchorDailySnapshot,
   getAnchorWaveTrend,
   getAnchorsWaveTrend,
   getFlowingFlag,

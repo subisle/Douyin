@@ -5,6 +5,7 @@ import { X, Image as ImageIcon, FileSpreadsheet } from "lucide-react";
 import type { DailyReportData, DailyReportRow } from "@/types/electron";
 import { formatWave } from "./format";
 import { downloadCanvasAsPng } from "./export-image";
+import { formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
 
 /* ────────────────── 工具函数 ────────────────── */
 
@@ -98,7 +99,7 @@ function drawRoundRect(
 
 /* ────────────────── 列定义 ────────────────── */
 
-type ColumnKey = "rank" | "name" | "dailyWave" | "totalWave" | "tier" | "duration" | "master";
+type ColumnKey = "rank" | "name" | "notLiveDays" | "dailyWave" | "totalWave" | "duration" | "master" | "tier";
 
 interface ColumnDef {
   key: ColumnKey;
@@ -129,13 +130,15 @@ export function DataTableImageExport({
   const [showWave, setShowWave] = useState(true);
   const [showTotalWave, setShowTotalWave] = useState(true);
   const [showTier, setShowTier] = useState(true);
-  const [showDuration, setShowDuration] = useState(true);
-  const [showMaster, setShowMaster] = useState(true);
+  const [showDuration, setShowDuration] = useState(false);
+  const [showNotLiveDays, setShowNotLiveDays] = useState(true);
+  const [showMaster, setShowMaster] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const date = report.date;
   const rows = report.rows;
+  const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
 
   // 标题
   useEffect(() => {
@@ -145,56 +148,53 @@ export function DataTableImageExport({
 
   /* ── 构建列布局 ── */
   const buildColumns = useCallback(
-    (ctx: CanvasRenderingContext2D, scale: number, availableWidth: number) => {
-      const parts = date.split("-");
-      const day = parseInt(parts[2] || "1", 10) || 1;
-
+    (ctx: CanvasRenderingContext2D, scale: number, availableWidth: number, fitToWidth = true) => {
       const defs: ColumnDef[] = [
         {
           key: "rank",
           label: "序号",
-          minWidth: 72,
-          flex: 0.7,
+          minWidth: 58,
+          flex: 0.08,
           align: "center",
           getText: (_, i) => String(i + 1),
         },
         {
           key: "name",
           label: "主播姓名",
-          minWidth: 150,
-          flex: 1.6,
+          minWidth: 104,
+          flex: 0.12,
           align: "left",
           getText: (r) => r.name,
         },
         {
+          key: "notLiveDays",
+          label: notLiveDaysLabel,
+          minWidth: 30,
+          flex: 0,
+          align: "center",
+          getText: (r) => String(r.notLiveDays ?? 0),
+        },
+        {
           key: "dailyWave",
-          label: `${day}号音浪`,
-          minWidth: 180,
-          flex: 2.1,
+          label: "日音浪",
+          minWidth: 112,
+          flex: 0.35,
           align: "right",
           getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播"),
         },
         {
           key: "totalWave",
           label: "累计总音浪",
-          minWidth: 160,
-          flex: 1.5,
+          minWidth: 146,
+          flex: 1.6,
           align: "right",
           getText: (r) => formatWave(r.totalWave),
         },
         {
-          key: "tier",
-          label: "等级",
-          minWidth: 96,
-          flex: 1,
-          align: "center",
-          getText: (r) => r.tier || "",
-        },
-        {
           key: "duration",
           label: "有效时长",
-          minWidth: 130,
-          flex: 1.3,
+          minWidth: 94,
+          flex: 0.7,
           align: "center",
           getText: (r) =>
             r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—",
@@ -202,10 +202,18 @@ export function DataTableImageExport({
         {
           key: "master",
           label: "师傅",
-          minWidth: 100,
-          flex: 1.1,
+          minWidth: 96,
+          flex: 1.2,
           align: "left",
           getText: (r) => r.masterName || "—",
+        },
+        {
+          key: "tier",
+          label: "等级",
+          minWidth: 72,
+          flex: 0.35,
+          align: "center",
+          getText: (r) => r.tier || "",
         },
       ];
 
@@ -214,6 +222,7 @@ export function DataTableImageExport({
         if (d.key === "totalWave") return showTotalWave;
         if (d.key === "tier") return showTier;
         if (d.key === "duration") return showDuration;
+        if (d.key === "notLiveDays") return showNotLiveDays;
         if (d.key === "master") return showMaster;
         return true;
       });
@@ -223,19 +232,22 @@ export function DataTableImageExport({
         ctx.font = `bold ${14 * scale}px sans-serif`;
         const headerW = ctx.measureText(col.label).width;
         ctx.font = `${14 * scale}px sans-serif`;
-        const sampleW = rows.slice(0, 12).reduce((max, r, i) => {
+        const sampleW = rows.reduce((max, r, i) => {
           return Math.max(max, ctx.measureText(col.getText(r, i)).width);
         }, 0);
+        if (col.key === "notLiveDays") {
+          return Math.max(col.minWidth * scale, headerW + 10 * scale, sampleW + 14 * scale);
+        }
         return Math.max(col.minWidth * scale, headerW + 28 * scale, sampleW + 36 * scale);
       });
       ctx.restore();
 
       const totalW = widths.reduce((s, w) => s + w, 0);
-      if (totalW < availableWidth) {
+      if (fitToWidth && totalW < availableWidth) {
         const extra = availableWidth - totalW;
         const totalFlex = visible.reduce((s, c) => s + c.flex, 0) || 1;
         widths = widths.map((w, i) => w + extra * (visible[i].flex / totalFlex));
-      } else if (totalW > availableWidth) {
+      } else if (fitToWidth && totalW > availableWidth) {
         const ratio = availableWidth / totalW;
         widths = widths.map((w) => w * ratio);
       }
@@ -247,7 +259,7 @@ export function DataTableImageExport({
         return layout;
       });
     },
-    [date, rows, showWave, showTotalWave, showTier, showDuration, showMaster]
+    [notLiveDaysLabel, rows, showWave, showTotalWave, showTier, showDuration, showNotLiveDays, showMaster]
   );
 
   /* ── Canvas 绘制 ── */
@@ -274,10 +286,10 @@ export function DataTableImageExport({
 
     ctx.font = `bold ${22 * scale}px sans-serif`;
     const titleW = ctx.measureText(titleText).width;
-    const estCols = buildColumns(ctx, scale, 760 * scale);
+    const estCols = buildColumns(ctx, scale, 0, false);
     const estW = estCols.reduce((s, c) => s + c.width, 0);
     const containerW = Math.max(
-      680 * scale,
+      520 * scale,
       Math.min(980 * scale, Math.max(titleW + 100 * scale, estW + tablePaddingX * 2))
     );
 
@@ -324,7 +336,7 @@ export function DataTableImageExport({
       const drawX = tablePaddingX + col.x;
       if (col.align === "left") {
         ctx.textAlign = "left";
-        ctx.fillText(col.label, drawX + 12 * scale, y + tableHeaderHeight / 2);
+        ctx.fillText(col.label, drawX + 8 * scale, y + tableHeaderHeight / 2);
       } else if (col.align === "right") {
         ctx.textAlign = "right";
         ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderHeight / 2);
@@ -377,8 +389,8 @@ export function DataTableImageExport({
           ctx.textAlign = "left";
           ctx.fillStyle = "#0F172A";
           ctx.font = `${15 * scale}px sans-serif`;
-          const text = truncateCanvasText(ctx, row.name, col.width - 24 * scale);
-          ctx.fillText(text, drawX + 12 * scale, cy);
+          const text = truncateCanvasText(ctx, row.name, col.width - 16 * scale);
+          ctx.fillText(text, drawX + 8 * scale, cy);
         } else if (col.key === "dailyWave") {
           if (!isInactive) {
             const barW = Math.max(((col.width - 48 * scale) * row.dailyWave) / maxWave, 24 * scale);
@@ -434,6 +446,11 @@ export function DataTableImageExport({
             ? formatDurationText(row.dailyDuration)
             : "—";
           ctx.fillText(dText, drawX + col.width / 2, cy);
+        } else if (col.key === "notLiveDays") {
+          ctx.textAlign = "center";
+          ctx.fillStyle = (row.notLiveDays ?? 0) > 0 ? "#B91C1C" : "#15803D";
+          ctx.font = `bold ${13 * scale}px sans-serif`;
+          ctx.fillText(String(row.notLiveDays ?? 0), drawX + col.width / 2, cy);
         } else if (col.key === "master") {
           ctx.textAlign = "left";
           ctx.fillStyle = "#64748B";
@@ -460,7 +477,7 @@ export function DataTableImageExport({
     if (hasInactive) {
       ctx.fillStyle = "#DC2626";
       ctx.font = `bold ${14 * scale}px sans-serif`;
-      ctx.fillText(`未开播 ${inactiveStreamers.length} 人`, containerW / 2, y + 26 * scale);
+      ctx.fillText(`未开播人数 ${inactiveStreamers.length} 人`, containerW / 2, y + 26 * scale);
       ctx.font = `${11 * scale}px sans-serif`;
       ctx.fillStyle = "#7F1D1D";
       ctx.textBaseline = "top";
@@ -501,20 +518,22 @@ export function DataTableImageExport({
     setExporting(true);
     try {
       const headers = ["排名", "主播ID", "主播姓名"];
+      if (showNotLiveDays) headers.push(notLiveDaysLabel);
       if (showWave) headers.push("当日音浪");
       if (showTotalWave) headers.push("累计总音浪");
-      if (showTier) headers.push("等级");
       if (showDuration) headers.push("有效时长(分钟)");
       if (showMaster) headers.push("师傅");
+      if (showTier) headers.push("等级");
       headers.push("日期");
 
       const csvRows = rows.map((r, i) => {
         const row = [i + 1, r.anchorId, r.name];
+        if (showNotLiveDays) row.push(r.notLiveDays ?? 0);
         if (showWave) row.push(r.isLive ? r.dailyWave : 0);
         if (showTotalWave) row.push(r.totalWave);
-        if (showTier) row.push(r.tier || "");
         if (showDuration) row.push(r.isLive ? r.dailyDuration : 0);
         if (showMaster) row.push(r.masterName || "");
+        if (showTier) row.push(r.tier || "");
         row.push(date);
         return row;
       });
@@ -538,9 +557,6 @@ export function DataTableImageExport({
       setExporting(false);
     }
   };
-
-  const parts = date.split("-");
-  const day = parseInt(parts[2]) || 1;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-black/50 py-4">
@@ -576,7 +592,7 @@ export function DataTableImageExport({
                 <div className="flex flex-wrap gap-2">
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showWave} onChange={(e) => setShowWave(e.target.checked)} className="accent-primary" />
-                    {day}号音浪
+                    日音浪
                   </label>
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showTotalWave} onChange={(e) => setShowTotalWave(e.target.checked)} className="accent-primary" />
@@ -589,6 +605,10 @@ export function DataTableImageExport({
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showDuration} onChange={(e) => setShowDuration(e.target.checked)} className="accent-primary" />
                     有效时长
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-1 text-sm">
+                    <input type="checkbox" checked={showNotLiveDays} onChange={(e) => setShowNotLiveDays(e.target.checked)} className="accent-primary" />
+                    未播天数
                   </label>
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showMaster} onChange={(e) => setShowMaster(e.target.checked)} className="accent-primary" />

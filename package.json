@@ -12,9 +12,9 @@
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "cross-env ELECTRON=true next build",
-    "dist": "electron-builder --mac --win",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "dist": "npm run electron:build && electron-builder --mac --win --x64",
+    "dist:mac": "npm run electron:build && electron-builder --mac",
+    "dist:win": "npm run electron:build && electron-builder --win --x64"
   },
   "build": {
     "appId": "com.subisle.douyin",
@@ -22,6 +22,7 @@
     "directories": {
       "output": "release"
     },
+    "artifactName": "douyin-data-manager-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
       "out/**/*",
@@ -38,8 +39,21 @@
     },
     "win": {
       "target": [
-        "nsis"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "executableName": "douyin-data-manager"
+    },
+    "nsis": {
+      "artifactName": "douyin-data-manager-${version}-win-${arch}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     },
     "publish": {
       "provider": "github",

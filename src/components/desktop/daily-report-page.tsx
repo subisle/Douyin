@@ -3,16 +3,36 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { FileText, Download, FileSpreadsheet, Settings, Save, Columns3, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { drawReportToCanvas, ALL_COLUMNS, DEFAULT_VISIBLE_COLUMNS, type ColumnKey } from "./draw-report-canvas";
+import {
+  drawAppleReportToCanvas,
+  drawReportToCanvas,
+  formatMonthNotLiveDaysLabel,
+  ALL_COLUMNS,
+  DEFAULT_VISIBLE_COLUMNS,
+  type ColumnKey,
+  type ColumnWidths,
+  type ReportCanvasStyle,
+} from "./draw-report-canvas";
 import { downloadCanvasAsPng } from "./export-image";
 import type { TierRule, DailyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
 type GenderView = "male" | "female";
 
+const DEFAULT_REPORT_TITLE = "薇笑传媒主播数据统计";
 const COLUMNS_STORAGE_KEY = "daily-report-visible-columns";
+const COLUMNS_STORAGE_VERSION_KEY = "daily-report-visible-columns-version";
+const COLUMNS_STORAGE_VERSION = "3";
+const COLUMN_WIDTHS_STORAGE_KEY = "daily-report-column-widths";
+const REPORT_STYLES_STORAGE_KEY = "daily-report-canvas-styles";
+const REPORT_TITLES_STORAGE_KEY = "daily-report-custom-titles";
+const DEFAULT_REPORT_STYLES: Record<GenderView, ReportCanvasStyle> = {
+  male: "apple",
+  female: "classic",
+};
 
 function todayStr(): string {
   const d = new Date();
@@ -27,6 +47,11 @@ function loadVisibleColumns(): ColumnKey[] {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       const valid = parsed.filter((k): k is ColumnKey => ALL_COLUMNS.some((c) => c.key === k));
+      if (localStorage.getItem(COLUMNS_STORAGE_VERSION_KEY) !== COLUMNS_STORAGE_VERSION) {
+        const migrated = new Set<ColumnKey>(valid.filter((k) => k !== "duration" && k !== "master"));
+        for (const key of DEFAULT_VISIBLE_COLUMNS) migrated.add(key);
+        return ALL_COLUMNS.map((c) => c.key).filter((key) => migrated.has(key));
+      }
       // 至少保留一个
       if (valid.length > 0) return valid;
     }
@@ -34,6 +59,59 @@ function loadVisibleColumns(): ColumnKey[] {
     // ignore
   }
   return DEFAULT_VISIBLE_COLUMNS;
+}
+
+function sanitizeColumnWidth(value: unknown): number | null {
+  const width = Number(value);
+  if (!Number.isFinite(width) || width <= 0) return null;
+  return Math.min(800, Math.max(20, Math.round(width)));
+}
+
+function loadColumnWidths(): ColumnWidths {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object") return {};
+    const widths: ColumnWidths = {};
+    for (const col of ALL_COLUMNS) {
+      const width = sanitizeColumnWidth((parsed as Record<string, unknown>)[col.key]);
+      if (width !== null) widths[col.key] = width;
+    }
+    return widths;
+  } catch {
+    return {};
+  }
+}
+
+function isReportCanvasStyle(value: unknown): value is ReportCanvasStyle {
+  return value === "classic" || value === "apple";
+}
+
+function loadReportStyles(): Record<GenderView, ReportCanvasStyle> {
+  if (typeof window === "undefined") return DEFAULT_REPORT_STYLES;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REPORT_STYLES_STORAGE_KEY) || "{}");
+    return {
+      male: isReportCanvasStyle(parsed.male) ? parsed.male : DEFAULT_REPORT_STYLES.male,
+      female: isReportCanvasStyle(parsed.female) ? parsed.female : DEFAULT_REPORT_STYLES.female,
+    };
+  } catch {
+    return DEFAULT_REPORT_STYLES;
+  }
+}
+
+function loadReportTitles(): Record<GenderView, string> {
+  const defaults = { male: DEFAULT_REPORT_TITLE, female: DEFAULT_REPORT_TITLE };
+  if (typeof window === "undefined") return defaults;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REPORT_TITLES_STORAGE_KEY) || "{}");
+    return {
+      male: typeof parsed.male === "string" && parsed.male.trim() ? parsed.male.trim() : defaults.male,
+      female: typeof parsed.female === "string" && parsed.female.trim() ? parsed.female.trim() : defaults.female,
+    };
+  } catch {
+    return defaults;
+  }
 }
 
 function formatRankDelta(delta: number | null | undefined): string {
@@ -64,6 +142,13 @@ export function DailyReportPage() {
 
   // 字段设置
   const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_VISIBLE_COLUMNS);
+  const [columnWidths, setColumnWidths] = useState<ColumnWidths>({});
+  const [reportStyles, setReportStyles] = useState<Record<GenderView, ReportCanvasStyle>>(DEFAULT_REPORT_STYLES);
+  const [reportTitles, setReportTitles] = useState<Record<GenderView, string>>({
+    male: DEFAULT_REPORT_TITLE,
+    female: DEFAULT_REPORT_TITLE,
+  });
+  const [titleDraft, setTitleDraft] = useState(DEFAULT_REPORT_TITLE);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
@@ -74,6 +159,11 @@ export function DailyReportPage() {
   // 初始化读取 localStorage
   useEffect(() => {
     setVisibleColumns(loadVisibleColumns());
+    setColumnWidths(loadColumnWidths());
+    setReportStyles(loadReportStyles());
+    const titles = loadReportTitles();
+    setReportTitles(titles);
+    setTitleDraft(titles.male);
     setHydrated(true);
   }, []);
 
@@ -82,10 +172,34 @@ export function DailyReportPage() {
     if (!hydrated) return;
     try {
       localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(visibleColumns));
+      localStorage.setItem(COLUMNS_STORAGE_VERSION_KEY, COLUMNS_STORAGE_VERSION);
     } catch {
       // ignore
     }
   }, [visibleColumns, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths));
+    } catch {
+      // ignore
+    }
+  }, [columnWidths, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(REPORT_STYLES_STORAGE_KEY, JSON.stringify(reportStyles));
+    } catch {
+      // ignore
+    }
+  }, [reportStyles, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    setTitleDraft(reportTitles[gender]);
+  }, [gender, hydrated, reportTitles]);
 
   const toggleColumn = (key: ColumnKey) => {
     setVisibleColumns((prev) => {
@@ -101,7 +215,58 @@ export function DailyReportPage() {
     setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
   };
 
+  const updateColumnWidth = (key: ColumnKey, value: string) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev };
+      const width = sanitizeColumnWidth(value);
+      if (width === null) {
+        delete next[key];
+      } else {
+        next[key] = width;
+      }
+      return next;
+    });
+  };
+
+  const resetColumnWidths = () => {
+    setColumnWidths({});
+  };
+
   const rows = useMemo(() => report?.rows ?? [], [report?.rows]);
+  const currentReportTitle = reportTitles[gender] || DEFAULT_REPORT_TITLE;
+  const reportStyle = reportStyles[gender];
+
+  const drawSelectedReport = useCallback((canvas: HTMLCanvasElement) => {
+    const options = {
+      date,
+      rows,
+      gender,
+      customTitle: currentReportTitle,
+      subtitle: `Data Report • ${date}`,
+      notLiveCount: report?.summary.notLiveCount ?? 0,
+      notLiveDays: report?.summary.notLiveDays ?? 0,
+      scale: 2,
+      visibleColumns,
+      columnWidths,
+    };
+    if (reportStyle === "apple") {
+      drawAppleReportToCanvas(canvas, options);
+      return;
+    }
+    drawReportToCanvas(canvas, options);
+  }, [columnWidths, currentReportTitle, date, gender, report?.summary.notLiveCount, report?.summary.notLiveDays, reportStyle, rows, visibleColumns]);
+
+  const saveCurrentTitle = () => {
+    const title = titleDraft.trim() || DEFAULT_REPORT_TITLE;
+    const next = { ...reportTitles, [gender]: title };
+    setReportTitles(next);
+    setTitleDraft(title);
+    try {
+      localStorage.setItem(REPORT_TITLES_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
 
   const fetchReport = useCallback(async (d: string, g: string) => {
     const api = window.electronAPI;
@@ -147,17 +312,8 @@ export function DailyReportPage() {
   // 绘制 Canvas 预览
   useEffect(() => {
     if (!report || rows.length === 0 || !canvasRef.current) return;
-    const genderText = gender === "male" ? "男" : "女";
-    drawReportToCanvas(canvasRef.current, {
-      date,
-      rows,
-      gender: genderText === "男" ? "male" : "female",
-      customTitle: "薇笑传媒主播数据统计",
-      subtitle: `Data Report • ${date}`,
-      scale: 2,
-      visibleColumns,
-    });
-  }, [report, rows, date, gender, visibleColumns]);
+    drawSelectedReport(canvasRef.current);
+  }, [drawSelectedReport, report, rows.length]);
 
   const handleExportImage = async () => {
     const canvas = canvasRef.current;
@@ -165,16 +321,9 @@ export function DailyReportPage() {
     setExporting(true);
     try {
       const genderText = gender === "male" ? "男" : "女";
-      await downloadCanvasAsPng(canvas, `${date}_${genderText}_${rows.length}人.png`, () => {
-        drawReportToCanvas(canvas, {
-          date,
-          rows,
-          gender,
-          customTitle: "薇笑传媒主播数据统计",
-          subtitle: `Data Report • ${date}`,
-          scale: 2,
-          visibleColumns,
-        });
+      const styleText = reportStyle === "apple" ? "样式二" : "样式一";
+      await downloadCanvasAsPng(canvas, `${date}_${genderText}_${styleText}_${rows.length}人.png`, () => {
+        drawSelectedReport(canvas);
       });
     } catch (e) {
       console.error("导出图片失败", e);
@@ -194,11 +343,12 @@ export function DailyReportPage() {
         "排名变化",
         "主播ID",
         "主播姓名",
+        formatMonthNotLiveDaysLabel(date),
         "当日音浪",
         "累计总音浪",
-        "等级",
         "有效时长(分钟)",
         "师傅",
+        "等级",
         "日期",
       ];
       const csvRows = rows.map((r, i) => [
@@ -207,11 +357,12 @@ export function DailyReportPage() {
         formatRankDelta(r.rankDelta),
         r.anchorId,
         r.name,
+        r.notLiveDays ?? 0,
         r.isLive ? r.dailyWave : 0,
         r.totalWave,
-        r.tier || "",
         r.isLive ? r.dailyDuration : 0,
         r.masterName || "",
+        r.tier || "",
         date,
       ]);
       const csv = [headers, ...csvRows]
@@ -287,14 +438,26 @@ export function DailyReportPage() {
                   <Badge variant="secondary">
                     {gender === "male" ? "男队" : "女队"} {report.summary.total} 人
                   </Badge>
-                  {report.summary.notLiveCount > 0 && (
-                    <Badge
-                      variant="outline"
-                      className="border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
-                    >
-                      未开播 {report.summary.notLiveCount} 人
-                    </Badge>
-                  )}
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      report.summary.notLiveCount > 0
+                        ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
+                        : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300"
+                    )}
+                  >
+                    未开播人数 {report.summary.notLiveCount} 人
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      report.summary.notLiveDays > 0
+                        ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
+                        : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300"
+                    )}
+                  >
+                    未开播天数 {report.summary.notLiveDays} 天
+                  </Badge>
                   {report.summary.previousDate && (
                     <Badge variant="outline">
                       对比 {report.summary.previousDate}
@@ -321,13 +484,54 @@ export function DailyReportPage() {
                   </button>
                 ))}
               </div>
+              {/* 图片样式 */}
+              <div className="inline-flex rounded-full border border-border bg-card p-1">
+                {([
+                  ["classic", "样式一"],
+                  ["apple", "样式二"],
+                ] as const).map(([style, label]) => (
+                  <button
+                    key={style}
+                    onClick={() => setReportStyles((prev) => ({ ...prev, [gender]: style }))}
+                    className={cn(
+                      "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+                      reportStyle === style
+                        ? "bg-foreground text-background shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                    title={style === "apple" ? "Apple 浅色导出样式" : "旧版浅色导出样式"}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               {/* 日期选择 */}
-              <input
+              <Input
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none focus:border-primary"
+                className="w-40 rounded-lg bg-card"
               />
+              {/* 标题设置 */}
+              <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1">
+                <input
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveCurrentTitle();
+                  }}
+                  className="w-48 bg-transparent px-1 py-1 text-sm outline-none"
+                  placeholder={`${gender === "male" ? "男队" : "女队"}标题`}
+                  title={`${gender === "male" ? "男队" : "女队"}导出标题`}
+                />
+                <button
+                  onClick={saveCurrentTitle}
+                  className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                  title="保存当前队伍标题"
+                >
+                  保存
+                </button>
+              </div>
               {/* 导出图片 */}
               <button
                 onClick={handleExportImage}
@@ -375,14 +579,21 @@ export function DailyReportPage() {
         {showColumnSettings && (
           <div className="border-b border-border bg-muted/30 p-4">
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm font-medium">报告字段显示（实时生效）</span>
+              <span className="text-sm font-medium">报告字段和列宽（实时生效）</span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={resetColumns}
                   className="flex items-center gap-1 rounded-lg border border-border px-3 py-1 text-sm hover:bg-accent"
                 >
                   <RotateCcw className="size-3.5" />
-                  全部显示
+                  恢复默认
+                </button>
+                <button
+                  onClick={resetColumnWidths}
+                  className="flex items-center gap-1 rounded-lg border border-border px-3 py-1 text-sm hover:bg-accent"
+                >
+                  <RotateCcw className="size-3.5" />
+                  重置列宽
                 </button>
                 <button
                   onClick={() => setShowColumnSettings(false)}
@@ -392,32 +603,45 @@ export function DailyReportPage() {
                 </button>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {ALL_COLUMNS.map((col) => {
                 const checked = visibleColumns.includes(col.key);
                 return (
-                  <label
+                  <div
                     key={col.key}
                     className={cn(
-                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition select-none",
+                      "grid grid-cols-[minmax(0,1fr)_82px] items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
                       checked
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border bg-card text-muted-foreground hover:bg-accent"
                     )}
                   >
+                    <label className="flex min-w-0 cursor-pointer items-center gap-2 select-none">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleColumn(col.key)}
+                        className="size-4 cursor-pointer accent-primary"
+                      />
+                      <span className="truncate font-medium">{col.label}</span>
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleColumn(col.key)}
-                      className="size-4 cursor-pointer accent-primary"
+                      type="number"
+                      min={20}
+                      max={800}
+                      step={5}
+                      value={columnWidths[col.key] ?? ""}
+                      onChange={(e) => updateColumnWidth(col.key, e.target.value)}
+                      disabled={!checked}
+                      placeholder="自动"
+                      className="h-8 w-full rounded-md border border-border bg-background px-2 text-right text-xs text-foreground outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-45"
                     />
-                    <span className="font-medium">{col.label}</span>
-                  </label>
+                  </div>
                 );
               })}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-              至少保留 1 个字段。设置会自动保存，并在下次打开时恢复。
+              至少保留 1 个字段。列宽留空为自动，单位 px。
             </p>
           </div>
         )}

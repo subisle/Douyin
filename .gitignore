@@ -5,6 +5,7 @@ node_modules/
 .next/
 out/
 dist/
+release/
 
 # Environment
 .env
@@ -41,6 +42,9 @@ tsconfig.tsbuildinfo
 
 # Electron
 electron/dist/
+
+# Local backups
+backups/
 
 # Temp files
 tmp-query.js
