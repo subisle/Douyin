@@ -202,11 +202,14 @@
 
 .startup-splash {
   background: transparent;
+  contain: paint;
   animation: startup-shell 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .startup-wordmark {
   transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
 }
 
 .startup-text-effect {
@@ -221,19 +224,18 @@
   -webkit-background-clip: text;
   background-clip: text;
   filter:
-    drop-shadow(0 2px 0 rgba(255, 255, 255, 0.62))
-    drop-shadow(0 18px 38px rgba(88, 54, 24, 0.28))
-    drop-shadow(0 0 26px rgba(216, 151, 65, 0.34));
+    drop-shadow(0 2px 0 rgba(255, 255, 255, 0.58))
+    drop-shadow(0 14px 28px rgba(88, 54, 24, 0.22));
+  will-change: transform, opacity, background-position;
   animation:
-    startup-title-enter 0.96s cubic-bezier(0.16, 1, 0.3, 1) both,
-    startup-text-shine 1.5s ease-out 0.28s both,
-    startup-glow-pulse 2.1s ease-in-out 0.24s both;
+    startup-title-enter 0.82s cubic-bezier(0.16, 1, 0.3, 1) both,
+    startup-text-shine 1.05s ease-out 0.2s both;
 }
 
 .startup-text-effect::after {
   content: "";
   position: absolute;
-  inset: -12px -28px;
+  inset: -8px -20px;
   background: linear-gradient(
     110deg,
     transparent 0%,
@@ -245,7 +247,7 @@
   );
   mix-blend-mode: screen;
   transform: translateX(-132%) skewX(-10deg);
-  animation: startup-light-sweep 1.18s ease-out 0.52s both;
+  animation: startup-light-sweep 0.9s ease-out 0.42s both;
 }
 
 .startup-subtitle-effect {
@@ -255,7 +257,8 @@
   text-shadow:
     0 1px 0 rgba(255, 255, 255, 0.72),
     0 12px 28px rgba(82, 55, 30, 0.2);
-  animation: startup-subtitle-enter 0.82s cubic-bezier(0.22, 1, 0.36, 1) 0.5s both;
+  will-change: transform, opacity;
+  animation: startup-subtitle-enter 0.66s cubic-bezier(0.22, 1, 0.36, 1) 0.38s both;
 }
 
 @keyframes startup-shell {

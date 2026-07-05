@@ -26,10 +26,10 @@ interface StartupCheck {
 
 type UpdateStartupCheck = (key: StartupCheck["key"], patch: Partial<StartupCheck>) => void;
 
-const STARTUP_ANIMATION_MS = 2600;
-const STARTUP_SETTLE_MS = 450;
-const STARTUP_DATA_TIMEOUT_MS = 6500;
-const STARTUP_UPDATE_TIMEOUT_MS = 4500;
+const STARTUP_ANIMATION_MS = 1800;
+const STARTUP_SETTLE_MS = 180;
+const STARTUP_DATA_TIMEOUT_MS = 3500;
+const STARTUP_UPDATE_TIMEOUT_MS = 2500;
 
 export function DesktopShell() {
   const [currentPage, setCurrentPage] = useState<PageId>("datacenter");
@@ -45,11 +45,8 @@ export function DesktopShell() {
     };
 
     const run = async () => {
-      const animation = wait(STARTUP_ANIMATION_MS);
-      await Promise.all([
-        animation,
-        runStartupChecks(updateCheck),
-      ]);
+      void runStartupChecks(updateCheck);
+      await wait(STARTUP_ANIMATION_MS);
       await wait(STARTUP_SETTLE_MS);
       if (!cancelled) setShowStartup(false);
     };
