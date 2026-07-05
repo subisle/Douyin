@@ -2,6 +2,7 @@
 
 import { forwardRef } from "react";
 import type { DailyReportData } from "@/types/electron";
+import { formatDailyWaveLabel } from "./draw-report-canvas";
 
 /* ── 颜色常量 ── */
 const C = {
@@ -51,6 +52,7 @@ interface PosterProps {
 export const PosterCard = forwardRef<HTMLDivElement, PosterProps>(
   ({ report }, ref) => {
     const rows = report.rows;
+    const dailyWaveLabel = formatDailyWaveLabel(report.date);
     // 按当日音浪降序排列（海报展示用）
     const sorted = [...rows].sort((a, b) => b.dailyWave - a.dailyWave);
     const ranked = sorted.map((r, i) => ({ ...r, rank: i + 1 }));
@@ -232,7 +234,7 @@ export const PosterCard = forwardRef<HTMLDivElement, PosterProps>(
             <div style={{ textAlign: "center" }}>RANK</div>
             <div>主播姓名</div>
             <div>等级</div>
-            <div style={{ width: "100%" }}>当日音浪</div>
+            <div style={{ width: "100%" }}>{dailyWaveLabel}</div>
             <div>总音浪</div>
             <div>师傅</div>
             <div>时长</div>

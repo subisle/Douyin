@@ -4,11 +4,24 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { FileText, Download, FileSpreadsheet, Settings, Save, Columns3, RotateCcw } from "lucide-react";
+import {
+  CalendarDays,
+  Columns3,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Mars,
+  Palette,
+  RotateCcw,
+  Save,
+  Settings,
+  Venus,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   drawAppleReportToCanvas,
   drawReportToCanvas,
+  formatDailyWaveLabel,
   formatMonthNotLiveDaysLabel,
   ALL_COLUMNS,
   DEFAULT_VISIBLE_COLUMNS,
@@ -28,6 +41,8 @@ const COLUMNS_STORAGE_VERSION_KEY = "daily-report-visible-columns-version";
 const COLUMNS_STORAGE_VERSION = "3";
 const COLUMN_WIDTHS_STORAGE_KEY = "daily-report-column-widths";
 const REPORT_STYLES_STORAGE_KEY = "daily-report-canvas-styles";
+const REPORT_STYLES_STORAGE_VERSION_KEY = "daily-report-canvas-styles-version";
+const REPORT_STYLES_STORAGE_VERSION = "2";
 const REPORT_TITLES_STORAGE_KEY = "daily-report-custom-titles";
 const DEFAULT_REPORT_STYLES: Record<GenderView, ReportCanvasStyle> = {
   male: "apple",
@@ -90,6 +105,9 @@ function isReportCanvasStyle(value: unknown): value is ReportCanvasStyle {
 function loadReportStyles(): Record<GenderView, ReportCanvasStyle> {
   if (typeof window === "undefined") return DEFAULT_REPORT_STYLES;
   try {
+    if (localStorage.getItem(REPORT_STYLES_STORAGE_VERSION_KEY) !== REPORT_STYLES_STORAGE_VERSION) {
+      return DEFAULT_REPORT_STYLES;
+    }
     const parsed = JSON.parse(localStorage.getItem(REPORT_STYLES_STORAGE_KEY) || "{}");
     return {
       male: isReportCanvasStyle(parsed.male) ? parsed.male : DEFAULT_REPORT_STYLES.male,
@@ -191,6 +209,7 @@ export function DailyReportPage() {
     if (!hydrated) return;
     try {
       localStorage.setItem(REPORT_STYLES_STORAGE_KEY, JSON.stringify(reportStyles));
+      localStorage.setItem(REPORT_STYLES_STORAGE_VERSION_KEY, REPORT_STYLES_STORAGE_VERSION);
     } catch {
       // ignore
     }
@@ -235,6 +254,7 @@ export function DailyReportPage() {
   const rows = useMemo(() => report?.rows ?? [], [report?.rows]);
   const currentReportTitle = reportTitles[gender] || DEFAULT_REPORT_TITLE;
   const reportStyle = reportStyles[gender];
+  const dailyWaveLabel = formatDailyWaveLabel(date);
 
   const drawSelectedReport = useCallback((canvas: HTMLCanvasElement) => {
     const options = {
@@ -344,7 +364,7 @@ export function DailyReportPage() {
         "主播ID",
         "主播姓名",
         formatMonthNotLiveDaysLabel(date),
-        "当日音浪",
+        dailyWaveLabel,
         "累计总音浪",
         "有效时长(分钟)",
         "师傅",
@@ -466,26 +486,32 @@ export function DailyReportPage() {
                 </>
               )}
             </div>
-            <div className="app-no-drag flex items-center gap-2">
+            <div className="app-no-drag flex flex-wrap items-center justify-end gap-2">
               {/* 性别切换 */}
-              <div className="inline-flex rounded-full border border-border bg-card p-1">
+              <div className="flex h-10 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
+                <span className="px-2 text-[11px] font-semibold text-muted-foreground">队伍</span>
                 {(["female", "male"] as GenderView[]).map((g) => (
                   <button
                     key={g}
                     onClick={() => setGender(g)}
                     className={cn(
-                      "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+                      "flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-all",
                       gender === g
                         ? "bg-primary text-primary-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
                     )}
                   >
+                    {g === "male" ? <Mars className="size-3.5" /> : <Venus className="size-3.5" />}
                     {g === "male" ? "男队" : "女队"}
                   </button>
                 ))}
               </div>
               {/* 图片样式 */}
-              <div className="inline-flex rounded-full border border-border bg-card p-1">
+              <div className="flex h-10 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
+                <span className="flex items-center gap-1 px-2 text-[11px] font-semibold text-muted-foreground">
+                  <Palette className="size-3.5" />
+                  图片
+                </span>
                 {([
                   ["classic", "样式一"],
                   ["apple", "样式二"],
@@ -494,10 +520,10 @@ export function DailyReportPage() {
                     key={style}
                     onClick={() => setReportStyles((prev) => ({ ...prev, [gender]: style }))}
                     className={cn(
-                      "rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
+                      "h-8 rounded-lg px-3 text-sm font-semibold transition-all",
                       reportStyle === style
                         ? "bg-foreground text-background shadow-sm"
-                        : "text-muted-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
                     )}
                     title={style === "apple" ? "Apple 浅色导出样式" : "旧版浅色导出样式"}
                   >
@@ -506,12 +532,15 @@ export function DailyReportPage() {
                 ))}
               </div>
               {/* 日期选择 */}
-              <Input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="w-40 rounded-lg bg-card"
-              />
+              <div className="relative">
+                <CalendarDays className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="h-10 w-44 rounded-xl bg-card/90 pr-3 pl-9 shadow-xs"
+                />
+              </div>
               {/* 标题设置 */}
               <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1">
                 <input
@@ -623,7 +652,9 @@ export function DailyReportPage() {
                         onChange={() => toggleColumn(col.key)}
                         className="size-4 cursor-pointer accent-primary"
                       />
-                      <span className="truncate font-medium">{col.label}</span>
+                      <span className="truncate font-medium">
+                        {col.key === "dailyWave" ? dailyWaveLabel : col.label}
+                      </span>
                     </label>
                     <input
                       type="number"

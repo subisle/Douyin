@@ -292,15 +292,17 @@ export function ImportPage({
   );
   const blockedByDuplicate = kind !== "anchors" && Boolean(summary?.duplicateFile || summary?.duplicateData);
 
-  const reset = () => {
+  const resetImportState = (options: { keepResult?: boolean } = {}) => {
     setSummary(null);
     setAnchorSummary(null);
-    setResult(null);
+    if (!options.keepResult) setResult(null);
     setError(null);
     setFileName("");
     currentFileRef.current = null;
     if (fileRef.current) fileRef.current.value = "";
   };
+  const reset = () => resetImportState();
+  const resetAfterSuccess = () => resetImportState({ keepResult: true });
 
   const buildPreview = async (file: File, rows: ParsedRow[], nextKind: ImportKind) => {
     const anchorsRes = await window.electronAPI!.getAnchors();
@@ -513,7 +515,7 @@ export function ImportPage({
           `成功导入 ${rowsToImport.length} 条${IMPORT_KIND_LABEL[kind]}数据（新增 ${summary!.stats.new}，覆盖 ${summary!.stats.changed}，无变化 ${summary!.stats.unchanged}，日期 ${date}）`
         );
       }
-      reset();
+      resetAfterSuccess();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

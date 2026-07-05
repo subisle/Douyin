@@ -5,7 +5,7 @@ import { X, Image as ImageIcon, FileSpreadsheet } from "lucide-react";
 import type { DailyReportData, DailyReportRow } from "@/types/electron";
 import { formatWave } from "./format";
 import { downloadCanvasAsPng } from "./export-image";
-import { formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
+import { formatDailyWaveLabel, formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
 
 /* ────────────────── 工具函数 ────────────────── */
 
@@ -139,6 +139,7 @@ export function DataTableImageExport({
   const date = report.date;
   const rows = report.rows;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const dailyWaveLabel = formatDailyWaveLabel(date);
 
   // 标题
   useEffect(() => {
@@ -176,7 +177,7 @@ export function DataTableImageExport({
         },
         {
           key: "dailyWave",
-          label: "日音浪",
+          label: dailyWaveLabel,
           minWidth: 112,
           flex: 0.35,
           align: "right",
@@ -259,7 +260,7 @@ export function DataTableImageExport({
         return layout;
       });
     },
-    [notLiveDaysLabel, rows, showWave, showTotalWave, showTier, showDuration, showNotLiveDays, showMaster]
+    [dailyWaveLabel, notLiveDaysLabel, rows, showWave, showTotalWave, showTier, showDuration, showNotLiveDays, showMaster]
   );
 
   /* ── Canvas 绘制 ── */
@@ -519,7 +520,7 @@ export function DataTableImageExport({
     try {
       const headers = ["排名", "主播ID", "主播姓名"];
       if (showNotLiveDays) headers.push(notLiveDaysLabel);
-      if (showWave) headers.push("当日音浪");
+      if (showWave) headers.push(dailyWaveLabel);
       if (showTotalWave) headers.push("累计总音浪");
       if (showDuration) headers.push("有效时长(分钟)");
       if (showMaster) headers.push("师傅");
@@ -592,7 +593,7 @@ export function DataTableImageExport({
                 <div className="flex flex-wrap gap-2">
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showWave} onChange={(e) => setShowWave(e.target.checked)} className="accent-primary" />
-                    日音浪
+                    {dailyWaveLabel}
                   </label>
                   <label className="flex cursor-pointer items-center gap-1 text-sm">
                     <input type="checkbox" checked={showTotalWave} onChange={(e) => setShowTotalWave(e.target.checked)} className="accent-primary" />

@@ -3,7 +3,7 @@
 import type { DailyReportRow } from "@/types/electron";
 import { formatWave, formatDuration } from "./format";
 import { downloadCanvasAsPng } from "./export-image";
-import { formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
+import { formatDailyWaveLabel, formatMonthNotLiveDaysLabel } from "./draw-report-canvas";
 
 // 主题色 —— 与族谱海报完全一致
 const C = {
@@ -90,6 +90,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   const genderLabel = gender === "male" ? "男主播" : "女主播";
   const teamLabel = gender === "male" ? "男队" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const dailyWaveLabel = formatDailyWaveLabel(date);
 
   // ---- 1. 尺寸计算 ----
   const posterW = 1080;
@@ -195,7 +196,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
 
   ctx.font = "12px sans-serif";
   ctx.fillStyle = C.cyan;
-  ctx.fillText(`${teamLabel} · 每日音浪`, titleX, panelY + 14);
+  ctx.fillText(`${teamLabel} · ${dailyWaveLabel}`, titleX, panelY + 14);
 
   ctx.font = "bold 28px sans-serif";
   ctx.fillStyle = C.text;
@@ -268,7 +269,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   }
   if (showDailyWave) {
     ctx.textAlign = "center";
-    ctx.fillText("日音浪", colX + dailyWaveColW / 2, tableY + tableHeaderH / 2);
+    ctx.fillText(dailyWaveLabel, colX + dailyWaveColW / 2, tableY + tableHeaderH / 2);
     colX += dailyWaveColW;
   }
   if (showTotalWave) {

@@ -24,6 +24,7 @@ import {
   LoadingState,
 } from "./states";
 import { AddAnchorDialog, MergeAccountsDialog, ImportAnchorsDialog } from "./anchor-dialogs";
+import { formatDailyWaveLabel } from "./draw-report-canvas";
 
 type GenderFilter = "all" | "male" | "female";
 type MasterFilter = { mode: "none" } | { mode: "master"; personId: number } | { mode: "apprentice"; personId: number };
@@ -844,7 +845,7 @@ function DailySnapshotDialog({
                 <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} disabled={loading || saving} />
               </div>
               <div>
-                <label className="mb-1 block text-sm font-medium">当日音浪</label>
+                <label className="mb-1 block text-sm font-medium">{formatDailyWaveLabel(date)}</label>
                 <Input
                   type="number"
                   min="0"

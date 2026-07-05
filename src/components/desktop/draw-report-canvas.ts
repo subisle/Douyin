@@ -21,6 +21,11 @@ export function formatMonthNotLiveDaysLabel(date: string): string {
   return Number.isFinite(month) && month >= 1 && month <= 12 ? `${month}月未播天数` : "本月未播天数";
 }
 
+export function formatDailyWaveLabel(date: string): string {
+  const day = Number(date.split("-")[2]);
+  return Number.isFinite(day) && day >= 1 && day <= 31 ? `${day}日音浪` : "日音浪";
+}
+
 function truncateCanvasText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -157,13 +162,13 @@ function getManualColumnWidth(key: ColumnKey, columnWidths: ColumnWidths): numbe
   return Math.min(limit.max, Math.max(limit.min, Math.round(value)));
 }
 
-function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLabel = "未播天数"): ColumnDef[] {
+function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLabel = "未播天数", dailyWaveLabel = "日音浪"): ColumnDef[] {
   if (profile === "apple") {
     return [
       { key: "rank",      label: "排名",           minWidth: 66,  flex: 0.05, align: "center", getText: (r, i) => `${i + 1}${r.rankDelta ? r.rankDelta : ""}` },
       { key: "name",      label: "主播姓名",       minWidth: 88,  flex: 0.04, align: "left",   getText: (r) => r.name },
       { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 28,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
-      { key: "dailyWave", label: "日音浪",         minWidth: 112, flex: 0.45, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+      { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.45, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
       { key: "totalWave", label: "累计总音浪",     minWidth: 134, flex: 0.55, align: "right",  getText: (r) => formatWave(r.totalWave) },
       { key: "duration",  label: "有效时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
       { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "—" },
@@ -174,7 +179,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
     { key: "rank",      label: "排名",           minWidth: 66,  flex: 0.08, align: "center", getText: (r, i) => `${i + 1}${r.rankDelta ? r.rankDelta : ""}` },
     { key: "name",      label: "主播姓名",       minWidth: 104, flex: 0.12, align: "left",   getText: (r) => r.name },
     { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 30,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
-    { key: "dailyWave", label: "日音浪",         minWidth: 112, flex: 0.35, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.35, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
     { key: "totalWave", label: "累计总音浪",     minWidth: 146, flex: 1.6, align: "right",  getText: (r) => formatWave(r.totalWave) },
     { key: "duration",  label: "有效时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
     { key: "master",    label: "师傅",           minWidth: 96,  flex: 1.2, align: "left",   getText: (r) => r.masterName || "—" },
@@ -182,8 +187,8 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
   ];
 }
 
-function getVisibleColumnDefinitions(visibleColumns: ColumnKey[], profile: ColumnProfile = "classic", notLiveDaysLabel = "未播天数"): ColumnDef[] {
-  const allDefs = getColumnDefinitions(profile, notLiveDaysLabel);
+function getVisibleColumnDefinitions(visibleColumns: ColumnKey[], profile: ColumnProfile = "classic", notLiveDaysLabel = "未播天数", dailyWaveLabel = "日音浪"): ColumnDef[] {
+  const allDefs = getColumnDefinitions(profile, notLiveDaysLabel, dailyWaveLabel);
   const defs = allDefs.filter((c) => visibleColumns.includes(c.key));
   return defs.length > 0 ? defs : [allDefs[0]];
 }
@@ -224,9 +229,10 @@ function measureNaturalColumnsWidth(
   visibleColumns: ColumnKey[],
   columnWidths: ColumnWidths = {},
   profile: ColumnProfile = "classic",
-  notLiveDaysLabel = "未播天数"
+  notLiveDaysLabel = "未播天数",
+  dailyWaveLabel = "日音浪"
 ): number {
-  const defs = getVisibleColumnDefinitions(visibleColumns, profile, notLiveDaysLabel);
+  const defs = getVisibleColumnDefinitions(visibleColumns, profile, notLiveDaysLabel, dailyWaveLabel);
   const { widths } = measureNaturalColumnWidths(ctx, scale, rows, defs, columnWidths);
   return widths.reduce((sum, width) => sum + width, 0);
 }
@@ -239,9 +245,10 @@ function buildColumns(
   visibleColumns: ColumnKey[],
   columnWidths: ColumnWidths = {},
   profile: ColumnProfile = "classic",
-  notLiveDaysLabel = "未播天数"
+  notLiveDaysLabel = "未播天数",
+  dailyWaveLabel = "日音浪"
 ): (ColumnDef & { x: number; width: number })[] {
-  const defs = getVisibleColumnDefinitions(visibleColumns, profile, notLiveDaysLabel);
+  const defs = getVisibleColumnDefinitions(visibleColumns, profile, notLiveDaysLabel, dailyWaveLabel);
   const measured = measureNaturalColumnWidths(ctx, scale, rows, defs, columnWidths);
   let widths = measured.widths;
   const manualFlags = measured.manualFlags;
@@ -316,6 +323,7 @@ export function drawReportToCanvas(
   const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
   const titleText = `${titleBase} ${formattedDate}`;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const dailyWaveLabel = formatDailyWaveLabel(date);
   const tablePaddingX = 20 * scale;
   const headerHeight = 54 * scale;
   const tableHeaderHeight = 32 * scale;
@@ -327,7 +335,7 @@ export function drawReportToCanvas(
 
   ctx.font = `bold ${22 * scale}px sans-serif`;
   const titleW = ctx.measureText(titleText).width;
-  const naturalColumnsWidth = measureNaturalColumnsWidth(ctx, scale, rows, visibleColumns, columnWidths, "classic", notLiveDaysLabel);
+  const naturalColumnsWidth = measureNaturalColumnsWidth(ctx, scale, rows, visibleColumns, columnWidths, "classic", notLiveDaysLabel, dailyWaveLabel);
   const containerW = Math.max(
     520 * scale,
     Math.min(1800 * scale, Math.max(titleW + 100 * scale, naturalColumnsWidth + tablePaddingX * 2))
@@ -345,7 +353,7 @@ export function drawReportToCanvas(
     ? Math.max(118 * scale, (86 + inactiveLines.length * 18) * scale)
     : 64 * scale;
 
-  const cols = buildColumns(ctx, scale, containerW - tablePaddingX * 2, rows, visibleColumns, columnWidths, "classic", notLiveDaysLabel);
+  const cols = buildColumns(ctx, scale, containerW - tablePaddingX * 2, rows, visibleColumns, columnWidths, "classic", notLiveDaysLabel, dailyWaveLabel);
   const totalH = headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight;
 
   canvas.width  = containerW;
@@ -625,6 +633,7 @@ export function drawAppleReportToCanvas(
   const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
   const genderText = gender === "male" ? "男队" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const dailyWaveLabel = formatDailyWaveLabel(date);
   const liveRows = rows.filter((r) => r.isLive);
   const inactiveRows = rows.filter((r) => !r.isLive);
   const notLivePeopleCount = notLiveCount ?? inactiveRows.length;
@@ -642,16 +651,24 @@ export function drawAppleReportToCanvas(
   const warnH = 42 * scale;
   const footerH = footerTextGap + footerTextH + (inactiveRows.length > 0 ? warnGap + warnH : 0);
 
-  const naturalColumnsWidth = measureNaturalColumnsWidth(ctx, scale, rows, visibleColumns, columnWidths, "apple", notLiveDaysLabel);
+  const activeColumnCount = getVisibleColumnDefinitions(
+    visibleColumns,
+    "apple",
+    notLiveDaysLabel,
+    dailyWaveLabel
+  ).length;
+  const denseColumns = activeColumnCount >= 7;
+  const densityBreathingRoom = Math.max(0, activeColumnCount - 5) * 18 * scale;
+  const naturalColumnsWidth = measureNaturalColumnsWidth(ctx, scale, rows, visibleColumns, columnWidths, "apple", notLiveDaysLabel, dailyWaveLabel);
   const canvasW = Math.max(
-    480 * scale,
-    Math.min(2000 * scale, naturalColumnsWidth + pagePad * 2 + cardPad * 2)
+    560 * scale,
+    Math.min(2200 * scale, naturalColumnsWidth + densityBreathingRoom + pagePad * 2 + cardPad * 2)
   );
   const cardX = pagePad;
   const cardY = pagePad;
   const cardW = canvasW - pagePad * 2;
   const tableW = cardW - cardPad * 2;
-  const cols = buildColumns(ctx, scale, tableW, rows, visibleColumns, columnWidths, "apple", notLiveDaysLabel);
+  const cols = buildColumns(ctx, scale, tableW, rows, visibleColumns, columnWidths, "apple", notLiveDaysLabel, dailyWaveLabel);
   const tableRowsH = rows.length * rowH + Math.max(0, rows.length - 1) * rowGap;
   const cardH = headerH + tableHeaderH + rowGap + tableRowsH + footerH + cardPad;
   const canvasH = cardY + cardH + pagePad;
@@ -792,18 +809,21 @@ export function drawAppleReportToCanvas(
           ctx.fillText("未开播", drawX + col.width - 12 * scale, cy);
           return;
         }
-        const barMaxW = Math.max(46 * scale, col.width - 88 * scale);
-        const barW = Math.max(18 * scale, Math.min(barMaxW, (row.dailyWave / Math.max(maxWave, 1)) * barMaxW));
-        const barX = drawX + 12 * scale;
-        const barY = cy - 4 * scale;
-        ctx.fillStyle = "#EAF3FF";
-        ctx.beginPath();
-        drawRoundRect(ctx, barX, barY, barMaxW, 8 * scale, 4 * scale);
-        ctx.fill();
-        ctx.fillStyle = blue;
-        ctx.beginPath();
-        drawRoundRect(ctx, barX, barY, barW, 8 * scale, 4 * scale);
-        ctx.fill();
+        const showWaveBar = !denseColumns && col.width >= 150 * scale;
+        if (showWaveBar) {
+          const barMaxW = Math.max(42 * scale, Math.min(58 * scale, col.width - 92 * scale));
+          const barW = Math.max(14 * scale, Math.min(barMaxW, (row.dailyWave / Math.max(maxWave, 1)) * barMaxW));
+          const barX = drawX + 10 * scale;
+          const barY = cy - 4 * scale;
+          ctx.fillStyle = "#EAF3FF";
+          ctx.beginPath();
+          drawRoundRect(ctx, barX, barY, barMaxW, 8 * scale, 4 * scale);
+          ctx.fill();
+          ctx.fillStyle = blue;
+          ctx.beginPath();
+          drawRoundRect(ctx, barX, barY, barW, 8 * scale, 4 * scale);
+          ctx.fill();
+        }
         ctx.fillStyle = "#101828";
         ctx.font = `700 ${13 * scale}px ${mono}`;
         ctx.textAlign = "right";
