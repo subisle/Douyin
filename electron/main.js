@@ -5,12 +5,7 @@ const db = require("./db");
 // ── 自动更新 ──────────────────────────────────────────────
 const { autoUpdater } = require("electron-updater");
 
-// GitHub 代理前缀，用于加速国内访问
-const GITHUB_PROXY = "https://github.akams.cn/";
-// 发布仓库地址（原始 GitHub URL）
-const REPO_URL = "https://github.com/subisle/douyin-updater";
-// 通过代理访问的 release URL
-const PROXY_REPO_URL = GITHUB_PROXY + REPO_URL;
+const UPDATE_FEED_URL = "https://github.com/subisle/douyin-updater/releases/latest/download";
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
@@ -41,10 +36,10 @@ function initAutoUpdater() {
     return;
   }
 
-  // 使用 generic provider，URL 指向代理地址
+  // 使用 generic provider，latest.yml 和安装包均作为 GitHub Release 资产发布。
   autoUpdater.setFeedURL({
     provider: "generic",
-    url: PROXY_REPO_URL + "/releases/latest/download",
+    url: UPDATE_FEED_URL,
   });
 
   // 不自动下载，由用户通过「下载更新」确认
