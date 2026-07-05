@@ -55,6 +55,17 @@ export interface StartupHealthResult {
   };
 }
 
+export interface AppInfo {
+  name: string;
+  version: string;
+  productName: string;
+  isPackaged: boolean;
+  platform: string;
+  arch: string;
+  electron: string;
+  updateProxy: string;
+}
+
 export interface WaveRankRow {
   rank: number;
   name: string;
@@ -179,6 +190,8 @@ export interface UpdateStatus {
     bytesPerSecond: number;
   } | null;
   error: string | null;
+  feed?: string | null;
+  checkedAt?: string | null;
 }
 
 export interface PkMember {
@@ -285,6 +298,7 @@ declare global {
     windowClose: () => Promise<void>;
     windowIsMaximized: () => Promise<boolean>;
     onMaximizeChange: (callback: (maximized: boolean) => void) => () => void;
+    getAppInfo: () => Promise<AppInfo>;
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;

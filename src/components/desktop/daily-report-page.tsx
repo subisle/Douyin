@@ -456,7 +456,7 @@ export function DailyReportPage() {
               {report && (
                 <>
                   <Badge variant="secondary">
-                    {gender === "male" ? "男队" : "女队"} {report.summary.total} 人
+                    {gender === "male" ? "男团" : "女队"} {report.summary.total} 人
                   </Badge>
                   <Badge
                     variant="outline"
@@ -502,7 +502,7 @@ export function DailyReportPage() {
                     )}
                   >
                     {g === "male" ? <Mars className="size-3.5" /> : <Venus className="size-3.5" />}
-                    {g === "male" ? "男队" : "女队"}
+                    {g === "male" ? "男团" : "女队"}
                   </button>
                 ))}
               </div>
@@ -550,8 +550,8 @@ export function DailyReportPage() {
                     if (e.key === "Enter") saveCurrentTitle();
                   }}
                   className="w-48 bg-transparent px-1 py-1 text-sm outline-none"
-                  placeholder={`${gender === "male" ? "男队" : "女队"}标题`}
-                  title={`${gender === "male" ? "男队" : "女队"}导出标题`}
+                  placeholder={`${gender === "male" ? "男团" : "女队"}标题`}
+                  title={`${gender === "male" ? "男团" : "女队"}导出标题`}
                 />
                 <button
                   onClick={saveCurrentTitle}

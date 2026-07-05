@@ -203,62 +203,132 @@
 .startup-splash {
   background: transparent;
   contain: paint;
-  animation: startup-shell 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
+  animation: startup-shell 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.startup-aura {
+  position: absolute;
+  border-radius: 999px;
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(0.72);
+  will-change: opacity, transform;
+}
+
+.startup-aura-one {
+  width: min(58vw, 760px);
+  height: min(58vw, 760px);
+  background:
+    radial-gradient(circle, rgba(255, 220, 150, 0.22) 0%, rgba(255, 220, 150, 0.11) 26%, transparent 62%);
+  animation: startup-aura-rise 1.6s cubic-bezier(0.16, 1, 0.3, 1) 0.04s both;
+}
+
+.startup-aura-two {
+  width: min(42vw, 520px);
+  height: min(42vw, 520px);
+  background:
+    radial-gradient(circle, rgba(176, 116, 48, 0.18) 0%, rgba(176, 116, 48, 0.08) 32%, transparent 68%);
+  animation: startup-aura-rise 1.9s cubic-bezier(0.16, 1, 0.3, 1) 0.18s both reverse;
 }
 
 .startup-wordmark {
   transform-style: preserve-3d;
   backface-visibility: hidden;
   will-change: transform, opacity;
+  animation: startup-wordmark-exit 0.52s cubic-bezier(0.64, 0, 0.78, 0) 1.86s both;
+}
+
+.startup-kicker {
+  margin-bottom: 18px;
+  color: rgba(112, 77, 39, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.34em;
+  line-height: 1;
+  opacity: 0;
+  transform: translate3d(0, 10px, 0);
+  animation: startup-kicker-enter 0.58s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both;
 }
 
 .startup-text-effect {
   position: relative;
   isolation: isolate;
   line-height: 1;
-  letter-spacing: 0;
+  letter-spacing: 0.02em;
   color: transparent;
   background:
-    linear-gradient(92deg, #4c2f17 0%, #b97931 24%, #fff0bd 48%, #d99a49 63%, #5c3719 100%);
-  background-size: 240% 100%;
+    linear-gradient(180deg, #fff8d8 0%, #e9ba63 22%, #8b4f1d 49%, #f7d688 73%, #5b3517 100%);
+  background-size: 100% 180%;
   -webkit-background-clip: text;
   background-clip: text;
   filter:
-    drop-shadow(0 2px 0 rgba(255, 255, 255, 0.58))
-    drop-shadow(0 14px 28px rgba(88, 54, 24, 0.22));
+    drop-shadow(0 2px 0 rgba(255, 255, 255, 0.72))
+    drop-shadow(0 18px 32px rgba(88, 54, 24, 0.26));
   will-change: transform, opacity, background-position;
   animation:
-    startup-title-enter 0.82s cubic-bezier(0.16, 1, 0.3, 1) both,
-    startup-text-shine 1.05s ease-out 0.2s both;
+    startup-title-enter 0.86s cubic-bezier(0.16, 1, 0.3, 1) 0.16s both,
+    startup-text-shine 1.28s ease-out 0.44s both;
+}
+
+.startup-text-effect::before {
+  content: "鹏仔传媒";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  color: rgba(255, 214, 128, 0.16);
+  transform: translate3d(0, 8px, 0) scale(1.035);
+  filter: blur(2px);
 }
 
 .startup-text-effect::after {
   content: "";
   position: absolute;
-  inset: -8px -20px;
+  inset: -10px -28px;
   background: linear-gradient(
     110deg,
     transparent 0%,
-    transparent 42%,
-    rgba(255, 255, 255, 0.94) 48%,
-    rgba(255, 219, 137, 0.74) 52%,
-    transparent 60%,
+    transparent 38%,
+    rgba(255, 255, 255, 0.98) 47%,
+    rgba(255, 219, 137, 0.8) 50%,
+    transparent 61%,
     transparent 100%
   );
   mix-blend-mode: screen;
-  transform: translateX(-132%) skewX(-10deg);
-  animation: startup-light-sweep 0.9s ease-out 0.42s both;
+  transform: translate3d(-138%, 0, 0) skewX(-12deg);
+  animation: startup-light-sweep 1.08s ease-out 0.58s both;
+}
+
+.startup-energy-line {
+  position: relative;
+  width: min(54vw, 520px);
+  height: 2px;
+  margin-top: 24px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(130, 87, 43, 0.14);
+  transform: scaleX(0);
+  transform-origin: center;
+  animation: startup-line-enter 0.76s cubic-bezier(0.16, 1, 0.3, 1) 0.74s both;
+}
+
+.startup-energy-line::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, #8b5a25 16%, #fff0b5 50%, #8b5a25 84%, transparent);
+  transform: translate3d(-100%, 0, 0);
+  animation: startup-line-sweep 1.1s ease-out 0.9s both;
 }
 
 .startup-subtitle-effect {
   line-height: 1.25;
-  letter-spacing: 0;
-  color: rgba(58, 42, 28, 0.86);
+  letter-spacing: 0.08em;
+  color: rgba(48, 36, 24, 0.9);
   text-shadow:
     0 1px 0 rgba(255, 255, 255, 0.72),
-    0 12px 28px rgba(82, 55, 30, 0.2);
+    0 12px 24px rgba(82, 55, 30, 0.18);
   will-change: transform, opacity;
-  animation: startup-subtitle-enter 0.66s cubic-bezier(0.22, 1, 0.36, 1) 0.38s both;
+  animation: startup-subtitle-enter 0.68s cubic-bezier(0.22, 1, 0.36, 1) 0.78s both;
 }
 
 @keyframes startup-shell {
@@ -273,72 +343,120 @@
 @keyframes startup-title-enter {
   0% {
     opacity: 0;
-    transform: translateY(22px) scale(0.9);
+    transform: translate3d(0, 28px, 0) scale(0.88);
     filter:
       drop-shadow(0 0 0 rgba(255, 255, 255, 0))
       drop-shadow(0 0 0 rgba(124, 73, 28, 0));
   }
-  58% {
+  62% {
     opacity: 1;
-    transform: translateY(0) scale(1.025);
+    transform: translate3d(0, -2px, 0) scale(1.035);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 @keyframes startup-subtitle-enter {
   0% {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translate3d(0, 12px, 0);
   }
   100% {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes startup-text-shine {
   0% {
-    background-position: 0% 50%;
+    background-position: 50% 0%;
   }
   100% {
-    background-position: 100% 50%;
+    background-position: 50% 100%;
   }
 }
 
 @keyframes startup-light-sweep {
   0% {
     opacity: 0;
-    transform: translateX(-132%) skewX(-10deg);
+    transform: translate3d(-138%, 0, 0) skewX(-12deg);
   }
   24% {
     opacity: 1;
   }
   100% {
     opacity: 0;
-    transform: translateX(132%) skewX(-10deg);
+    transform: translate3d(138%, 0, 0) skewX(-12deg);
   }
 }
 
-@keyframes startup-glow-pulse {
-  0%,
-  100% {
-    text-shadow:
-      0 0 0 rgba(255, 224, 154, 0),
-      0 0 16px rgba(182, 106, 42, 0.18);
+@keyframes startup-kicker-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
   }
-  48% {
-    text-shadow:
-      0 0 18px rgba(255, 226, 164, 0.74),
-      0 0 38px rgba(197, 118, 48, 0.5);
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes startup-line-enter {
+  0% {
+    opacity: 0;
+    transform: scaleX(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes startup-line-sweep {
+  0% {
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    transform: translate3d(100%, 0, 0);
+  }
+}
+
+@keyframes startup-aura-rise {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 16px, 0) scale(0.72);
+  }
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.36;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes startup-wordmark-exit {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.985);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .startup-splash,
+  .startup-aura,
+  .startup-kicker,
+  .startup-energy-line,
+  .startup-energy-line::after,
+  .startup-wordmark,
   .startup-text-effect,
+  .startup-text-effect::before,
   .startup-text-effect::after,
   .startup-subtitle-effect {
     animation-duration: 1ms;

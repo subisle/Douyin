@@ -14,6 +14,7 @@ import {
   FAMILY_NODE_W as NODE_W,
   FAMILY_PAD as PAD,
   FAMILY_ROW_GAP as ROW_GAP,
+  FAMILY_TREE_PS,
   getFamilyDisplayName,
   getFamilyGenerationText,
 } from "./family-tree-style";
@@ -302,6 +303,9 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
           </div>
         </div>
       </CardContent>
+      <div className="shrink-0 border-t border-border/60 px-6 py-2 text-xs text-muted-foreground">
+        {FAMILY_TREE_PS}
+      </div>
     </Card>
   );
 }

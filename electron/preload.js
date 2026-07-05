@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("window:maximized-changed", handler);
     return () => ipcRenderer.removeListener("window:maximized-changed", handler);
   },
+  getAppInfo: () => ipcRenderer.invoke("app:getInfo"),
 
   // 数据
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),

@@ -1,0 +1,99 @@
+async function ensureImportRecordsTable(db) {
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS import_records (
+       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+       kind VARCHAR(20) NOT NULL,
+       import_date DATE NOT NULL,
+       file_hash CHAR(32) NOT NULL,
+       data_hash CHAR(64) NOT NULL,
+       file_name VARCHAR(255) NOT NULL DEFAULT '',
+       row_count INT NOT NULL DEFAULT 0,
+       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+       PRIMARY KEY (id),
+       UNIQUE KEY uq_import_kind_date_file (kind, import_date, file_hash),
+       KEY idx_import_kind_date_data (kind, import_date, data_hash)
+     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
+const REQUIRED_INDEXES = [
+  { table: "persons", name: "idx_persons_master", columns: ["master_id"] },
+  { table: "persons", name: "idx_persons_generation", columns: ["generation"] },
+  { table: "accounts", name: "idx_accounts_anchor", columns: ["anchor_id"] },
+  { table: "accounts", name: "idx_accounts_person", columns: ["person_id"] },
+  { table: "accounts", name: "idx_accounts_person_primary", columns: ["person_id", "is_primary"] },
+  { table: "wave_snapshots", name: "idx_wave_anchor_date", columns: ["anchor_id", "import_date"] },
+  { table: "wave_snapshots", name: "idx_wave_date", columns: ["import_date"] },
+  { table: "duration_snapshots", name: "idx_duration_anchor_date", columns: ["anchor_id", "import_date"] },
+  { table: "duration_snapshots", name: "idx_duration_date", columns: ["import_date"] },
+  { table: "flag_scores", name: "idx_flag_scores_master_period", columns: ["master_id", "period"] },
+  { table: "flag_winners", name: "idx_flag_winners_period", columns: ["period"] },
+];
+
+async function ensureDatabaseIndexes(db, existingTables = null) {
+  const availableTables = existingTables || (await getExistingTables(db));
+  const created = [];
+  const present = [];
+  const failed = [];
+
+  for (const spec of REQUIRED_INDEXES) {
+    if (!availableTables.has(spec.table)) continue;
+    try {
+      const exists = await hasCoveringIndex(db, spec.table, spec.columns);
+      if (exists) {
+        present.push(spec.name);
+        continue;
+      }
+      const columnSql = spec.columns.map((col) => `\`${col}\``).join(", ");
+      await db.query(`CREATE INDEX \`${spec.name}\` ON \`${spec.table}\` (${columnSql})`);
+      created.push(spec.name);
+    } catch (error) {
+      if (error?.code === "ER_DUP_KEYNAME") {
+        present.push(spec.name);
+      } else {
+        failed.push(`${spec.table}.${spec.name}: ${error?.message || String(error)}`);
+      }
+    }
+  }
+
+  return { created, present, failed };
+}
+
+async function getExistingTables(db) {
+  const [rows] = await db.query(
+    `SELECT table_name AS name
+       FROM information_schema.tables
+      WHERE table_schema = DATABASE()`
+  );
+  return new Set(rows.map((row) => row.name));
+}
+
+async function hasCoveringIndex(db, table, columns) {
+  const [rows] = await db.query(
+    `SELECT index_name AS indexName, seq_in_index AS seq, column_name AS columnName
+       FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+      ORDER BY index_name, seq_in_index`,
+    [table]
+  );
+
+  const byIndex = new Map();
+  for (const row of rows) {
+    const list = byIndex.get(row.indexName) || [];
+    list.push({ seq: Number(row.seq), columnName: row.columnName });
+    byIndex.set(row.indexName, list);
+  }
+
+  for (const list of byIndex.values()) {
+    const ordered = list.sort((a, b) => a.seq - b.seq).map((item) => item.columnName);
+    const covers = columns.every((col, index) => ordered[index] === col);
+    if (covers) return true;
+  }
+  return false;
+}
+
+module.exports = {
+  ensureDatabaseIndexes,
+  ensureImportRecordsTable,
+};

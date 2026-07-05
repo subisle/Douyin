@@ -3,6 +3,7 @@ export const FAMILY_NODE_H = 58;
 export const FAMILY_COL_GAP = 44;
 export const FAMILY_ROW_GAP = 10;
 export const FAMILY_PAD = 24;
+export const FAMILY_TREE_PS = "PS：未开播不显示徒弟姓名，开播没显示的联系鹏仔第二帅：帅帅";
 
 const ROOT_PLACEHOLDER_NAME_RE = /^([\u4e00-\u9fa5A-Za-z])[0０]$/;
 

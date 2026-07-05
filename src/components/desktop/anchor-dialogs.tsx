@@ -443,7 +443,7 @@ export function ImportAnchorsDialog({ open, onClose, onSuccess, anchors }: Impor
                         : "border border-border text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    男队
+                    男团
                   </button>
                   <button
                     onClick={() => setGender("female")}

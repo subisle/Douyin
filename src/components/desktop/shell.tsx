@@ -12,6 +12,7 @@ import { DataPage } from "./data-page";
 import { FlowingFlagCard } from "./flowing-flag-card";
 import { PkRosterPage } from "./pk-roster-page";
 import { RewardPage } from "./reward-page";
+import { SettingsPage } from "./settings-page";
 import { type PageId } from "./types";
 import type { DroppedImportFile } from "./import-page";
 
@@ -26,8 +27,8 @@ interface StartupCheck {
 
 type UpdateStartupCheck = (key: StartupCheck["key"], patch: Partial<StartupCheck>) => void;
 
-const STARTUP_ANIMATION_MS = 1800;
-const STARTUP_SETTLE_MS = 180;
+const STARTUP_ANIMATION_MS = 2300;
+const STARTUP_SETTLE_MS = 160;
 const STARTUP_DATA_TIMEOUT_MS = 3500;
 const STARTUP_UPDATE_TIMEOUT_MS = 2500;
 
@@ -159,6 +160,8 @@ export function DesktopShell() {
                 <PkRosterPage />
               ) : currentPage === "reward" ? (
                 <RewardPage />
+              ) : currentPage === "settings" ? (
+                <SettingsPage />
               ) : null}
             </main>
           </ScrollArea>
@@ -180,11 +183,15 @@ export function DesktopShell() {
 function StartupSplash() {
   return (
     <div className="startup-splash pointer-events-none fixed inset-0 z-[80] flex items-center justify-center overflow-hidden">
+      <div className="startup-aura startup-aura-one" />
+      <div className="startup-aura startup-aura-two" />
       <div className="startup-wordmark relative flex w-full max-w-4xl flex-col items-center px-8 text-center">
-        <div className="startup-title startup-text-effect text-6xl font-semibold md:text-8xl">
+        <div className="startup-kicker">PENGZAI MEDIA</div>
+        <div className="startup-title startup-text-effect text-6xl font-black md:text-8xl">
           鹏仔传媒
         </div>
-        <div className="startup-subtitle startup-subtitle-effect mt-7 text-xl font-semibold md:text-2xl">
+        <div className="startup-energy-line" />
+        <div className="startup-subtitle startup-subtitle-effect mt-6 text-xl font-semibold md:text-2xl">
           主播数据管理系统
         </div>
       </div>

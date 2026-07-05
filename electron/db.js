@@ -1,6 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const mysql = require("mysql2/promise");
+const {
+  ensureDatabaseIndexes,
+  ensureImportRecordsTable,
+} = require("./db-maintenance");
 
 // 复用根项目 .env（与 DouyinLang 同一套远程 MySQL）
 const envPaths = [
@@ -40,24 +44,6 @@ function getPool() {
     });
   }
   return pool;
-}
-
-async function ensureImportRecordsTable(db) {
-  await db.query(
-    `CREATE TABLE IF NOT EXISTS import_records (
-       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-       kind VARCHAR(20) NOT NULL,
-       import_date DATE NOT NULL,
-       file_hash CHAR(32) NOT NULL,
-       data_hash CHAR(64) NOT NULL,
-       file_name VARCHAR(255) NOT NULL DEFAULT '',
-       row_count INT NOT NULL DEFAULT 0,
-       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-       PRIMARY KEY (id),
-       UNIQUE KEY uq_import_kind_date_file (kind, import_date, file_hash),
-       KEY idx_import_kind_date_data (kind, import_date, data_hash)
-     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
-  );
 }
 
 function normalizeImportMeta(meta) {
@@ -362,6 +348,19 @@ async function getStartupHealth() {
       "关键数据表",
       missing.length > 0 ? "error" : "ok",
       missing.length > 0 ? `缺少表：${missing.join("、")}` : "关键表完整"
+    );
+
+    const indexResult = await ensureDatabaseIndexes(db, existingTables);
+    pushHealthCheck(
+      checks,
+      "indexes",
+      "数据库索引优化",
+      indexResult.failed.length > 0 ? "warning" : "ok",
+      indexResult.failed.length > 0
+        ? `部分索引优化失败：${indexResult.failed.slice(0, 2).join("；")}`
+        : indexResult.created.length > 0
+          ? `已补齐索引：${indexResult.created.join("、")}`
+          : "关键查询索引完整"
     );
   } catch (error) {
     pushHealthCheck(

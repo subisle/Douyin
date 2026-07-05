@@ -6,6 +6,7 @@ import {
   Database,
   Flag,
   Swords,
+  Settings,
   Trophy,
 } from "lucide-react";
 
@@ -16,7 +17,8 @@ export type PageId =
   | "data"
   | "flag"
   | "pk"
-  | "reward";
+  | "reward"
+  | "settings";
 
 export interface NavItem {
   id: PageId;
@@ -67,5 +69,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: "族谱",
     icon: Network,
     description: "主播归属关系",
+  },
+  {
+    id: "settings",
+    label: "设置",
+    icon: Settings,
+    description: "更新、状态与关于",
   },
 ];

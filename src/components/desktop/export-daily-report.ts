@@ -88,7 +88,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
 
   const maxDailyWave = rows.length > 0 ? Math.max(...rows.map((r) => r.dailyWave)) : 0;
   const genderLabel = gender === "male" ? "男主播" : "女主播";
-  const teamLabel = gender === "male" ? "男队" : "女队";
+  const teamLabel = gender === "male" ? "男团" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
 

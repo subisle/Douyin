@@ -6,6 +6,7 @@ import {
   FAMILY_NODE_W as NODE_W,
   FAMILY_PAD as PAD,
   FAMILY_ROW_GAP as ROW_GAP,
+  FAMILY_TREE_PS,
   getFamilyDisplayName,
   getFamilyGenerationText,
 } from "./family-tree-style";
@@ -329,8 +330,8 @@ export async function exportFamilyPoster(
   }
 
   // ---- 9. 底部面板 ----
-  const footerPanelY = posterH - borderW - 18 - 48;
-  const footerPanelH = 48;
+  const footerPanelH = 64;
+  const footerPanelY = posterH - borderW - 18 - footerPanelH;
   drawRoundRect(ctx, panelX, footerPanelY, panelW, footerPanelH, 20);
   ctx.fillStyle = C.panel;
   ctx.fill();
@@ -341,7 +342,7 @@ export async function exportFamilyPoster(
 
   // 底部圆点 + 标题
   const dotX = panelX + 20;
-  const dotY = footerPanelY + footerPanelH / 2;
+  const dotY = footerPanelY + 24;
   const dotGrad = ctx.createRadialGradient(dotX, dotY, 0, dotX, dotY, 5);
   dotGrad.addColorStop(0, C.cyan);
   dotGrad.addColorStop(1, C.blue);
@@ -371,6 +372,11 @@ export async function exportFamilyPoster(
   ctx.font = "12px sans-serif";
   ctx.fillStyle = C.textMuted;
   ctx.fillText(`导出日期 ${dateStr}`, panelX + panelW - 20, dotY);
+
+  ctx.textAlign = "left";
+  ctx.font = "12px sans-serif";
+  ctx.fillStyle = "rgba(226, 232, 240, 0.78)";
+  ctx.fillText(FAMILY_TREE_PS, panelX + 20, footerPanelY + 48);
 
   // ---- 10. 导出下载 ----
   await downloadCanvasAsPng(canvas, filename);

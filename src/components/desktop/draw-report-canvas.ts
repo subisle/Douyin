@@ -610,6 +610,46 @@ function drawApplePill(
   ctx.fillText(text, x + w / 2, y + h / 2 + 0.5);
 }
 
+function drawAppleInlineWaveBar(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  ratio: number,
+  text: string,
+  scale: number,
+  font: string,
+  color: string
+) {
+  const radius = h / 2;
+  const fillW = Math.max(0, Math.min(w, w * ratio));
+
+  ctx.fillStyle = "#EAF3FF";
+  ctx.beginPath();
+  drawRoundRect(ctx, x, y, w, h, radius);
+  ctx.fill();
+
+  ctx.strokeStyle = "#D6E8FF";
+  ctx.lineWidth = 1 * scale;
+  ctx.beginPath();
+  drawRoundRect(ctx, x, y, w, h, radius);
+  ctx.stroke();
+
+  if (fillW > 0) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    drawRoundRect(ctx, x, y, Math.max(fillW, h), h, radius);
+    ctx.fill();
+  }
+
+  ctx.font = `800 ${Math.max(10, 12 * scale)}px ${font}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = fillW / Math.max(w, 1) > 0.52 ? "#FFFFFF" : "#1D4ED8";
+  ctx.fillText(truncateCanvasText(ctx, text, w - 12 * scale), x + w / 2, y + h / 2 + 0.5 * scale);
+}
+
 export function drawAppleReportToCanvas(
   canvas: HTMLCanvasElement,
   opts: DrawReportOptions
@@ -631,7 +671,7 @@ export function drawAppleReportToCanvas(
   const font = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif';
   const mono = '"SF Mono", "Menlo", "Consolas", monospace';
   const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
-  const genderText = gender === "male" ? "男队" : "女队";
+  const genderText = gender === "male" ? "男团" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const liveRows = rows.filter((r) => r.isLive);
@@ -809,10 +849,12 @@ export function drawAppleReportToCanvas(
           ctx.fillText("未开播", drawX + col.width - 12 * scale, cy);
           return;
         }
+        const waveText = formatWave(row.dailyWave);
         const showWaveBar = !denseColumns && col.width >= 150 * scale;
+        const waveRatio = row.dailyWave / Math.max(maxWave, 1);
         if (showWaveBar) {
           const barMaxW = Math.max(42 * scale, Math.min(58 * scale, col.width - 92 * scale));
-          const barW = Math.max(14 * scale, Math.min(barMaxW, (row.dailyWave / Math.max(maxWave, 1)) * barMaxW));
+          const barW = Math.max(14 * scale, Math.min(barMaxW, waveRatio * barMaxW));
           const barX = drawX + 10 * scale;
           const barY = cy - 4 * scale;
           ctx.fillStyle = "#EAF3FF";
@@ -823,12 +865,28 @@ export function drawAppleReportToCanvas(
           ctx.beginPath();
           drawRoundRect(ctx, barX, barY, barW, 8 * scale, 4 * scale);
           ctx.fill();
+          ctx.fillStyle = "#101828";
+          ctx.font = `700 ${13 * scale}px ${mono}`;
+          ctx.textAlign = "right";
+          ctx.textBaseline = "middle";
+          ctx.fillText(waveText, drawX + col.width - 12 * scale, cy);
+        } else {
+          const barX = drawX + 8 * scale;
+          const barW = Math.max(28 * scale, col.width - 16 * scale);
+          const barH = 20 * scale;
+          drawAppleInlineWaveBar(
+            ctx,
+            barX,
+            cy - barH / 2,
+            barW,
+            barH,
+            waveRatio,
+            waveText,
+            scale,
+            mono,
+            blue
+          );
         }
-        ctx.fillStyle = "#101828";
-        ctx.font = `700 ${13 * scale}px ${mono}`;
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
-        ctx.fillText(formatWave(row.dailyWave), drawX + col.width - 12 * scale, cy);
       } else if (col.key === "totalWave") {
         ctx.fillStyle = "#475467";
         ctx.font = `600 ${13 * scale}px ${mono}`;
