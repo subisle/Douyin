@@ -6,7 +6,6 @@ import {
   FAMILY_NODE_W as NODE_W,
   FAMILY_PAD as PAD,
   FAMILY_ROW_GAP as ROW_GAP,
-  FAMILY_TREE_PS,
   getFamilyDisplayName,
   getFamilyGenerationText,
 } from "./family-tree-style";
@@ -45,24 +44,24 @@ function drawRoundRect(
   ctx.closePath();
 }
 
-// 主题色 —— 与主仓库 DataTableStyle2Template 一致
+// 样式二：Apple 浅色导出色彩
 const C = {
-  cyan: "#00f5d4",
-  blue: "#00b8ff",
-  bg1: "#0a0f1c",
-  bg2: "#020617",
-  bg3: "#000000",
-  panel: "rgba(10, 24, 37, 0.88)",
-  panelBorder: "rgba(255, 255, 255, 0.08)",
-  text: "#f8fafc",
-  textMuted: "#94a3b8",
-  textCyan: "#a5f3fc",
-  white92: "rgba(255, 255, 255, 0.92)",
-  white04: "rgba(255, 255, 255, 0.04)",
-  pink: "#f472b6",
+  blue: "#007AFF",
+  blueSoft: "#EAF3FF",
+  blueBorder: "#D6E8FF",
+  text: "#101828",
+  textMuted: "#667085",
+  border: "#EAECF0",
+  rootBg: "#F0F7FF",
+  rootBorder: "#84CAFF",
+  maleBg: "#FFFFFF",
+  femaleBg: "#FFF7FB",
+  femaleBorder: "#F9C7DD",
+  femaleText: "#C11574",
+  shadow: "rgba(51, 65, 85, 0.08)",
 };
 
-/** 将族谱导出为海报风格 PNG 并下载（#00b8ff 蓝色渐变主题） */
+/** 将族谱导出为样式二浅色 PNG 并下载。 */
 export async function exportFamilyPoster(
   roots: TreeNode[],
   filename = "族谱海报.png"
@@ -103,17 +102,12 @@ export async function exportFamilyPoster(
   const treeW = maxX + PAD;
   const treeH = maxY + PAD;
 
-  // ---- 2. 海报尺寸 ----
-  const posterSize = 1080; // 正方形海报，与主仓库 Style2 一致
-  const headerH = 110;
-  const footerH = 64;
-  const treeOffsetX = (posterSize - treeW) / 2;
-  const treeOffsetY = headerH + 16;
-
-  // 如果族谱太高，动态扩展高度
-  const neededH = headerH + treeH + footerH + 32;
-  const posterW = posterSize;
-  const posterH = Math.max(posterSize, neededH);
+  // ---- 2. 画布尺寸：只保留族谱图本身，避免标题/统计/底部留白 ----
+  const outerPad = 44;
+  const posterW = Math.max(720, Math.ceil(treeW + outerPad * 2));
+  const posterH = Math.max(480, Math.ceil(treeH + outerPad * 2));
+  const treeOffsetX = Math.round((posterW - treeW) / 2);
+  const treeOffsetY = Math.round((posterH - treeH) / 2);
 
   // ---- 3. Canvas 初始化 ----
   const canvas = document.createElement("canvas");
@@ -122,142 +116,42 @@ export async function exportFamilyPoster(
   const ctx = canvas.getContext("2d")!;
   ctx.scale(scale, scale);
 
-  // ---- 4. 背景：径向渐变 + 网格线 + 右上光效 ----
-  // 主背景：radial-gradient(circle at 50% 18%, #0a0f1c 0%, #020617 62%, #000 100%)
-  const bgGrad = ctx.createRadialGradient(
-    posterW * 0.5, posterH * 0.18, 0,
-    posterW * 0.5, posterH * 0.18, posterH * 0.85
-  );
-  bgGrad.addColorStop(0, C.bg1);
-  bgGrad.addColorStop(0.62, C.bg2);
-  bgGrad.addColorStop(1, C.bg3);
-  ctx.fillStyle = bgGrad;
+  // ---- 4. 背景：样式二浅色底，不放标题/统计/页脚 ----
+  ctx.fillStyle = "#FFFFFF";
   ctx.fillRect(0, 0, posterW, posterH);
 
-  // 右上角径向光效：radial-gradient(circle at top right, rgba(0,245,212,0.16), transparent 28%)
-  const topRightGrad = ctx.createRadialGradient(
-    posterW, 0, 0,
-    posterW, 0, posterW * 0.4
+  const bgGlow = ctx.createRadialGradient(
+    posterW * 0.5,
+    posterH * 0.06,
+    0,
+    posterW * 0.5,
+    posterH * 0.06,
+    Math.max(posterW, posterH) * 0.75
   );
-  topRightGrad.addColorStop(0, "rgba(0, 245, 212, 0.16)");
-  topRightGrad.addColorStop(1, "transparent");
-  ctx.fillStyle = topRightGrad;
+  bgGlow.addColorStop(0, "rgba(234, 243, 255, 0.88)");
+  bgGlow.addColorStop(0.58, "rgba(255, 255, 255, 0.92)");
+  bgGlow.addColorStop(1, "#FFFFFF");
+  ctx.fillStyle = bgGlow;
   ctx.fillRect(0, 0, posterW, posterH);
 
-  // 网格线：linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px) + 90deg
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.02)";
+  ctx.strokeStyle = "rgba(234, 236, 240, 0.55)";
   ctx.lineWidth = 1;
-  for (let gx = 0; gx < posterW; gx += 28) {
+  for (let gx = 0; gx < posterW; gx += 32) {
     ctx.beginPath();
     ctx.moveTo(gx, 0);
     ctx.lineTo(gx, posterH);
     ctx.stroke();
   }
-  for (let gy = 0; gy < posterH; gy += 28) {
+  for (let gy = 0; gy < posterH; gy += 32) {
     ctx.beginPath();
     ctx.moveTo(0, gy);
     ctx.lineTo(posterW, gy);
     ctx.stroke();
   }
 
-  // ---- 5. 外边框：渐变边框 ----
-  const borderW = 6;
-  // 外边框渐变：linear-gradient(90deg, #00f5d4, #00b8ff)
-  const borderGrad = ctx.createLinearGradient(0, 0, posterW, 0);
-  borderGrad.addColorStop(0, C.cyan);
-  borderGrad.addColorStop(1, C.blue);
-  ctx.strokeStyle = borderGrad;
-  ctx.lineWidth = borderW;
-  ctx.strokeRect(borderW / 2, borderW / 2, posterW - borderW, posterH - borderW);
-
-  // 内边框 inset shadow
-  ctx.strokeStyle = C.white04;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(borderW + 1, borderW + 1, posterW - borderW * 2 - 2, posterH - borderW * 2 - 2);
-
-  // ---- 6. 标题面板 ----
-  const panelX = borderW + 18;
-  const panelW = posterW - (borderW + 18) * 2;
-  const panelY = borderW + 18;
-  const panelH = 80;
-
-  // 面板背景
-  drawRoundRect(ctx, panelX, panelY, panelW, panelH, 24);
-  ctx.fillStyle = C.panel;
-  ctx.fill();
-  drawRoundRect(ctx, panelX, panelY, panelW, panelH, 24);
-  ctx.strokeStyle = C.panelBorder;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // 标题图标：圆角方块 "谱"
-  const iconSize = 48;
-  const iconX = panelX + 20;
-  const iconY = panelY + (panelH - iconSize) / 2;
-  drawRoundRect(ctx, iconX, iconY, iconSize, iconSize, 14);
-  const iconGrad = ctx.createLinearGradient(iconX, iconY, iconX + iconSize, iconY + iconSize);
-  iconGrad.addColorStop(0, "rgba(0, 245, 212, 0.18)");
-  iconGrad.addColorStop(1, "rgba(0, 184, 255, 0.18)");
-  ctx.fillStyle = iconGrad;
-  ctx.fill();
-  drawRoundRect(ctx, iconX, iconY, iconSize, iconSize, 14);
-  ctx.strokeStyle = "rgba(0, 245, 212, 0.32)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "bold 22px sans-serif";
-  ctx.fillStyle = C.text;
-  ctx.fillText("谱", iconX + iconSize / 2, iconY + iconSize / 2);
-
-  // 标题文字
-  const titleX = iconX + iconSize + 16;
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  // eyebrow 小标签
-  ctx.font = "12px sans-serif";
-  ctx.fillStyle = C.cyan;
-  ctx.fillText("师徒传承 · 深色导出版", titleX, panelY + 14);
-
-  // 主标题
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillStyle = C.text;
-  ctx.shadowColor = "rgba(0, 245, 212, 0.18)";
-  ctx.shadowBlur = 24;
-  ctx.fillText("族谱", titleX, panelY + 34);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-
-  // 右侧日期卡片
-  const dateCardW = 140;
-  const dateCardH = 54;
-  const dateCardX = panelX + panelW - dateCardW - 20;
-  const dateCardY = panelY + (panelH - dateCardH) / 2;
-  drawRoundRect(ctx, dateCardX, dateCardY, dateCardW, dateCardH, 16);
-  ctx.fillStyle = "rgba(15, 37, 56, 0.82)";
-  ctx.fill();
-  drawRoundRect(ctx, dateCardX, dateCardY, dateCardW, dateCardH, 16);
-  ctx.strokeStyle = "rgba(0, 245, 212, 0.16)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = "11px sans-serif";
-  ctx.fillStyle = C.textMuted;
-  ctx.fillText("人数", dateCardX + dateCardW / 2, dateCardY + 16);
-  ctx.font = "bold 20px sans-serif";
-  ctx.fillStyle = C.text;
-  ctx.fillText(String(placed.length), dateCardX + dateCardW / 2, dateCardY + 38);
-
-  // ---- 7. 绘制连接线 ----
-  const lineGrad = ctx.createLinearGradient(0, 0, posterW, 0);
-  lineGrad.addColorStop(0, "rgba(0, 245, 212, 0.45)");
-  lineGrad.addColorStop(1, "rgba(0, 184, 255, 0.45)");
-  ctx.strokeStyle = lineGrad;
-  ctx.lineWidth = 1.5;
+  // ---- 5. 绘制连接线 ----
+  ctx.strokeStyle = "#98A2B3";
+  ctx.lineWidth = 1.35;
   for (const e of edges) {
     const midX = e.px + COL_GAP / 2;
     ctx.beginPath();
@@ -268,7 +162,7 @@ export async function exportFamilyPoster(
     ctx.stroke();
   }
 
-  // ---- 8. 绘制节点 ----
+  // ---- 6. 绘制节点 ----
   const rootSet = new Set(roots.map((r) => r.id));
 
   for (const p of placed) {
@@ -280,25 +174,28 @@ export async function exportFamilyPoster(
     // 节点背景
     drawRoundRect(ctx, nx, ny, NODE_W, NODE_H, 8);
     if (isRoot) {
-      const nodeGrad = ctx.createLinearGradient(nx, ny, nx + NODE_W, ny);
-      nodeGrad.addColorStop(0, "rgba(0, 245, 212, 0.15)");
-      nodeGrad.addColorStop(1, "rgba(0, 184, 255, 0.10)");
-      ctx.fillStyle = nodeGrad;
+      ctx.fillStyle = C.rootBg;
     } else if (isFemale) {
-      ctx.fillStyle = "rgba(236, 72, 153, 0.08)";
+      ctx.fillStyle = C.femaleBg;
     } else {
-      ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+      ctx.fillStyle = C.maleBg;
     }
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 5;
     ctx.fill();
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
 
     // 节点边框
     drawRoundRect(ctx, nx, ny, NODE_W, NODE_H, 8);
     if (isRoot) {
-      ctx.strokeStyle = "rgba(0, 245, 212, 0.4)";
+      ctx.strokeStyle = C.rootBorder;
     } else if (isFemale) {
-      ctx.strokeStyle = "rgba(236, 72, 153, 0.3)";
+      ctx.strokeStyle = C.femaleBorder;
     } else {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.strokeStyle = C.border;
     }
     ctx.lineWidth = 1;
     ctx.stroke();
@@ -308,76 +205,26 @@ export async function exportFamilyPoster(
     ctx.textBaseline = "middle";
     ctx.font = "bold 15px sans-serif";
     if (isRoot) {
-      ctx.fillStyle = C.cyan;
+      ctx.fillStyle = C.blue;
     } else if (isFemale) {
-      ctx.fillStyle = C.pink;
+      ctx.fillStyle = C.femaleText;
     } else {
-      ctx.fillStyle = C.white92;
+      ctx.fillStyle = C.text;
     }
 
     const displayName = getFamilyDisplayName(p.node, isRoot);
     ctx.fillText(displayName, nx + NODE_W / 2, ny + 21);
 
-    // 代数与徒弟数
+    // 代数
     ctx.font = "10px sans-serif";
-    ctx.fillStyle = isRoot ? "rgba(0, 245, 212, 0.72)" : C.textMuted;
-    const relationText = p.node.children.length > 0 ? `${p.node.children.length}徒` : "成员";
+    ctx.fillStyle = isRoot ? "#175CD3" : C.textMuted;
     ctx.fillText(
-      `${getFamilyGenerationText(p.node)} · ${relationText}`,
+      getFamilyGenerationText(p.node),
       nx + NODE_W / 2,
       ny + 40
     );
   }
 
-  // ---- 9. 底部面板 ----
-  const footerPanelH = 64;
-  const footerPanelY = posterH - borderW - 18 - footerPanelH;
-  drawRoundRect(ctx, panelX, footerPanelY, panelW, footerPanelH, 20);
-  ctx.fillStyle = C.panel;
-  ctx.fill();
-  drawRoundRect(ctx, panelX, footerPanelY, panelW, footerPanelH, 20);
-  ctx.strokeStyle = C.panelBorder;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // 底部圆点 + 标题
-  const dotX = panelX + 20;
-  const dotY = footerPanelY + 24;
-  const dotGrad = ctx.createRadialGradient(dotX, dotY, 0, dotX, dotY, 5);
-  dotGrad.addColorStop(0, C.cyan);
-  dotGrad.addColorStop(1, C.blue);
-  ctx.fillStyle = dotGrad;
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
-  ctx.fill();
-  // 光晕
-  ctx.shadowColor = "rgba(0, 245, 212, 0.48)";
-  ctx.shadowBlur = 12;
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.font = "bold 13px sans-serif";
-  ctx.fillStyle = C.textCyan;
-  ctx.fillText("族谱导出", dotX + 14, dotY);
-
-  // 日期
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  ctx.textAlign = "right";
-  ctx.font = "12px sans-serif";
-  ctx.fillStyle = C.textMuted;
-  ctx.fillText(`导出日期 ${dateStr}`, panelX + panelW - 20, dotY);
-
-  ctx.textAlign = "left";
-  ctx.font = "12px sans-serif";
-  ctx.fillStyle = "rgba(226, 232, 240, 0.78)";
-  ctx.fillText(FAMILY_TREE_PS, panelX + 20, footerPanelY + 48);
-
-  // ---- 10. 导出下载 ----
+  // ---- 7. 导出下载 ----
   await downloadCanvasAsPng(canvas, filename);
 }

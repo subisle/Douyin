@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
   AlertCircle,
@@ -65,8 +65,6 @@ export function SettingsPage() {
     return api.onUpdateStatus((status) => setUpdateStatus(status));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const updateDetail = useMemo(() => getUpdateDetail(updateStatus, appInfo), [updateStatus, appInfo]);
 
   async function refreshHealth() {
     if (!api?.getStartupHealth) {
@@ -145,12 +143,14 @@ export function SettingsPage() {
               </StatusBadge>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-2xl border border-border/70 bg-muted/30 p-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="text-sm font-semibold">{updateDetail.title}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{updateDetail.detail}</div>
+          <CardContent className="space-y-3">
+            <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-muted/20 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{getUpdateTitle(updateStatus)}</div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    当前 v{appInfo?.version || "-"} · {updateStatus.feed || "自动线路"}
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -160,7 +160,7 @@ export function SettingsPage() {
                     disabled={!isElectron || busyAction !== null || updateStatus.status === "checking"}
                   >
                     {busyAction === "check" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                    检查更新
+                    检查
                   </Button>
                   <Button
                     size="sm"
@@ -168,7 +168,7 @@ export function SettingsPage() {
                     disabled={!isElectron || busyAction !== null || updateStatus.status !== "available"}
                   >
                     {busyAction === "download" ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                    下载更新
+                    下载
                   </Button>
                   <Button
                     size="sm"
@@ -176,14 +176,14 @@ export function SettingsPage() {
                     onClick={() => runUpdateAction("install")}
                     disabled={!isElectron || busyAction !== null || updateStatus.status !== "downloaded"}
                   >
-                    立即安装
+                    安装
                   </Button>
                 </div>
               </div>
               {updateStatus.status === "downloading" && updateStatus.progress && (
-                <div className="mt-4">
+                <div>
                   <div className="mb-1 flex justify-between text-xs text-muted-foreground">
-                    <span>下载进度</span>
+                    <span>下载中</span>
                     <span>{Math.round(updateStatus.progress.percent)}%</span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -195,14 +195,8 @@ export function SettingsPage() {
                 </div>
               )}
               {(message || updateStatus.error) && (
-                <div className="mt-3 text-xs text-muted-foreground">{message || updateStatus.error}</div>
+                <div className="text-xs text-muted-foreground">{message || updateStatus.error}</div>
               )}
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <InfoTile label="当前版本" value={appInfo?.version ? `v${appInfo.version}` : "读取中"} />
-              <InfoTile label="更新线路" value={updateStatus.feed || appInfo?.updateProxy || "akams 节点"} />
-              <InfoTile label="运行模式" value={appInfo?.isPackaged ? "正式版" : "开发版"} />
             </div>
           </CardContent>
         </Card>
@@ -380,27 +374,24 @@ function AboutDialog({ appInfo, onClose }: { appInfo: AppInfo | null; onClose: (
   );
 }
 
-function getUpdateDetail(status: UpdateStatus, appInfo: AppInfo | null) {
+function getUpdateTitle(status: UpdateStatus) {
   if (status.status === "available") {
-    return {
-      title: status.info?.version ? `发现新版本 v${status.info.version}` : "发现新版本",
-      detail: "可以先下载，下载完成后再手动安装。",
-    };
+    return status.info?.version ? `新版本 v${status.info.version}` : "发现新版本";
   }
   if (status.status === "downloaded") {
-    return { title: "更新包已下载", detail: "点击立即安装后软件会重启并应用更新。" };
+    return "更新已下载";
   }
   if (status.status === "downloading") {
-    return { title: "正在下载更新", detail: "已自动选择可用的 GitHub 代理节点。" };
+    return "正在下载";
   }
   if (status.status === "error") {
-    return { title: "更新检查失败", detail: status.error || "网络或代理节点暂时不可用。" };
+    return "检查失败";
   }
   if (status.status === "not-available") {
-    return { title: "当前已是最新版本", detail: `本机版本 ${appInfo?.version ? `v${appInfo.version}` : "未知"}` };
+    return "已是最新版本";
   }
   if (status.status === "checking") {
-    return { title: "正在检查更新", detail: "正在测速 GitHub 代理节点并读取版本信息。" };
+    return "正在检查";
   }
-  return { title: "手动检查新版本", detail: "使用 github.akams.cn 节点列表，自动选择最快下载线路。" };
+  return "手动检查更新";
 }
