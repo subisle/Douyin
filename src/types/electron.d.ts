@@ -104,6 +104,8 @@ export interface LivePkCookieState {
 
 export interface LivePkRankItem {
   rank: number;
+  anchorId?: string;
+  anchorName?: string;
   nickname: string;
   displayName?: string;
   realName?: string;
@@ -131,6 +133,10 @@ export interface LivePkRankItem {
   cacheHit?: boolean;
   scoreText: string;
   score: number;
+  scoreVersion?: number;
+  scoreRelative?: boolean;
+  multiPkTeamScore?: number;
+  multiPkTeamScoreText?: string;
   rankDelta?: number;
   isHidden?: boolean;
   rankSource?: string;
@@ -144,6 +150,7 @@ export interface LivePkRankPayload {
   interactionScoreStatus?: number;
   interactionScoreAction?: number;
   channelId?: string;
+  battleId?: string;
   extra?: string;
   gameExtra?: string;
   rankSource?: string;

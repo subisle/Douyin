@@ -24,6 +24,7 @@ function isLiveImFetch(url) {
 
 const BOOTSTRAP_ENDPOINTS = [
   ["roomEnter", "/webcast/room/web/enter/"],
+  ["linkmicList", "/webcast/linkmic/list/"],
   ["giftList", "/webcast/gift/list/"],
   ["audienceRank", "/webcast/ranklist/audience/"],
   ["wishList", "/webcast/wish/list/"],
@@ -52,6 +53,20 @@ function readAnchorSecUidFromRoomEnter(value) {
   return String(user?.sec_uid || user?.secUid || user?.sec_user_id || "").trim();
 }
 
+function roomEnterLooksLinked(value) {
+  const room = value?.data?.data?.[0] || value?.data?.room || null;
+  if (!room || typeof room !== "object") return false;
+  const linkerMap = room.linker_map || room.linkerMap || {};
+  const linkerDetail = room.linker_detail || room.linkerDetail || {};
+  const linkerPlayModes = linkerDetail.linker_play_modes || linkerDetail.linkerPlayModes || [];
+  return (
+    Object.keys(linkerMap || {}).length > 0 ||
+    (Array.isArray(linkerPlayModes) && linkerPlayModes.length > 0) ||
+    Number(linkerDetail.manual_open_ui || linkerDetail.manualOpenUi || 0) > 0 ||
+    Number(linkerDetail.enable_audience_linkmic || linkerDetail.enableAudienceLinkmic || 0) > 0
+  );
+}
+
 function compactProfileOtherUser(user) {
   if (!user || typeof user !== "object") return null;
   return {
@@ -70,8 +85,11 @@ function wait(ms) {
 
 async function captureSignedUserProfile(win, secUid) {
   const key = String(secUid || "").trim();
-  if (!key || win.isDestroyed() || win.webContents.isDestroyed()) return null;
-  return win.webContents.executeJavaScript(`
+  const webContents = win?.webContents || win;
+  if (!key) return null;
+  if (!webContents || webContents.isDestroyed?.()) return null;
+  if (win?.isDestroyed?.()) return null;
+  return webContents.executeJavaScript(`
     (async () => {
       const secUid = ${JSON.stringify(key)};
       const compact = (user) => user ? ({
@@ -141,6 +159,66 @@ async function captureSignedUserProfile(win, secUid) {
       return json?.status_code === 0 ? compact(json.user) : null;
     })()
   `, true).then(compactProfileOtherUser);
+}
+
+async function captureLivePkSnapshot(win) {
+  const webContents = win?.webContents || win;
+  if (!webContents || webContents.isDestroyed?.()) return null;
+  if (win?.isDestroyed?.()) return null;
+  return webContents.executeJavaScript(`
+    (() => {
+      const clone = (value, depth = 0, seen = new WeakSet()) => {
+        if (value === null || value === undefined) return value;
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+        if (typeof value === "bigint") return String(value);
+        if (typeof value === "function") return undefined;
+        if (typeof value !== "object") return String(value);
+        if (seen.has(value)) return undefined;
+        if (depth > 8) return Array.isArray(value) ? [] : {};
+        seen.add(value);
+        if (Array.isArray(value)) {
+          return value.map((item) => clone(item, depth + 1, seen)).filter((item) => item !== undefined);
+        }
+        const out = {};
+        for (const [key, item] of Object.entries(value)) {
+          if (/token|cookie|auth|csrf|passport|ticket|crypt|security/i.test(key)) continue;
+          const next = clone(item, depth + 1, seen);
+          if (next !== undefined) out[key] = next;
+        }
+        return out;
+      };
+
+      const store = window.__STORE__ || {};
+      const pkStore = store.pkStore || {};
+      const linkmicStore = store.linkmicStore || {};
+      const room = store.roomStore?.roomInfo?.room || {};
+      const pkListData = pkStore.pkListData || {};
+      const battleStats = pkStore.pkStatusData || pkListData.battle_stats || pkListData.battleStats || {};
+      const users = Array.isArray(pkListData.user) ? pkListData.user : [];
+      const hasRoomLinker = Boolean(room.linker_map || room.linkerMap || room.linker_detail || room.linkerDetail);
+      const hasSnapshot = users.length > 0 || Object.keys(battleStats || {}).length > 0 || hasRoomLinker || linkmicStore.roomBattleType;
+      if (!hasSnapshot) return null;
+
+      return {
+        status_code: 0,
+        data: {
+          user: clone(users),
+          battle_stats: clone(battleStats),
+          linker_stats: clone(pkListData.linker_stats || pkListData.linkerStats || {}),
+          version: clone(pkListData.version || 0),
+          lynx_data: clone(pkListData.lynx_data || pkListData.lynxData || ""),
+        },
+        extra: {
+          now: Date.now(),
+          source: "page-store",
+          roomBattleType: String(linkmicStore.roomBattleType || ""),
+          pkCountDown: Number(pkStore.pkCountDown || 0),
+          isInPK: Boolean(pkStore.isInPK),
+          isInPunish: Boolean(pkStore.isInPunish),
+        },
+      };
+    })()
+  `, true).catch(() => null);
 }
 
 function parseCookiePairs(cookieText) {
@@ -299,7 +377,7 @@ async function scanOpenWebSockets(debuggerApi) {
   }
 }
 
-function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie, show = true } = {}) {
+function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie, show = true, keepAlive = false } = {}) {
   const url = normalizeLiveRoomUrl(liveRoomUrl);
   let settled = false;
   let capturedWebSocketUrl = "";
@@ -377,8 +455,14 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
         cleanup();
         onStatus?.("已获取直播间 IM 连接，正在读取 Cookie");
         const cookie = await getCookieHeader(win.webContents.session, url);
-        resolve({ ...options, cookie, bootstrap });
-        if (!win.isDestroyed()) win.close();
+        resolve({
+          ...options,
+          cookie,
+          bootstrap,
+          profileLookup: (secUid) => captureSignedUserProfile(win, secUid),
+          linkmicSnapshotLookup: () => captureLivePkSnapshot(win),
+        });
+        if (!keepAlive && !win.isDestroyed()) win.close();
       } catch (error) {
         cleanup();
         reject(error);
@@ -400,6 +484,7 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
     const tryFastSettle = () => {
       if (!pendingOptions || !finalizeTimer) return;
       if (!bootstrap.roomEnter || !bootstrap.giftList || !bootstrap.audienceRank) return;
+      if (roomEnterLooksLinked(bootstrap.roomEnter) && !bootstrap.linkmicList) return;
       clearTimeout(finalizeTimer);
       finalizeTimer = setTimeout(() => {
         finalizeTimer = null;
@@ -507,5 +592,7 @@ module.exports = {
   getCookieHeader,
   injectCookieHeader,
   normalizeLiveRoomUrl,
+  captureSignedUserProfile,
+  captureLivePkSnapshot,
   scanOpenWebSockets,
 };

@@ -5,6 +5,8 @@ const db = require("./db");
 const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const {
+  captureSignedUserProfile,
+  captureLivePkSnapshot,
   captureDouyinLiveOptions,
   getCookieHeader,
   injectCookieHeader,
@@ -163,6 +165,26 @@ function closeHiddenLiveCaptureWindow() {
   }
 }
 
+function signedProfileLookupFromTarget(target) {
+  return async (secUid) => {
+    try {
+      return await captureSignedUserProfile(target, secUid);
+    } catch {
+      return null;
+    }
+  };
+}
+
+function livePkSnapshotLookupFromTarget(target) {
+  return async () => {
+    try {
+      return await captureLivePkSnapshot(target);
+    } catch {
+      return null;
+    }
+  };
+}
+
 function ensureEmbeddedLiveView() {
   if (!mainWindow) throw new Error("主窗口未就绪");
   if (embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()) return embeddedLiveView;
@@ -246,14 +268,18 @@ async function startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, includeRaw) {
     onStatus: sendLivePkCaptureStatus,
     cookie,
     show: false,
+    keepAlive: true,
   });
   hiddenLiveCaptureWindow = capture.window;
   try {
     const options = await capture.promise;
     if (cookie) options.cookie = cookie;
     await livePkWatcher.start({ ...options, includeRaw: Boolean(includeRaw) });
+  } catch (error) {
+    if (hiddenLiveCaptureWindow === capture.window) closeHiddenLiveCaptureWindow();
+    throw error;
   } finally {
-    if (hiddenLiveCaptureWindow === capture.window) hiddenLiveCaptureWindow = null;
+    if (hiddenLiveCaptureWindow === capture.window && capture.window.isDestroyed()) hiddenLiveCaptureWindow = null;
   }
 }
 
@@ -272,6 +298,8 @@ async function attachEmbeddedLiveCapture(view, url, cookieFallback, includeRaw) 
         websocketUrl,
         cookie: cookie || cookieFallback || "",
         includeRaw: Boolean(includeRaw),
+        profileLookup: signedProfileLookupFromTarget(view),
+        linkmicSnapshotLookup: livePkSnapshotLookupFromTarget(view),
       });
     } catch (error) {
       sendLivePkError(error?.message || String(error));
@@ -506,6 +534,7 @@ ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
     onStatus: (message) => mainWindow?.webContents.send("live-pk:capture-status", message),
     cookie,
     show: false,
+    keepAlive: true,
   });
   hiddenLiveCaptureWindow = capture.window;
   try {
@@ -513,8 +542,11 @@ ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
     if (cookie) options.cookie = cookie;
     mainWindow?.webContents.send("live-pk:capture-status", "已获取连接，正在启动监控");
     return livePkWatcher.start({ ...options, includeRaw: Boolean(payload?.includeRaw) });
+  } catch (error) {
+    if (hiddenLiveCaptureWindow === capture.window) closeHiddenLiveCaptureWindow();
+    throw error;
   } finally {
-    if (hiddenLiveCaptureWindow === capture.window) hiddenLiveCaptureWindow = null;
+    if (hiddenLiveCaptureWindow === capture.window && capture.window.isDestroyed()) hiddenLiveCaptureWindow = null;
   }
 }));
 ipcMain.handle("live-pk:stop", wrap(() => {

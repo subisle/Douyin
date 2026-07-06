@@ -89,6 +89,34 @@ interface MonitorRoomInfo {
   updatedAt: string;
 }
 
+interface MonitorScoreRow {
+  anchorId: string;
+  name: string;
+  score: number;
+  scoreText: string;
+}
+
+interface MonitorRoundRow {
+  round: number;
+  battleId: string;
+  scores: MonitorScoreRow[];
+}
+
+interface MonitorLiveState {
+  mode: string;
+  modeLabel: string;
+  isPkActive: boolean;
+  isLinkmic: boolean;
+  participantCount: number;
+  battleId: string;
+  channelId: string;
+  countdown: number;
+  phase: string;
+  scores: MonitorScoreRow[];
+  rounds: MonitorRoundRow[];
+  updatedAt: string;
+}
+
 const FILTERS: { key: MonitorFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "gift", label: "礼物" },
@@ -117,6 +145,77 @@ function safeText(value: unknown) {
 function safeNumber(value: unknown) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number : 0;
+}
+
+function safeBoolean(value: unknown) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function compactNumber(value: unknown) {
+  const number = safeNumber(value);
+  if (number >= 100000000) return `${(number / 100000000).toFixed(1)}亿`;
+  if (number >= 10000) return `${(number / 10000).toFixed(1)}万`;
+  return String(number || 0);
+}
+
+function compactId(value: string) {
+  if (!value) return "-";
+  if (value.length <= 16) return value;
+  return `${value.slice(0, 8)}...${value.slice(-4)}`;
+}
+
+function moneyText(value: number) {
+  return `¥${value.toFixed(2)}`;
+}
+
+function scoreNumber(value: unknown) {
+  if (typeof value === "number") return value;
+  const text = safeText(value).replace(/,/g, "").trim().toLowerCase();
+  if (!text) return 0;
+  const match = text.match(/\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const base = Number(match[0]);
+  if (!Number.isFinite(base)) return 0;
+  if (text.includes("亿")) return Math.round(base * 100000000);
+  if (text.includes("万") || text.includes("w")) return Math.round(base * 10000);
+  if (text.includes("k")) return Math.round(base * 1000);
+  return Math.round(base);
+}
+
+function scoreFromPayload(value: unknown): MonitorScoreRow | null {
+  if (!value || typeof value !== "object") return null;
+  const payload = value as Record<string, unknown>;
+  const anchorId =
+    safeText(payload.anchorId) ||
+    safeText(payload.anchorID) ||
+    safeText(payload.userId) ||
+    safeText(payload.userID) ||
+    safeText(payload.openId);
+  if (!anchorId || anchorId === "0") return null;
+  const name =
+    safeText(payload.realName) ||
+    safeText(payload.displayName) ||
+    safeText(payload.nickname) ||
+    safeText(payload.anchorName);
+  const scoreText =
+    safeText(payload.scoreText) ||
+    safeText(payload.score_str) ||
+    safeText(payload.multiPkTeamScoreText);
+  const score = scoreNumber(payload.score) || scoreNumber(scoreText) || scoreNumber(payload.multiPkTeamScore);
+  return {
+    anchorId,
+    name,
+    score,
+    scoreText: scoreText || compactNumber(score),
+  };
+}
+
+function scoreSummary(scores: MonitorScoreRow[], limit = 4) {
+  if (scores.length === 0) return "暂无";
+  return scores
+    .slice(0, limit)
+    .map((score) => `${score.name || compactId(score.anchorId)} ${score.scoreText || compactNumber(score.score)}`)
+    .join(" / ");
 }
 
 function monitorName(payload: {
@@ -300,6 +399,7 @@ function collectUsersFromLog(row: MonitorLogRow) {
 function identityDetail(payload: {
   displayName?: string;
   realName?: string;
+  userId?: string;
   secUid?: string;
   uniqueId?: string;
   isMystery?: boolean;
@@ -324,6 +424,7 @@ function identityDetail(payload: {
     parts.push(`${payload.displayName} -> ${payload.realName}`);
   }
   if (payload.uniqueId) parts.push(`抖音号:${payload.uniqueId}`);
+  if (payload.userId) parts.push(`user_id:${payload.userId}`);
   if (payload.secUid) parts.push(`sec:${payload.secUid.slice(0, 12)}...`);
   if (payload.userLevel) parts.push(`用户等级:${payload.userLevel}`);
   if (payload.wealthLevel || payload.consumeLevel || payload.honorLevel) {
@@ -356,6 +457,9 @@ function eventLabel(eventType: string) {
     "rank-list-hour-enter": "小时榜",
     "gift-update": "礼物更新",
     "linkmic-score": "连线分数",
+    "live-mode": "直播形态",
+    "pk-battle": "PK状态",
+    "pk-score-snapshot": "PK分数",
     "room-info": "房间信息",
     "gift-catalog": "礼物目录",
     "audience-rank": "观众榜",
@@ -368,6 +472,11 @@ function eventLabel(eventType: string) {
 function eventValue(payload: LivePkEventPayload) {
   const likeCount = safeNumber(payload.likeCount);
   const paidCount = safeNumber(payload.paidCount);
+  const scores = Array.isArray(payload.scores) ? payload.scores as Record<string, unknown>[] : [];
+  if (payload.eventType === "live-mode") return safeText(payload.liveModeLabel) || safeText(payload.liveMode);
+  if ((payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot") && scores.length > 0) {
+    return scores.map((score) => safeText(score.scoreText) || String(safeNumber(score.score))).join(" : ");
+  }
   if (typeof payload.displayValue === "number" && payload.displayValue > 0) return String(payload.displayValue);
   if (typeof payload.totalUser === "number" && payload.totalUser > 0) return String(payload.totalUser);
   if (typeof payload.hotScore === "number" && payload.hotScore > 0) return String(payload.hotScore);
@@ -387,6 +496,22 @@ function eventDetail(payload: LivePkEventPayload) {
   const wishSwitch = safeNumber(payload.wishSwitch);
   const likeIconCount = safeNumber(payload.likeIconCount);
   const frequentlyChatCount = safeNumber(payload.frequentlyChatCount);
+  const scores = Array.isArray(payload.scores) ? payload.scores as Record<string, unknown>[] : [];
+  const participants = Array.isArray(payload.participants) ? payload.participants as Record<string, unknown>[] : [];
+  const scoreText = scores
+    .map((score) => {
+      const name = safeText(score.realName) || safeText(score.displayName) || safeText(score.nickname) || safeText(score.anchorId);
+      const id = safeText(score.anchorId) || safeText(score.userId);
+      const value = safeText(score.scoreText) || String(safeNumber(score.score));
+      return [name, id ? `(${id})` : "", value].filter(Boolean).join(" ");
+    })
+    .filter(Boolean)
+    .join(" / ");
+  const participantText = participants
+    .slice(0, 6)
+    .map((item) => safeText(item.realName) || safeText(item.displayName) || safeText(item.nickname) || safeText(item.userId))
+    .filter(Boolean)
+    .join(" / ");
   const body =
     payload.eventType === "room-stats"
       ? [payload.displayShort, payload.displayMiddle, payload.displayLong, payload.total ? `累计 ${payload.total}` : ""]
@@ -404,7 +529,34 @@ function eventDetail(payload: LivePkEventPayload) {
               safeText(payload.title),
               safeText(payload.roomId),
               safeText(payload.userCountText),
+              safeText(payload.liveModeLabel) || (payload.liveMode ? `形态 ${safeText(payload.liveMode)}` : ""),
               likeCount ? `点赞 ${likeCount}` : "",
+            ].filter(Boolean).join(" / ")
+        : payload.eventType === "live-mode"
+          ? [
+              safeText(payload.liveModeLabel) || safeText(payload.liveMode),
+              payload.participantCount ? `${safeText(payload.participantCount)}人` : "",
+              payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
+              payload.battleStatus !== undefined ? `状态 ${safeText(payload.battleStatus)}` : "",
+              participantText,
+            ].filter(Boolean).join(" / ")
+        : payload.eventType === "pk-battle"
+          ? [
+              payload.isPkActive ? "PK中" : "非PK中",
+              payload.participantCount ? `${safeText(payload.participantCount)}方` : "",
+              scoreText,
+              payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
+              payload.duration ? `${safeText(payload.duration)}秒` : "",
+              safeText(payload.battleId),
+            ].filter(Boolean).join(" / ")
+        : payload.eventType === "pk-score-snapshot"
+          ? [
+              payload.isPkActive ? "PK中" : "非PK中",
+              payload.participantCount ? `${safeText(payload.participantCount)}方` : "",
+              payload.pkCountDown !== undefined ? `倒计时 ${safeText(payload.pkCountDown)}秒` : "",
+              scoreText,
+              payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
+              safeText(payload.battleId),
             ].filter(Boolean).join(" / ")
         : payload.eventType === "gift-catalog"
           ? [
@@ -479,6 +631,146 @@ function downloadText(filename: string, text: string, type: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
+  const scores = new Map<string, MonitorScoreRow>();
+  const rounds: MonitorRoundRow[] = [];
+  let round = 0;
+  let currentBattleId = "";
+  let mode = "unknown";
+  let modeLabel = "未知";
+  let isPkActive = false;
+  let isLinkmic = false;
+  let participantCount = 0;
+  let channelId = "";
+  let countdown = 0;
+  let phase = "";
+  let updatedAt = "";
+
+  const ensureRound = (battleId: string, forceNew = false) => {
+    const nextBattleId = battleId || currentBattleId || `round-${round || 1}`;
+    if (forceNew || round === 0 || (battleId && battleId !== currentBattleId)) {
+      round = round + 1;
+      currentBattleId = nextBattleId;
+      scores.clear();
+      rounds.push({ round, battleId: nextBattleId, scores: [] });
+    }
+  };
+
+  const snapshotRound = () => {
+    if (round === 0) return;
+    rounds[rounds.length - 1] = {
+      round,
+      battleId: currentBattleId,
+      scores: Array.from(scores.values()),
+    };
+  };
+
+  for (const row of logs.slice().reverse()) {
+    const payload = row.payload as Record<string, unknown>;
+    if (row.type === "event") {
+      const eventType = safeText(payload.eventType);
+      if (eventType === "room-info" || eventType === "live-mode" || eventType === "pk-battle" || eventType === "pk-score-snapshot") {
+        const nextMode = safeText(payload.liveMode);
+        if (nextMode) mode = nextMode;
+        modeLabel = safeText(payload.liveModeLabel) || eventLabel(eventType);
+        isPkActive = safeBoolean(payload.isPkActive) || mode === "pk" || isPkActive;
+        isLinkmic = mode === "linkmic" || mode === "pk" || isPkActive || isLinkmic;
+        participantCount = Math.max(participantCount, safeNumber(payload.participantCount));
+        channelId = safeText(payload.channelId) || channelId;
+        countdown = Math.max(0, safeNumber(payload.pkCountDown) || countdown);
+        phase = safeText(payload.battlePhase) || phase;
+        updatedAt = row.at || updatedAt;
+      }
+
+      if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
+        const battleId = safeText(payload.battleId);
+        ensureRound(battleId, Boolean(battleId && battleId !== currentBattleId));
+        const nextScores = Array.isArray(payload.scores)
+          ? payload.scores.map(scoreFromPayload).filter(Boolean) as MonitorScoreRow[]
+          : [];
+        if (nextScores.length > 0) {
+          scores.clear();
+          nextScores.forEach((score) => scores.set(score.anchorId, score));
+          snapshotRound();
+        }
+      }
+    }
+
+    if (row.type === "rank") {
+      const rankScore = scoreFromPayload(payload.rank || payload);
+      if (rankScore) {
+        ensureRound(safeText(payload.battleId));
+        scores.set(rankScore.anchorId, rankScore);
+        participantCount = Math.max(participantCount, scores.size);
+        updatedAt = row.at || updatedAt;
+        snapshotRound();
+      }
+    }
+  }
+
+  const currentScores = Array.from(scores.values());
+  participantCount = Math.max(participantCount, currentScores.length);
+  if (isPkActive) modeLabel = "PK";
+  else if (isLinkmic) modeLabel = modeLabel === "未知" ? "连麦" : modeLabel;
+  else if (mode === "single") modeLabel = "单人";
+
+  return {
+    mode,
+    modeLabel,
+    isPkActive,
+    isLinkmic,
+    participantCount,
+    battleId: currentBattleId,
+    channelId,
+    countdown,
+    phase,
+    scores: currentScores,
+    rounds,
+    updatedAt,
+  };
+}
+
+function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
+  const payload = row.payload as Record<string, unknown>;
+  if (row.type === "gift") {
+    const gift = payload as unknown as LivePkGiftPayload;
+    const rmb = safeNumber(gift.diamondCount) * safeNumber(gift.count) / 10;
+    return [
+      `${row.name} 送出 ${gift.giftName || "礼物"} x${gift.count || 1}`,
+      rmb ? moneyText(rmb) : "",
+      gift.fanTicket ? `音浪 ${compactNumber(gift.fanTicket)}` : "",
+      liveState.scores.length ? `分数 ${scoreSummary(liveState.scores, 2)}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+  if (row.type === "chat") {
+    const chat = payload as unknown as LivePkChatPayload;
+    return [
+      `${row.name}: ${chat.content || row.detail}`,
+      liveState.scores.length ? `分数 ${scoreSummary(liveState.scores, 2)}` : "",
+    ].filter(Boolean).join(" · ");
+  }
+  if (row.type === "rank") {
+    const rank = (payload.rank || payload) as Record<string, unknown>;
+    const score = scoreFromPayload(rank);
+    return score
+      ? `主播ID ${compactId(score.anchorId)} · ${score.name || "主播"} · 分数 ${score.scoreText || compactNumber(score.score)}`
+      : row.detail;
+  }
+  if (row.type === "event") {
+    const eventType = safeText(payload.eventType);
+    if (eventType === "live-mode") {
+      return `${safeText(payload.liveModeLabel) || liveState.modeLabel} · PK ${safeBoolean(payload.isPkActive) ? "是" : "否"} · 连麦 ${liveState.isLinkmic ? "是" : "否"} · ${safeNumber(payload.participantCount) || liveState.participantCount}人`;
+    }
+    if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
+      const eventScores = Array.isArray(payload.scores)
+        ? payload.scores.map(scoreFromPayload).filter(Boolean) as MonitorScoreRow[]
+        : liveState.scores;
+      return `PK ${safeBoolean(payload.isPkActive) ? "进行中" : "未开始"} · ${safeNumber(payload.participantCount) || eventScores.length}人 · ${scoreSummary(eventScores)}`;
+    }
+  }
+  return row.detail;
 }
 
 export function DouyinMonitorPage() {
@@ -566,7 +858,7 @@ export function DouyinMonitorPage() {
         type: "gift",
         label: "礼物",
         name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
+        userId: payload.uniqueId || payload.userId || payload.secUid || "",
         value: String(payload.fanTicket || ""),
         detail: giftDetail,
         payload,
@@ -578,7 +870,7 @@ export function DouyinMonitorPage() {
         type: "chat",
         label: "弹幕",
         name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
+        userId: payload.uniqueId || payload.userId || payload.secUid || "",
         value: "",
         detail: [identityDetail(payload), payload.content].filter(Boolean).join(" / "),
         payload,
@@ -590,7 +882,7 @@ export function DouyinMonitorPage() {
         type: "member",
         label: "进场",
         name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
+        userId: payload.uniqueId || payload.userId || payload.secUid || "",
         value: payload.memberCount ? String(payload.memberCount) : "",
         detail: identityDetail(payload),
         payload,
@@ -602,7 +894,7 @@ export function DouyinMonitorPage() {
         type: "rank" as const,
         label: "分数",
         name: monitorName(rank),
-        userId: rank.userId || rank.uniqueId || rank.secUid || "",
+        userId: rank.uniqueId || rank.userId || rank.secUid || "",
         value: String(rank.score || ""),
         detail: [
           payload.rankSource || rank.rankSource ? `来源 ${payload.rankSource || rank.rankSource}` : "",
@@ -619,10 +911,10 @@ export function DouyinMonitorPage() {
         at: formatTime(payload.at),
         type: "event",
         label: eventLabel(payload.eventType),
-        name: payload.userId || payload.uniqueId || payload.secUid
+        name: payload.uniqueId || payload.userId || payload.secUid
           ? monitorName(payload)
           : eventLabel(payload.eventType),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
+        userId: payload.uniqueId || payload.userId || payload.secUid || "",
         value: eventValue(payload),
         detail: eventDetail(payload),
         payload,
@@ -730,6 +1022,8 @@ export function DouyinMonitorPage() {
     }
     return info;
   }, [logs]);
+
+  const liveState = useMemo(() => buildLiveState(logs), [logs]);
 
   const stats = useMemo(() => {
     const giftRows = logs.filter((row) => row.type === "gift");
@@ -957,6 +1251,7 @@ export function DouyinMonitorPage() {
             </Button>
           </div>
         </div>
+        <LiveStateStrip liveState={liveState} stats={stats} />
       </section>
 
       <section className="grid min-h-0 flex-1 grid-cols-[minmax(340px,0.52fr)_minmax(0,1.48fr)] gap-4">
@@ -1045,16 +1340,13 @@ export function DouyinMonitorPage() {
         </div>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <div className="grid shrink-0 grid-cols-4 gap-2">
+          <div className="grid shrink-0 grid-cols-6 gap-2">
             <StatCard icon={Activity} label="事件" value={stats.total} />
             <StatCard icon={Gift} label="礼物" value={stats.gifts} />
             <StatCard icon={MessageSquareText} label="弹幕" value={stats.chats} />
             <StatCard icon={Users} label="用户" value={stats.users} />
-          </div>
-          <div className="grid shrink-0 grid-cols-3 gap-2">
             <StatCard icon={BarChart3} label="服务端音浪" value={stats.fanTicket} />
             <StatCard icon={Users} label="进场" value={stats.members} />
-            <StatCard icon={Activity} label="互动" value={stats.events} />
           </div>
           <div className="flex shrink-0 flex-wrap gap-2 rounded-xl border border-border bg-card p-2">
             {FILTERS.map((item) => (
@@ -1073,31 +1365,22 @@ export function DouyinMonitorPage() {
           </div>
           <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card">
             {filter === "user" ? (
-              <div className="grid min-w-[1580px] grid-cols-[140px_130px_130px_210px_120px_68px_68px_68px_68px_82px_82px_90px_110px_92px_92px_110px] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
-                <div>真实昵称</div>
-                <div>显示昵称</div>
-                <div>抖音ID</div>
-                <div>sec_uid / user_id</div>
-                <div>身份来源</div>
-                <div>用户等级</div>
-                <div>财富等级</div>
-                <div>粉丝团</div>
-                <div>荣誉</div>
-                <div>付费分</div>
-                <div>粉丝票</div>
-                <div>充值钻石</div>
-                <div>互动统计</div>
-                <div>IP/粉丝</div>
-                <div>最近时间</div>
-                <div>状态</div>
+              <div className="grid min-w-[980px] grid-cols-[150px_130px_210px_82px_82px_100px_110px_minmax(120px,1fr)] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                <div>昵称</div>
+                <div>抖音号</div>
+                <div>用户ID / sec_uid</div>
+                <div>等级</div>
+                <div>财富</div>
+                <div>互动</div>
+                <div>音浪</div>
+                <div>最近</div>
               </div>
             ) : (
-              <div className="grid grid-cols-[78px_58px_minmax(86px,0.85fr)_72px_minmax(0,1.5fr)] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[72px_56px_minmax(100px,0.6fr)_minmax(0,2fr)] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>时间</div>
                 <div>类型</div>
                 <div>昵称</div>
-                <div>数值</div>
-                <div>详情</div>
+                <div>内容</div>
               </div>
             )}
             <div className="h-full overflow-auto pb-10">
@@ -1110,50 +1393,32 @@ export function DouyinMonitorPage() {
                   userRows.map((user) => (
                     <div
                       key={user.key}
-                      className="grid min-w-[1580px] grid-cols-[140px_130px_130px_210px_120px_68px_68px_68px_68px_82px_82px_90px_110px_92px_92px_110px] border-b border-border/70 px-3 py-2 text-xs"
+                      className="grid min-w-[980px] grid-cols-[150px_130px_210px_82px_82px_100px_110px_minmax(120px,1fr)] border-b border-border/70 px-3 py-2 text-xs"
                     >
                       <div className="break-words font-semibold" title={user.realName || user.nickname}>
                         {user.realName || user.nickname}
-                      </div>
-                      <div className="break-words text-muted-foreground" title={user.displayName}>
-                        {user.displayName || "-"}
+                        {user.isMystery && <span className="ml-1 text-[10px] text-muted-foreground">脱敏</span>}
                       </div>
                       <div className="break-words text-muted-foreground" title={user.douyinId}>
                         {user.douyinId || "-"}
                       </div>
                       <div className="break-all text-[10px] text-muted-foreground" title={`${user.secUid || ""} ${user.userId || ""}`}>
-                        {user.secUid || user.userId || "-"}
-                      </div>
-                      <div className="space-y-0.5 text-muted-foreground">
-                        <Badge variant={user.hasStrongIdentity ? "default" : "secondary"} className="h-5 px-1.5 text-[10px]">
-                          {user.hasStrongIdentity ? "真实ID" : "未确认"}
-                        </Badge>
-                        <div className="break-words text-[10px]" title={user.identitySource}>
-                          {user.identitySource || "-"}
-                        </div>
+                        {compactId(user.userId || user.secUid)}
                       </div>
                       <div className="tabular-nums">{user.userLevel || "-"}</div>
                       <div className="tabular-nums">{user.wealthLevel || user.consumeLevel || "-"}</div>
-                      <div className="tabular-nums">{user.fansClubLevel || user.badgeLevel || "-"}</div>
-                      <div className="tabular-nums">{user.honorLevel || "-"}</div>
-                      <div className="tabular-nums">{user.payScore || "-"}</div>
-                      <div className="tabular-nums">{user.fanTicketCount || "-"}</div>
-                      <div className="tabular-nums">{user.totalRechargeDiamondCount || "-"}</div>
                       <div className="space-y-0.5 tabular-nums">
-                        <div>弹 {user.chats}</div>
-                        <div>礼 {user.gifts}</div>
-                        <div>进 {user.members}</div>
-                        <div>音 {user.fanTicket || 0}</div>
+                        <div>弹幕 {user.chats}</div>
+                        <div>礼物 {user.gifts}</div>
+                        <div>进场 {user.members}</div>
                       </div>
                       <div className="space-y-0.5">
-                        <div>{user.ipLocation || "-"}</div>
-                        <div className="tabular-nums">{user.followerCount || "-"}</div>
+                        <div className="tabular-nums">本场 {compactNumber(user.fanTicket)}</div>
+                        <div className="tabular-nums text-muted-foreground">累计 {compactNumber(user.fanTicketCount)}</div>
                       </div>
-                      <div className="tabular-nums text-muted-foreground">{user.lastAt || "-"}</div>
                       <div className="space-y-0.5 text-muted-foreground">
-                        <div>{user.isMystery ? "神秘/脱敏" : "公开"}</div>
-                        <div>{user.cacheHit ? "缓存命中" : "实时解析"}</div>
-                        <div>{user.lastType}</div>
+                        <div className="tabular-nums">{user.lastAt || "-"}</div>
+                        <div>{user.hasStrongIdentity ? "真实ID" : "未确认"} · {user.lastType}</div>
                       </div>
                     </div>
                   ))
@@ -1166,13 +1431,14 @@ export function DouyinMonitorPage() {
                 filteredLogs.map((row) => (
                   <div
                     key={row.id}
-                    className="grid grid-cols-[78px_58px_minmax(86px,0.85fr)_72px_minmax(0,1.5fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs"
+                    className="grid grid-cols-[72px_56px_minmax(100px,0.6fr)_minmax(0,2fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs"
                   >
                     <div className="text-muted-foreground">{row.at}</div>
                     <div><Badge variant="outline" className="h-5 px-1.5 text-[10px]">{row.label}</Badge></div>
                     <div className="truncate font-semibold">{row.name}</div>
-                    <div className="truncate tabular-nums">{row.value}</div>
-                    <div className="break-words text-muted-foreground" title={row.detail}>{row.detail}</div>
+                    <div className="truncate text-muted-foreground" title={compactLogDetail(row, liveState)}>
+                      {compactLogDetail(row, liveState)}
+                    </div>
                   </div>
                 ))
               )}
@@ -1180,6 +1446,66 @@ export function DouyinMonitorPage() {
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function LiveStateStrip({
+  liveState,
+  stats,
+}: {
+  liveState: MonitorLiveState;
+  stats: {
+    total: number;
+    gifts: number;
+    chats: number;
+    members: number;
+    events: number;
+    users: number;
+    fanTicket: number;
+    online: string;
+  };
+}) {
+  const latestRound = liveState.rounds[liveState.rounds.length - 1];
+  return (
+    <div className="mt-3 grid gap-2 md:grid-cols-[1.1fr_1.5fr_1.4fr]">
+      <div className="rounded-lg border border-border bg-background px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-muted-foreground">直播形态</span>
+          <Badge variant={liveState.isPkActive ? "default" : liveState.isLinkmic ? "outline" : "secondary"}>
+            {liveState.isPkActive ? "PK中" : liveState.isLinkmic ? "连麦" : liveState.modeLabel}
+          </Badge>
+        </div>
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs font-semibold">
+          <span>PK {liveState.isPkActive ? "是" : "否"}</span>
+          <span>连麦 {liveState.isLinkmic ? "是" : "否"}</span>
+          <span>{liveState.participantCount || 0} 人</span>
+          {liveState.countdown > 0 && <span>倒计时 {liveState.countdown}s</span>}
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-background px-3 py-2">
+        <div className="text-xs font-semibold text-muted-foreground">当前分数</div>
+        <div className="mt-1 truncate text-sm font-black" title={scoreSummary(liveState.scores)}>
+          {scoreSummary(liveState.scores)}
+        </div>
+        <div className="mt-1 truncate text-[11px] font-semibold text-muted-foreground">
+          battle {compactId(liveState.battleId)} · channel {compactId(liveState.channelId)}
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border bg-background px-3 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-muted-foreground">历史轮次</span>
+          <span className="text-xs font-black tabular-nums">{liveState.rounds.length} 轮</span>
+        </div>
+        <div className="mt-1 truncate text-sm font-semibold" title={liveState.rounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}>
+          {latestRound ? `第${latestRound.round}轮 ${scoreSummary(latestRound.scores)}` : "暂无"}
+        </div>
+        <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+          礼物 {stats.gifts} · 弹幕 {stats.chats} · 用户 {stats.users} · 音浪 {compactNumber(stats.fanTicket)}
+        </div>
+      </div>
     </div>
   );
 }

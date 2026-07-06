@@ -134,6 +134,7 @@ function hasStrongUserIdentity(user) {
 }
 
 function userIdentitySource(user, source = "") {
+  if (user?.identitySource) return user.identitySource;
   const prefix = source ? `${source}.` : "";
   if (user?.uniqueId) return `${prefix}display_id`;
   if (user?.secUid) return `${prefix}sec_uid`;
@@ -179,6 +180,29 @@ function compactImage(image) {
     url: Array.isArray(urls) ? urls[0] || "" : "",
     width: toNumber(image?.width),
     height: toNumber(image?.height),
+  };
+}
+
+function roomLinkerSummary(room) {
+  const linkerMap = room?.linkerMap || room?.linker_map || {};
+  const linkerDetail = room?.linkerDetail || room?.linker_detail || {};
+  const linkerPlayModes = linkerDetail.linkerPlayModes || linkerDetail.linker_play_modes || [];
+  const linkerMapKeys = Object.keys(linkerMap || {});
+  const manualOpenUi = toNumber(firstValue(linkerDetail.manualOpenUi, linkerDetail.manual_open_ui));
+  const audienceLinkmic = toNumber(firstValue(linkerDetail.enableAudienceLinkmic, linkerDetail.enable_audience_linkmic));
+  const isLinked =
+    linkerMapKeys.length > 0 ||
+    (Array.isArray(linkerPlayModes) && linkerPlayModes.length > 0) ||
+    manualOpenUi > 0 ||
+    audienceLinkmic > 0;
+  return {
+    isLinked,
+    liveMode: isLinked ? "linkmic" : "single",
+    linkerMap,
+    linkerSceneKeys: linkerMapKeys,
+    linkerPlayModes: Array.isArray(linkerPlayModes) ? linkerPlayModes.map(toNumber) : [],
+    manualOpenUi,
+    audienceLinkmic,
   };
 }
 
@@ -323,6 +347,24 @@ function normalizeUser(user) {
   };
 }
 
+function hasUserValue(value) {
+  if (value === null || value === undefined || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+function mergeUserObjects(primary, ...fallbacks) {
+  const merged = {};
+  for (const source of [primary, ...fallbacks]) {
+    if (!source || typeof source !== "object") continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (!hasUserValue(value) || hasUserValue(merged[key])) continue;
+      merged[key] = value;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : primary;
+}
+
 function userEventFields(user, source = "") {
   return {
     nickname: user.realName || user.displayName,
@@ -387,6 +429,8 @@ class LivePkWatcher extends EventEmitter {
     this.ws = null;
     this.pingTimer = null;
     this.fetchTimer = null;
+    this.pkSnapshotTimer = null;
+    this.pkSnapshotIntervalMs = 3000;
     this.fetchAbortController = null;
     this.fetchUrl = "";
     this.fetchHeaders = {};
@@ -400,10 +444,15 @@ class LivePkWatcher extends EventEmitter {
     this.userCache = new Map();
     this.displayNameCache = new Map();
     this.profileCache = new Map();
+    this.signedProfileCache = new Map();
     this.giftCatalog = new Map();
     this.cookieHeader = "";
     this.roomId = "";
     this.includeRaw = false;
+    this.profileLookup = null;
+    this.linkmicSnapshotLookup = null;
+    this.lastLiveModeKey = "";
+    this.lastPkBattleKey = "";
   }
 
   getStatus() {
@@ -419,11 +468,11 @@ class LivePkWatcher extends EventEmitter {
     };
   }
 
-  async start({ websocketUrl, fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap }) {
+  async start({ websocketUrl, fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap, profileLookup, linkmicSnapshotLookup }) {
     const cleanUrl = String(websocketUrl || "").trim();
     const cleanFetchUrl = String(fetchUrl || "").trim();
     if (cleanFetchUrl) {
-      return this.startFetch({ fetchUrl: cleanFetchUrl, fetchHeaders, cookie, includeRaw, bootstrap });
+      return this.startFetch({ fetchUrl: cleanFetchUrl, fetchHeaders, cookie, includeRaw, bootstrap, profileLookup, linkmicSnapshotLookup });
     }
     if (!cleanUrl) throw new Error("缺少直播间 IM 连接地址");
     if (!/^wss?:\/\//i.test(cleanUrl)) throw new Error("WebSocket 地址格式不正确");
@@ -435,6 +484,8 @@ class LivePkWatcher extends EventEmitter {
     this.lastError = null;
     this.roomId = readRoomIdFromWebSocketUrl(cleanUrl);
     this.includeRaw = Boolean(includeRaw);
+    this.profileLookup = typeof profileLookup === "function" ? profileLookup : null;
+    this.linkmicSnapshotLookup = typeof linkmicSnapshotLookup === "function" ? linkmicSnapshotLookup : null;
     this.emit("status", this.getStatus());
 
     const headers = {
@@ -453,9 +504,11 @@ class LivePkWatcher extends EventEmitter {
       this.status = "running";
       this.startPing();
       this.emit("status", this.getStatus());
-      this.ingestBootstrap(bootstrap).catch((error) => {
-        this.emit("error-message", `启动快照解析失败: ${error.message || error}`);
-      });
+      this.ingestBootstrap(bootstrap)
+        .catch((error) => {
+          this.emit("error-message", `启动快照解析失败: ${error.message || error}`);
+        })
+        .finally(() => this.startPkSnapshotPolling(750));
     });
 
     this.ws.on("message", (data) => {
@@ -484,6 +537,7 @@ class LivePkWatcher extends EventEmitter {
   stop() {
     this.stopPing();
     this.stopFetchPolling();
+    this.stopPkSnapshotPolling();
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
@@ -495,11 +549,15 @@ class LivePkWatcher extends EventEmitter {
     }
     this.status = "idle";
     this.startedAt = null;
+    this.profileLookup = null;
+    this.linkmicSnapshotLookup = null;
+    this.lastLiveModeKey = "";
+    this.lastPkBattleKey = "";
     this.emit("status", this.getStatus());
     return this.getStatus();
   }
 
-  async startFetch({ fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap }) {
+  async startFetch({ fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap, profileLookup, linkmicSnapshotLookup }) {
     const cleanUrl = String(fetchUrl || "").trim();
     if (!cleanUrl) throw new Error("缺少直播间 im/fetch 地址");
     if (!/^https?:\/\//i.test(cleanUrl)) throw new Error("im/fetch 地址格式不正确");
@@ -514,6 +572,8 @@ class LivePkWatcher extends EventEmitter {
 
     const url = new URL(cleanUrl);
     this.roomId = url.searchParams.get("room_id") || "";
+    this.profileLookup = typeof profileLookup === "function" ? profileLookup : null;
+    this.linkmicSnapshotLookup = typeof linkmicSnapshotLookup === "function" ? linkmicSnapshotLookup : null;
     this.fetchCursor = url.searchParams.get("cursor") || "";
     this.fetchInternalExt = url.searchParams.get("internal_ext") || "";
 
@@ -543,6 +603,7 @@ class LivePkWatcher extends EventEmitter {
     this.status = "running";
     this.emit("status", this.getStatus());
     await this.ingestBootstrap(bootstrap);
+    this.startPkSnapshotPolling(750);
     this.scheduleFetchPoll(0);
     return this.getStatus();
   }
@@ -621,6 +682,7 @@ class LivePkWatcher extends EventEmitter {
         this.displayNameCache.set(key, profile);
       }
     }
+    if (profile.secUid && !profile.uniqueId) this.prefetchSignedUserProfile(profile.secUid);
     return profile;
   }
 
@@ -686,6 +748,7 @@ class LivePkWatcher extends EventEmitter {
     await this.ingestRoomEnter(bootstrap.roomEnter, bootstrap);
     this.ingestGiftList(bootstrap.giftList);
     await this.ingestAudienceRank(bootstrap.audienceRank);
+    this.ingestLinkmicList(bootstrap.linkmicList);
     this.ingestWishList(bootstrap.wishList);
     this.ingestInteractionInfo(bootstrap.interactionInfo);
   }
@@ -723,6 +786,7 @@ class LivePkWatcher extends EventEmitter {
     }
     const roomStats = room.stats || {};
     const roomViewStats = room.room_view_stats || room.roomViewStats || {};
+    const linker = roomLinkerSummary(room);
     this.emit("event", {
       type: "event",
       eventType: "room-info",
@@ -745,6 +809,13 @@ class LivePkWatcher extends EventEmitter {
       ownerDouyinIdSource: owner?.uniqueId ? (ownerProfileSource || "profile/other.unique_id") : (webRid ? "live_url.web_rid" : ""),
       ownerWebRid: webRid,
       ownerNickname: owner?.realName || owner?.displayName || "",
+      liveMode: linker.liveMode,
+      liveModeSource: "room/web/enter",
+      isLinked: linker.isLinked,
+      linkerSceneKeys: linker.linkerSceneKeys,
+      linkerPlayModes: linker.linkerPlayModes,
+      manualOpenUi: linker.manualOpenUi,
+      audienceLinkmic: linker.audienceLinkmic,
     });
   }
 
@@ -809,6 +880,235 @@ class LivePkWatcher extends EventEmitter {
       ranks,
       seats,
     });
+    this.emit("status", this.getStatus());
+  }
+
+  ingestLinkmicList(value, options = {}) {
+    const json = this.parseBootstrapJson(value);
+    const data = json?.data || {};
+    const snapshotSource = String(options.source || json?.extra?.source || "webcast/linkmic/list");
+    const method = snapshotSource === "page-store" ? "page-store/linkmic-snapshot" : "webcast/linkmic/list";
+    const periodic = Boolean(options.periodic);
+    const users = Array.isArray(data.user) ? data.user : [];
+    const battleStats = data.battle_stats || data.battleStats || {};
+    const battleSettings = battleStats.battle_settings || battleStats.battleSettings || {};
+    const battleScoresRaw = Array.isArray(battleStats.battle_scores)
+      ? battleStats.battle_scores
+      : Array.isArray(battleStats.battleScores)
+        ? battleStats.battleScores
+        : [];
+    const battleArmiesRaw = Array.isArray(battleStats.battle_armies)
+      ? battleStats.battle_armies
+      : Array.isArray(battleStats.battleArmies)
+        ? battleStats.battleArmies
+        : [];
+    const hasBattle =
+      Object.keys(battleSettings || {}).length > 0 ||
+      battleScoresRaw.length > 0 ||
+      Boolean(firstValue(battleStats.battle_id, battleStats.battleId));
+    if (json?.status_code !== 0 && users.length === 0 && !hasBattle) return;
+
+    const at = new Date().toISOString();
+    const participants = users.map((item, index) => {
+      const profile = this.rememberBootstrapUser(item?.user);
+      const content = item?.content?.linkmic_content || item?.content?.linkmicContent || {};
+      return {
+        index: index + 1,
+        ...userEventFields(profile, "linkmic/list"),
+        linkmicId: String(firstValue(item?.linkmic_id_str, item?.linkmicIdStr, item?.linkmic_id, "")),
+        linkStatus: toNumber(firstValue(item?.link_status, item?.linkStatus)),
+        linkType: toNumber(firstValue(item?.link_type, item?.linkType)),
+        userPosition: toNumber(firstValue(item?.user_position, item?.userPosition)),
+        pkUserRole: toNumber(firstValue(content.pk_user_role, content.pkUserRole)),
+        fanTicketText: firstValue(content.fan_ticket, content.fanTicket),
+        hostName: firstValue(content.host_name, content.hostName),
+        liveRoomMode: toNumber(firstValue(content.live_room_mode, content.liveRoomMode)),
+      };
+    });
+
+    const participantById = new Map();
+    for (const participant of participants) {
+      for (const key of [participant.userId, participant.secUid, participant.uniqueId]) {
+        if (key) participantById.set(String(key), participant);
+      }
+    }
+    for (const item of users) {
+      const rawUser = item?.user || {};
+      const profile = this.getCachedUser(firstValue(rawUser.id_str, rawUser.id));
+      const participant = profile ? userEventFields(profile, "linkmic/list") : null;
+      for (const key of [rawUser.id_str, rawUser.id, rawUser.sec_uid, rawUser.secUid].filter(Boolean)) {
+        const existing = participantById.get(String(key));
+        if (!existing && participant) participantById.set(String(key), participant);
+      }
+    }
+
+    const channelId = String(firstValue(
+      battleSettings.channel_id,
+      battleSettings.channelId,
+      battleStats.channel_id,
+      battleStats.channelId
+    ));
+    const battleId = String(firstValue(
+      battleSettings.battle_id,
+      battleSettings.battleId,
+      battleStats.battle_id,
+      battleStats.battleId
+    ));
+    const finished = toNumber(firstValue(battleSettings.finished, battleStats.finished));
+    const battleStatus = toNumber(firstValue(battleSettings.battle_status, battleSettings.battleStatus));
+    const punishStartMs = toNumber(firstValue(battleSettings.punish_start_time_ms, battleSettings.punishStartTimeMs));
+    const duration = toNumber(battleSettings.duration);
+    const startTimeMs = toNumber(firstValue(battleSettings.start_time_ms, battleSettings.startTimeMs));
+    const isPkActive = hasBattle && finished === 0 && battleStatus !== 3;
+    const isLinked = participants.length > 1 || hasBattle;
+    const liveMode = isPkActive ? "pk" : isLinked ? "linkmic" : "single";
+    const battlePhase = !hasBattle
+      ? ""
+      : isPkActive
+        ? "running"
+        : punishStartMs > 0 || battleStatus === 3
+          ? "punish"
+          : finished > 0
+            ? "finished"
+            : "unknown";
+
+    const scores = battleScoresRaw.map((item, index) => {
+      const userId = String(firstValue(item?.user_id_str, item?.userIdStr, item?.user_id, item?.userId));
+      const user = participantById.get(userId) || this.getCachedUser(userId) || normalizeUser({ id_str: userId });
+      return {
+        rank: index + 1,
+        anchorId: userId,
+        ...userEventFields(user, "linkmic/list.battle_scores"),
+        score: toNumber(item?.score),
+        scoreText: String(firstValue(item?.score_blur_text, item?.scoreBlurText, item?.score_str, item?.scoreStr, item?.score)),
+        scoreVersion: toNumber(firstValue(item?.score_version, item?.scoreVersion)),
+        scoreRelative: Boolean(firstValue(item?.score_relative, item?.scoreRelative, false)),
+        multiPkTeamScore: toNumber(firstValue(item?.multi_pk_team_score, item?.multiPkTeamScore)),
+        multiPkTeamScoreText: String(firstValue(item?.multi_pk_team_score_text, item?.multiPkTeamScoreText)),
+      };
+    });
+
+    const contributors = [];
+    for (const army of battleArmiesRaw) {
+      const anchorId = String(firstValue(army?.anchor_id_str, army?.anchorIdStr, army?.anchor_id, army?.anchorId));
+      const anchor = participantById.get(anchorId) || this.getCachedUser(anchorId) || null;
+      const anchorName = anchor?.realName || anchor?.displayName || anchor?.nickname || "";
+      const rankList = Array.isArray(army?.rank_list)
+        ? army.rank_list
+        : Array.isArray(army?.rankList)
+          ? army.rankList
+          : [];
+      rankList.forEach((item, index) => {
+        const profile = this.rememberBootstrapUser({
+          id_str: firstValue(item?.user_id_str, item?.userIdStr, item?.user_id, item?.userId),
+          id: firstValue(item?.user_id, item?.userId),
+          nickname: item?.nickname,
+          sec_uid: firstValue(item?.sec_uid, item?.secUid),
+          display_id: firstValue(item?.display_id, item?.displayId),
+          unique_id: firstValue(item?.unique_id, item?.uniqueId),
+        });
+        contributors.push({
+          rank: index + 1,
+          anchorId,
+          anchorName,
+          ...userEventFields(profile, "linkmic/list.rank_list"),
+          score: toNumber(item?.score),
+          scoreText: String(firstValue(item?.score_str, item?.scoreStr, item?.score)),
+          rankSource: "pk-contributors",
+        });
+      });
+    }
+
+    const common = {
+      roomId: this.roomId,
+      channelId,
+      battleId,
+      liveMode,
+      liveModeLabel: liveMode === "pk" ? "正在PK" : liveMode === "linkmic" ? "连麦中" : "单人直播",
+      liveModeSource: snapshotSource,
+      snapshotSource,
+      isLinked,
+      isPkActive,
+      participantCount: participants.length,
+      participants,
+      hasBattle,
+      battlePhase,
+      battleStatus,
+      battleFinished: finished > 0,
+      battleType: toNumber(firstValue(battleSettings.battle_type, battleSettings.battleType, battleStats.battle_type, battleStats.battleType)),
+      matchType: toNumber(firstValue(battleSettings.match_type, battleSettings.matchType)),
+      startTime: toIsoTime(startTimeMs),
+      duration,
+      punishDuration: toNumber(firstValue(battleSettings.punish_duration, battleSettings.punishDuration)),
+      punishStartTime: toIsoTime(punishStartMs),
+      initiatorId: String(firstValue(battleSettings.initiator_id, battleSettings.initiatorId)),
+      pkCountDown: json?.extra?.pkCountDown === undefined ? undefined : toNumber(json.extra.pkCountDown),
+      checkedAt: at,
+      scores,
+    };
+
+    const liveModeKey = JSON.stringify({
+      liveMode,
+      battleId,
+      battlePhase,
+      battleStatus,
+      participantIds: participants.map((item) => item.userId).join(","),
+    });
+    const shouldEmitLiveMode = !periodic || liveModeKey !== this.lastLiveModeKey;
+    if (shouldEmitLiveMode) {
+      this.lastLiveModeKey = liveModeKey;
+      this.emit("event", {
+        type: "event",
+        eventType: "live-mode",
+        at,
+        method,
+        ...common,
+      });
+    }
+
+    if (hasBattle) {
+      const pkBattleKey = JSON.stringify({
+        battleId,
+        battlePhase,
+        battleStatus,
+        battleFinished: finished > 0,
+        participantCount: participants.length,
+      });
+      const shouldEmitBattle = !periodic || pkBattleKey !== this.lastPkBattleKey;
+      if (shouldEmitBattle) {
+        this.lastPkBattleKey = pkBattleKey;
+        this.emit("event", {
+          type: "event",
+          eventType: "pk-battle",
+          at,
+          method,
+          ...common,
+        });
+      }
+    }
+
+    if (hasBattle && scores.length > 0 && options.emitScoreSnapshot !== false) {
+      this.emit("event", {
+        type: "event",
+        eventType: "pk-score-snapshot",
+        at,
+        method,
+        ...common,
+      });
+    }
+
+    if (contributors.length > 0) {
+      this.lastRankAt = at;
+      this.emit("rank", {
+        type: "rank",
+        at,
+        rankSource: "pk-contributors",
+        channelId,
+        battleId,
+        ranks: contributors,
+      });
+    }
+
     this.emit("status", this.getStatus());
   }
 
@@ -879,6 +1179,37 @@ class LivePkWatcher extends EventEmitter {
     this.fetchHeaders = {};
     this.fetchCursor = "";
     this.fetchInternalExt = "";
+  }
+
+  stopPkSnapshotPolling() {
+    if (this.pkSnapshotTimer) clearTimeout(this.pkSnapshotTimer);
+    this.pkSnapshotTimer = null;
+  }
+
+  startPkSnapshotPolling(delayMs = this.pkSnapshotIntervalMs) {
+    if (typeof this.linkmicSnapshotLookup !== "function") return;
+    this.stopPkSnapshotPolling();
+    const tick = async () => {
+      this.pkSnapshotTimer = null;
+      if (this.status !== "running" || typeof this.linkmicSnapshotLookup !== "function") return;
+      try {
+        const snapshot = await this.linkmicSnapshotLookup();
+        if (snapshot) {
+          this.ingestLinkmicList(snapshot, {
+            periodic: true,
+            source: "page-store",
+            emitScoreSnapshot: true,
+          });
+        }
+      } catch {
+        // The hidden page can be navigating or closed; the IM monitor should keep running.
+      } finally {
+        if (this.status === "running" && typeof this.linkmicSnapshotLookup === "function") {
+          this.pkSnapshotTimer = setTimeout(tick, this.pkSnapshotIntervalMs);
+        }
+      }
+    };
+    this.pkSnapshotTimer = setTimeout(tick, Math.max(0, Number(delayMs) || 0));
   }
 
   scheduleFetchPoll(delayMs) {
@@ -1031,6 +1362,7 @@ class LivePkWatcher extends EventEmitter {
             secUid: user.sec_uid || key,
             ipLocation: user.ip_location || "",
             followerCount: Number(user.follower_count || 0),
+            source: "profile/other",
           };
         } catch {
           // Try the next host; Douyin may return an empty anti-bot response on one domain.
@@ -1043,7 +1375,65 @@ class LivePkWatcher extends EventEmitter {
     return promise;
   }
 
-  async enrichUser(user) {
+  async lookupSignedUserProfile(secUid) {
+    const key = String(secUid || "");
+    if (!key || key.length < 10 || typeof this.profileLookup !== "function") return null;
+    if (this.signedProfileCache.has(key)) return this.signedProfileCache.get(key);
+
+    const promise = Promise.resolve()
+      .then(() => this.profileLookup(key))
+      .then((profile) => {
+        if (!profile) return null;
+        return {
+          nickname: profile.nickname || "",
+          uniqueId: profile.uniqueId || profile.unique_id || profile.short_id || "",
+          userId: profile.userId || profile.uid || profile.uid_str || "",
+          secUid: profile.secUid || profile.sec_uid || key,
+          ipLocation: profile.ipLocation || profile.ip_location || "",
+          followerCount: Number(profile.followerCount || profile.follower_count || 0),
+          source: "page_signed_profile/other",
+        };
+      })
+      .catch(() => null);
+
+    this.signedProfileCache.set(key, promise);
+    const result = await promise;
+    if (!result) this.signedProfileCache.delete(key);
+    return result;
+  }
+
+  patchUserProfile(profile, extra, sourceLabel = "") {
+    const label = String(sourceLabel || "").trim();
+    const identitySource = [label, extra?.source].filter(Boolean).join(".");
+    return {
+      ...profile,
+      userId: extra?.userId || profile.userId,
+      secUid: extra?.secUid || profile.secUid,
+      realName:
+        extra?.nickname && extra.nickname !== profile.displayName
+          ? extra.nickname
+          : profile.realName,
+      uniqueId: extra?.uniqueId || profile.uniqueId,
+      ipLocation: extra?.ipLocation || profile.ipLocation || "",
+      followerCount: extra?.followerCount || profile.followerCount || 0,
+      identitySource: identitySource || profile.identitySource,
+    };
+  }
+
+  prefetchSignedUserProfile(secUid) {
+    const key = String(secUid || "");
+    if (!key || key.length < 10 || typeof this.profileLookup !== "function") return;
+    void this.lookupSignedUserProfile(key)
+      .then((extra) => {
+        if (!extra?.uniqueId) return;
+        const cached = this.getCachedUser(extra.secUid || key) || this.getCachedUser(key);
+        if (!cached || cached.uniqueId) return;
+        this.rememberResolvedUser(this.patchUserProfile(cached, extra, cached.identitySource));
+      })
+      .catch(() => undefined);
+  }
+
+  async enrichUser(user, options = {}) {
     let profile = this.rememberUser(user);
     profile = this.applyDisplayCache(profile);
     const shouldLookup =
@@ -1054,22 +1444,14 @@ class LivePkWatcher extends EventEmitter {
       !profile.ipLocation ||
       !profile.followerCount;
     if (!shouldLookup || !profile.secUid) return this.rememberResolvedUser(profile);
-    const extra = await this.lookupUserProfile(profile.secUid);
+    const preferSigned = options.preferSignedProfile === true;
+    const canSigned = typeof this.profileLookup === "function";
+    const extra =
+      (preferSigned || canSigned ? await this.lookupSignedUserProfile(profile.secUid) : null) ||
+      await this.lookupUserProfile(profile.secUid);
     if (!extra) return this.rememberResolvedUser(profile);
 
-    const patched = {
-      ...profile,
-      userId: extra.userId || profile.userId,
-      secUid: extra.secUid || profile.secUid,
-      realName:
-        extra.nickname && extra.nickname !== profile.displayName
-          ? extra.nickname
-          : profile.realName,
-      uniqueId: extra.uniqueId || profile.uniqueId,
-      ipLocation: extra.ipLocation || profile.ipLocation || "",
-      followerCount: extra.followerCount || profile.followerCount || 0,
-    };
-    return this.rememberResolvedUser(patched);
+    return this.rememberResolvedUser(this.patchUserProfile(profile, extra, options.sourceLabel));
   }
 
   async handleMessage(method, payload) {
@@ -1084,7 +1466,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastMemberMessage") {
       const decoded = this.types.MemberMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("member", this.withRaw({
         type: "member",
         at: new Date().toISOString(),
@@ -1120,7 +1502,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastChatMessage") {
       const decoded = this.types.ChatMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("chat", this.withRaw({
         type: "chat",
         at: new Date().toISOString(),
@@ -1261,7 +1643,10 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastGiftMessage") {
       const decoded = this.types.GiftMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user), {
+        preferSignedProfile: true,
+        sourceLabel: "礼物消息",
+      });
       const gift = decoded.gift || {};
       const knownGift = this.rememberGift(gift) || {};
       const diamondCount = toNumber(gift.diamondCount) || toNumber(knownGift.diamondCount);
@@ -1330,7 +1715,10 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastFreeCellGiftMessage") {
       const decoded = this.types.FreeCellGiftMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user), {
+        preferSignedProfile: true,
+        sourceLabel: "礼物消息",
+      });
       const giftId = String(decoded.giftId || "");
       const knownGift = this.getGiftMeta(giftId) || {};
       const diamondCount = toNumber(knownGift.diamondCount);
@@ -1377,7 +1765,10 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastDoodleGiftMessage") {
       const decoded = this.types.DoodleGiftMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user), {
+        preferSignedProfile: true,
+        sourceLabel: "礼物消息",
+      });
       const giftId = String(decoded.giftId || "");
       const knownGift = this.getGiftMeta(giftId) || {};
       const diamondCount = toNumber(knownGift.diamondCount);
@@ -1409,7 +1800,10 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastFreeGiftMessage") {
       const decoded = this.types.FreeGiftMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user), {
+        preferSignedProfile: true,
+        sourceLabel: "礼物消息",
+      });
       const gift = decoded.freeGift || {};
       const giftId = String(gift.id || "");
       const knownGift = this.getGiftMeta(giftId) || {};
@@ -1440,7 +1834,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastFansclubMessage") {
       const decoded = this.types.FansclubMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("event", this.withRaw({
         type: "event",
         eventType: "fansclub",
@@ -1461,7 +1855,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastSocialMessage") {
       const decoded = this.types.SocialMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("event", this.withRaw({
         type: "event",
         eventType: "social",
@@ -1479,7 +1873,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastLikeMessage") {
       const decoded = this.types.LikeMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("event", this.withRaw({
         type: "event",
         eventType: "like",
@@ -1498,7 +1892,7 @@ class LivePkWatcher extends EventEmitter {
 
     if (method === "WebcastContentOpenPicoLikeMessage") {
       const decoded = this.types.ContentOpenPicoLikeMessage.decode(payload);
-      const user = await this.enrichUser(decoded.user);
+      const user = await this.enrichUser(mergeUserObjects(decoded.user, decoded.common?.user));
       this.emit("event", this.withRaw({
         type: "event",
         eventType: "pico-like",

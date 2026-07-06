@@ -51,6 +51,9 @@ function eventLabel(eventType) {
     "rank-list-hour-enter": "小时榜",
     "gift-update": "礼物更新",
     "linkmic-score": "连线分数",
+    "live-mode": "直播形态",
+    "pk-battle": "PK状态",
+    "pk-score-snapshot": "PK分数",
   };
   return labels[eventType] || eventType || "事件";
 }
@@ -88,6 +91,22 @@ function eventSummary(payload) {
       payload.hotScore ? `热度分${payload.hotScore}` : "",
       payload.scoreSource !== undefined ? `来源${payload.scoreSource}` : "",
       payload.extra || "",
+    ].filter(Boolean).join(" / ");
+  }
+  if (payload.eventType === "live-mode" || payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot") {
+    const scores = Array.isArray(payload.scores)
+      ? payload.scores.map((score) => {
+          const name = score.realName || score.displayName || score.nickname || score.anchorId || score.userId || "";
+          return `${name}(${score.anchorId || score.userId || ""})=${score.score}`;
+        }).join(" / ")
+      : "";
+    return [
+      payload.liveModeLabel || payload.liveMode || "",
+      payload.participantCount ? `${payload.participantCount}方` : "",
+      payload.pkCountDown !== undefined ? `倒计时${payload.pkCountDown}` : "",
+      scores,
+      payload.battlePhase ? `阶段${payload.battlePhase}` : "",
+      payload.battleId ? `battle:${payload.battleId}` : "",
     ].filter(Boolean).join(" / ");
   }
   if (payload.eventType === "short-touch-area") {
@@ -174,6 +193,7 @@ app.whenReady().then(async () => {
   const capture = captureDouyinLiveOptions(liveRoomUrl, {
     onStatus: (message) => console.log(`[${time()}] 采集: ${message}`),
     cookie: process.env.DOUYIN_LIVE_COOKIE || "",
+    keepAlive: true,
   });
   const options = await capture.promise;
   if (process.env.DOUYIN_LIVE_COOKIE) options.cookie = process.env.DOUYIN_LIVE_COOKIE;
