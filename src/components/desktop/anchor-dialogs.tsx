@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useMemo, useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,7 +77,7 @@ export function AddAnchorDialog({ open, onClose, onSuccess }: AddAnchorDialogPro
   };
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setError(null);
     setSuccess(null);
@@ -221,7 +222,7 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
   };
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setError(null);
     setSuccess(null);
@@ -402,7 +403,7 @@ export function ImportAnchorsDialog({ open, onClose, onSuccess, anchors }: Impor
     setSubmitting(true);
     setError(null);
     try {
-      const api = window.electronAPI;
+      const api = getDataApi();
       if (!api) return;
       const res = await api.batchImportAnchors(
         selected.map((r) => ({ ...r, gender }))

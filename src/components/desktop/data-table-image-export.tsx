@@ -198,7 +198,7 @@ export function DataTableImageExport({
           flex: 0.7,
           align: "center",
           getText: (r) =>
-            r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—",
+            r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—",
         },
         {
           key: "master",
@@ -443,7 +443,7 @@ export function DataTableImageExport({
           ctx.textAlign = "center";
           ctx.fillStyle = "#7C3AED";
           ctx.font = `${13 * scale}px sans-serif`;
-          const dText = row.isLive && row.dailyDuration > 0
+          const dText = row.dailyDuration > 0
             ? formatDurationText(row.dailyDuration)
             : "—";
           ctx.fillText(dText, drawX + col.width / 2, cy);
@@ -473,7 +473,7 @@ export function DataTableImageExport({
     ctx.fillText(`${genderText}主播 ${rows.length} 人`, tablePaddingX, y + 26 * scale);
     ctx.font = `${12 * scale}px sans-serif`;
     ctx.fillStyle = "#64748B";
-    ctx.fillText(`导出日期 ${formattedDate}`, tablePaddingX, y + 50 * scale);
+    ctx.fillText(`数据日期 ${formattedDate}`, tablePaddingX, y + 50 * scale);
 
     if (hasInactive) {
       ctx.fillStyle = "#DC2626";
@@ -532,7 +532,7 @@ export function DataTableImageExport({
         if (showNotLiveDays) row.push(r.notLiveDays ?? 0);
         if (showWave) row.push(r.isLive ? r.dailyWave : 0);
         if (showTotalWave) row.push(r.totalWave);
-        if (showDuration) row.push(r.isLive ? r.dailyDuration : 0);
+        if (showDuration) row.push(r.dailyDuration > 0 ? r.dailyDuration : 0);
         if (showMaster) row.push(r.masterName || "");
         if (showTier) row.push(r.tier || "");
         row.push(date);

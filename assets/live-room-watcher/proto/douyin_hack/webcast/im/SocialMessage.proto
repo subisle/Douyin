@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+import "douyin_hack/webcast/data/User.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message SocialMessage {
+    webcast.im.Common common = 1;
+    webcast.data.User user = 2;
+    int64 share_type = 3;
+    int64 action = 4;
+    string share_target = 5;
+    int64 follow_count = 6;
+    bytes public_area_common = 7;
+    int64 share_total_count = 8;
+}

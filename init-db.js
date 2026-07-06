@@ -19,12 +19,13 @@ async function init() {
     await conn.query(`CREATE TABLE IF NOT EXISTS persons (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(64) DEFAULT '',
-      gender VARCHAR(16) DEFAULT '',
-      master_id INT DEFAULT NULL,
-      generation INT DEFAULT NULL,
-      created_at DATETIME DEFAULT NULL,
-      updated_at DATETIME DEFAULT NULL
-    )`);
+      gender VARCHAR(16) DEFAULT '',
+      master_id INT DEFAULT NULL,
+      generation INT DEFAULT NULL,
+      hide_in_daily_report TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME DEFAULT NULL,
+      updated_at DATETIME DEFAULT NULL
+    )`);
 
     await conn.query(`CREATE TABLE IF NOT EXISTS accounts (
       id INT AUTO_INCREMENT PRIMARY KEY,

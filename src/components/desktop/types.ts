@@ -5,6 +5,8 @@ import {
   Users,
   Database,
   Flag,
+  MonitorPlay,
+  Sparkles,
   Swords,
   Settings,
   Trophy,
@@ -17,6 +19,8 @@ export type PageId =
   | "data"
   | "flag"
   | "pk"
+  | "douyin-monitor"
+  | "star-battle"
   | "reward"
   | "settings";
 
@@ -57,6 +61,18 @@ export const NAV_ITEMS: NavItem[] = [
     label: "PK名单",
     icon: Swords,
     description: "按月音浪分组",
+  },
+  {
+    id: "douyin-monitor",
+    label: "抖音监控",
+    icon: MonitorPlay,
+    description: "直播画面与事件流",
+  },
+  {
+    id: "star-battle",
+    label: "星嗨争霸赛",
+    icon: Sparkles,
+    description: "赛事阵营与赛程",
   },
   {
     id: "reward",

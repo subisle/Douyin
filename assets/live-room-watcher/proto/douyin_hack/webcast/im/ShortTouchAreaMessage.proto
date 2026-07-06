@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+import "douyin_hack/webcast/data/ShortTouchArea.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message ShortTouchAreaMessage {
+    webcast.im.Common common = 1;
+    int32 message_type = 2;
+    webcast.data.ShortTouchArea short_touch_area_data = 3;
+}

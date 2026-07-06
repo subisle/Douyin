@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+import "douyin_hack/webcast/data/ChatLikeCount.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message ChatLikeMessage {
+    webcast.im.Common common = 1;
+    map<int64, webcast.data.ChatLikeCount> total_msg_data = 2;
+}

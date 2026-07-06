@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.data";
+
+package webcast.data;
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message ShortTouchArea {
+    int32 type = 1;
+    uint32 priority = 2;
+    int64 min_webcast_sdk_version = 3;
+    int32 short_touch_type = 4;
+    bytes short_touch_info = 5;
+    bytes short_touch_big_card = 6;
+    string container_payload = 7;
+    int32 load_type = 8;
+    bytes bubble_params = 9;
+    string name = 10;
+    int32 hide_mode = 11;
+    int32 enhanced_touch = 12;
+    int64 dynamic_priority = 13;
+    bool enable_in_pc = 14;
+}

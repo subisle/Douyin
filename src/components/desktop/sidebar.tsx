@@ -24,7 +24,7 @@ export function Sidebar({
         collapsed ? "w-16" : "w-64"
       )}
     >
-      <nav className="flex-1 space-y-1 px-2 py-4">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-4">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = currentPage === item.id;

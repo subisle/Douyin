@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useEffect, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
@@ -52,7 +53,7 @@ export function SettingsPage() {
   const [message, setMessage] = useState("");
   const [showAbout, setShowAbout] = useState(false);
 
-  const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+  const api = getDataApi();
   const isElectron = Boolean(api);
 
   useEffect(() => {

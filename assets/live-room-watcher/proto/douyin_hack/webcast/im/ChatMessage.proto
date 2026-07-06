@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/data/User.proto";
+import "douyin_hack/webcast/im/Common.proto";
+
+// 更新时间 : 2026-06-23
+message ChatMessage {
+    webcast.im.Common common = 1;
+    webcast.data.User user = 2;
+    string content = 3;
+    bool visible_to_sender = 4;
+    int64 agree_msg_id = 11;
+    int32 priority_level = 12;
+    int64 event_time = 15;
+    bool send_review = 16;
+    bool from_intercom = 17;
+    bool intercom_hide_user_card = 18;
+    repeated int32 chat_tags = 19;
+    int64 chat_by = 20;
+    int32 individual_chat_priority = 21;
+    map<string, string> model_info = 200;
+}

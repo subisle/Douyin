@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -281,7 +282,7 @@ export function ImportPage({
   const currentFileRef = useRef<File | null>(null);
   const lastIncomingId = useRef<number | null>(null);
 
-  const unavailable = typeof window !== "undefined" && !window.electronAPI;
+  const unavailable = typeof window !== "undefined" && !getDataApi();
   const rowsToImport = useMemo(
     () => summary?.importable.filter((row) => row.status !== "unchanged") ?? [],
     [summary]
@@ -305,12 +306,12 @@ export function ImportPage({
   const resetAfterSuccess = () => resetImportState({ keepResult: true });
 
   const buildPreview = async (file: File, rows: ParsedRow[], nextKind: ImportKind) => {
-    const anchorsRes = await window.electronAPI!.getAnchors();
+    const anchorsRes = await getDataApi()!.getAnchors();
     if (!anchorsRes.success) throw new Error(anchorsRes.error);
     const baseSummary = matchRows(rows, anchorsRes.data);
     const deduped = dedupeImportable(baseSummary.importable);
     const meta = await buildImportMeta(file, nextKind, deduped.rows);
-    const previewRes = await window.electronAPI!.getImportPreview(
+    const previewRes = await getDataApi()!.getImportPreview(
       nextKind,
       date,
       deduped.rows.map((row) => row.anchorId),
@@ -356,7 +357,7 @@ export function ImportPage({
   };
 
   const buildAnchorPreview = async (file: File) => {
-    const anchorsRes = await window.electronAPI!.getAnchors();
+    const anchorsRes = await getDataApi()!.getAnchors();
     if (!anchorsRes.success) throw new Error(anchorsRes.error);
     const parsed = await parseAnchorsCsvWithSummary(file);
     const byAnchorId = new Map(anchorsRes.data.map((anchor) => [anchor.anchorId, anchor]));
@@ -479,7 +480,7 @@ export function ImportPage({
     setSubmitting(true);
     setError(null);
     try {
-      const api = window.electronAPI!;
+      const api = getDataApi()!;
       if (kind === "anchors") {
         const res = await api.batchImportAnchors(
           anchorRowsToImport.map((row) => ({

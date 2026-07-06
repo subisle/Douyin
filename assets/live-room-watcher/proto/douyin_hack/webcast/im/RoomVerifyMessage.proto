@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message RoomVerifyMessage {
+    webcast.im.Common common = 1;
+    int32 action = 2;
+    string content = 3;
+    int64 notice_type = 4;
+    bool close_room = 5;
+    int32 unable_style = 6;
+    string tip_content = 7;
+    int32 anchor_switch = 8;
+    string switch_status_tip_msg = 9;
+    string switch_status_anchor_tip_msg = 10;
+}

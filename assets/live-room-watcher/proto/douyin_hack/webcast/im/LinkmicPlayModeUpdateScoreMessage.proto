@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+import "douyin_hack/webcast/data/User.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message LinkmicPlayModeUpdateScoreMessage {
+    webcast.im.Common common = 1;
+    int64 live_id = 2;
+    int64 app_id = 3;
+    int64 room_id = 4;
+    int64 anchor_id = 5;
+    int64 from_user_id = 6;
+    int64 to_user_id = 7;
+    int32 score_source = 8;
+    int64 hot_score = 9;
+    string idempotent_id = 10;
+    int64 msg_t_ms = 11;
+    string extra = 12;
+    bytes gift_content = 13;
+    string user_linkmic_unique_id = 14;
+    webcast.data.User from_user = 15;
+    webcast.data.User to_user = 16;
+    string anchor_open_id = 5000;
+    string from_user_open_id = 5001;
+    string to_user_open_id = 5002;
+}

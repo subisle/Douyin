@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useEffect, useState } from "react";
 import {
   FileUp,
@@ -22,18 +23,18 @@ export function Topbar({ currentPage }: TopbarProps) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     api.windowIsMaximized().then(setMaximized);
     return api.onMaximizeChange(setMaximized);
   }, []);
 
-  const handleMinimize = () => window.electronAPI?.windowMinimize();
+  const handleMinimize = () => getDataApi()?.windowMinimize();
   const handleMaximize = async () => {
-    const result = await window.electronAPI?.windowMaximize();
+    const result = await getDataApi()?.windowMaximize();
     if (typeof result === "boolean") setMaximized(result);
   };
-  const handleClose = () => window.electronAPI?.windowClose();
+  const handleClose = () => getDataApi()?.windowClose();
 
   return (
     <header className="app-drag flex h-16 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-5 backdrop-blur-xl md:px-8">

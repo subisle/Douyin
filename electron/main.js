@@ -1,11 +1,25 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage } = require("electron");
+const fs = require("fs");
 const path = require("path");
 const db = require("./db");
 const { createUpdater } = require("./updater");
+const { LivePkWatcher } = require("./live-pk-watcher");
+const {
+  captureDouyinLiveOptions,
+  getCookieHeader,
+  injectCookieHeader,
+  normalizeLiveRoomUrl,
+  scanOpenWebSockets,
+} = require("./live-pk-capture");
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
 const APP_ICON_PNG = path.join(__dirname, "..", "assets", "icon.png");
+for (const envPath of [path.join(__dirname, "..", ".env.local"), path.join(__dirname, "..", ".env")]) {
+  if (fs.existsSync(envPath)) {
+    require("dotenv").config({ path: envPath, quiet: true });
+  }
+}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -13,6 +27,336 @@ const updater = createUpdater({
   isDev,
   sendStatus: (status) => mainWindow?.webContents.send("updater:status-changed", status),
 });
+const livePkWatcher = new LivePkWatcher();
+/** @type {WebContentsView | null} */
+let embeddedLiveView = null;
+let embeddedLiveUrl = "";
+let embeddedLiveMuted = true;
+let embeddedLiveScanTimer = null;
+let embeddedLiveTimeoutTimer = null;
+let embeddedLiveDebuggerHandler = null;
+let embeddedLiveCaptureToken = 0;
+let embeddedLiveBounds = null;
+let hiddenLiveCaptureWindow = null;
+
+livePkWatcher.on("status", (status) => {
+  mainWindow?.webContents.send("live-pk:status-changed", status);
+});
+livePkWatcher.on("rank", (payload) => {
+  mainWindow?.webContents.send("live-pk:rank", payload);
+});
+livePkWatcher.on("gift", (payload) => {
+  mainWindow?.webContents.send("live-pk:gift", payload);
+});
+livePkWatcher.on("member", (payload) => {
+  mainWindow?.webContents.send("live-pk:member", payload);
+});
+livePkWatcher.on("chat", (payload) => {
+  mainWindow?.webContents.send("live-pk:chat", payload);
+});
+livePkWatcher.on("event", (payload) => {
+  mainWindow?.webContents.send("live-pk:event", payload);
+});
+livePkWatcher.on("error-message", (message) => {
+  mainWindow?.webContents.send("live-pk:error", message);
+});
+
+function sendLivePkCaptureStatus(message) {
+  mainWindow?.webContents.send("live-pk:capture-status", message);
+}
+
+function sendLivePkError(message) {
+  mainWindow?.webContents.send("live-pk:error", message);
+}
+
+function sendLivePkEmbeddedState(payload = {}) {
+  mainWindow?.webContents.send("live-pk:embed-state", {
+    embedded: Boolean(embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()),
+    liveRoomUrl: embeddedLiveUrl,
+    ...payload,
+  });
+}
+
+function liveCookieStorePath() {
+  return path.join(app.getPath("userData"), "douyin-live-cookie.v1.json");
+}
+
+function saveLiveCookie(cookie) {
+  const value = String(cookie || "").trim();
+  if (!value) throw new Error("Cookie 为空");
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("当前系统不可用安全存储，未保存 Cookie");
+  }
+  const encrypted = safeStorage.encryptString(value).toString("base64");
+  fs.mkdirSync(path.dirname(liveCookieStorePath()), { recursive: true });
+  fs.writeFileSync(
+    liveCookieStorePath(),
+    JSON.stringify({ version: 1, encrypted, updatedAt: new Date().toISOString() }, null, 2)
+  );
+  return { saved: true, updatedAt: new Date().toISOString() };
+}
+
+function readLiveCookie() {
+  const file = liveCookieStorePath();
+  if (!fs.existsSync(file)) return { saved: false, cookie: "", updatedAt: null };
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!data?.encrypted) return { saved: false, cookie: "", updatedAt: null };
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("当前系统不可用安全存储，无法读取 Cookie");
+  }
+  const cookie = safeStorage.decryptString(Buffer.from(data.encrypted, "base64"));
+  return { saved: true, cookie, updatedAt: data.updatedAt || null };
+}
+
+function clearLiveCookie() {
+  const file = liveCookieStorePath();
+  if (fs.existsSync(file)) fs.rmSync(file, { force: true });
+  return { saved: false };
+}
+
+function getDefaultLiveCookie() {
+  try {
+    const stored = readLiveCookie();
+    if (stored.cookie) return stored.cookie;
+  } catch {
+    // ignore secure storage read errors and fall back to env
+  }
+  return String(process.env.DOUYIN_LIVE_COOKIE || "").trim();
+}
+
+function normalizeEmbeddedBounds(bounds) {
+  return {
+    x: Math.max(0, Math.round(Number(bounds?.x || 0))),
+    y: Math.max(0, Math.round(Number(bounds?.y || 0))),
+    width: Math.max(0, Math.round(Number(bounds?.width || 0))),
+    height: Math.max(0, Math.round(Number(bounds?.height || 0))),
+  };
+}
+
+function cleanupEmbeddedLiveCapture() {
+  if (embeddedLiveScanTimer) clearInterval(embeddedLiveScanTimer);
+  if (embeddedLiveTimeoutTimer) clearTimeout(embeddedLiveTimeoutTimer);
+  embeddedLiveScanTimer = null;
+  embeddedLiveTimeoutTimer = null;
+
+  const webContents = embeddedLiveView?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  try {
+    if (embeddedLiveDebuggerHandler) {
+      webContents.debugger.removeListener("message", embeddedLiveDebuggerHandler);
+    }
+    embeddedLiveDebuggerHandler = null;
+    if (webContents.debugger.isAttached()) webContents.debugger.detach();
+  } catch {
+    embeddedLiveDebuggerHandler = null;
+  }
+}
+
+function closeHiddenLiveCaptureWindow() {
+  if (!hiddenLiveCaptureWindow) return;
+  const win = hiddenLiveCaptureWindow;
+  hiddenLiveCaptureWindow = null;
+  try {
+    if (!win.isDestroyed()) win.close();
+  } catch {
+    // ignore close errors
+  }
+}
+
+function ensureEmbeddedLiveView() {
+  if (!mainWindow) throw new Error("主窗口未就绪");
+  if (embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()) return embeddedLiveView;
+
+  const view = new WebContentsView({
+    webPreferences: {
+      partition: "persist:live-pk-capture",
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  embeddedLiveView = view;
+  mainWindow.contentView.addChildView(view);
+  view.setBackgroundColor("#000000");
+  view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
+  view.setVisible(false);
+  view.webContents.setAudioMuted(embeddedLiveMuted);
+  view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  view.webContents.on("did-start-loading", () => {
+    sendLivePkCaptureStatus("直播画面正在加载");
+  });
+  view.webContents.on("dom-ready", () => {
+    sendLivePkCaptureStatus("直播页面 DOM 已就绪，正在监听 WebSocket");
+  });
+  view.webContents.on("did-finish-load", () => {
+    sendLivePkCaptureStatus("直播画面已加载，正在监听 WebSocket");
+  });
+  view.webContents.on("did-fail-load", (_event, code, description) => {
+    sendLivePkCaptureStatus(`直播画面加载失败: ${description || code}`);
+  });
+  view.webContents.once("destroyed", () => {
+    if (embeddedLiveView !== view) return;
+    cleanupEmbeddedLiveCapture();
+    embeddedLiveView = null;
+    sendLivePkEmbeddedState({ embedded: false });
+  });
+  sendLivePkEmbeddedState({ embedded: true });
+  return view;
+}
+
+function setEmbeddedLiveBounds(bounds) {
+  if (!embeddedLiveView || embeddedLiveView.webContents.isDestroyed()) return;
+  embeddedLiveBounds = normalizeEmbeddedBounds(bounds);
+  if (embeddedLiveBounds.width <= 1 || embeddedLiveBounds.height <= 1) {
+    embeddedLiveView.setBounds({ x: 0, y: 0, width: 1, height: 1 });
+    embeddedLiveView.setVisible(false);
+    return;
+  }
+  mainWindow?.contentView.addChildView(embeddedLiveView);
+  embeddedLiveView.setBounds(embeddedLiveBounds);
+  embeddedLiveView.setVisible(true);
+}
+
+function closeEmbeddedLiveView({ stopMonitor = false } = {}) {
+  embeddedLiveCaptureToken += 1;
+  cleanupEmbeddedLiveCapture();
+  embeddedLiveUrl = "";
+  if (embeddedLiveView) {
+    const view = embeddedLiveView;
+    embeddedLiveView = null;
+    try {
+      mainWindow?.contentView.removeChildView(view);
+      if (!view.webContents.isDestroyed()) {
+        view.webContents.close({ waitForBeforeUnload: false });
+      }
+    } catch {
+      // ignore remove errors
+    }
+  }
+  if (stopMonitor) livePkWatcher.stop();
+  sendLivePkEmbeddedState({ embedded: false });
+  return livePkWatcher.getStatus();
+}
+
+async function startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, includeRaw) {
+  closeHiddenLiveCaptureWindow();
+  sendLivePkCaptureStatus("正在使用隐藏采集模式启动监控");
+  const capture = captureDouyinLiveOptions(liveRoomUrl, {
+    parentWindow: mainWindow,
+    onStatus: sendLivePkCaptureStatus,
+    cookie,
+    show: false,
+  });
+  hiddenLiveCaptureWindow = capture.window;
+  try {
+    const options = await capture.promise;
+    if (cookie) options.cookie = cookie;
+    await livePkWatcher.start({ ...options, includeRaw: Boolean(includeRaw) });
+  } finally {
+    if (hiddenLiveCaptureWindow === capture.window) hiddenLiveCaptureWindow = null;
+  }
+}
+
+async function attachEmbeddedLiveCapture(view, url, cookieFallback, includeRaw) {
+  const token = embeddedLiveCaptureToken;
+  let settled = false;
+
+  const finish = async (websocketUrl) => {
+    if (settled || token !== embeddedLiveCaptureToken || !websocketUrl) return;
+    settled = true;
+    cleanupEmbeddedLiveCapture();
+    try {
+      sendLivePkCaptureStatus("已获取连接，正在启动监控");
+      const cookie = await getCookieHeader(view.webContents.session, url);
+      await livePkWatcher.start({
+        websocketUrl,
+        cookie: cookie || cookieFallback || "",
+        includeRaw: Boolean(includeRaw),
+      });
+    } catch (error) {
+      sendLivePkError(error?.message || String(error));
+    }
+  };
+
+  try {
+    if (!view.webContents.debugger.isAttached()) view.webContents.debugger.attach("1.3");
+    await view.webContents.debugger.sendCommand("Network.enable").catch(() => {});
+    await view.webContents.debugger.sendCommand("Runtime.enable").catch(() => {});
+  } catch (error) {
+    throw new Error(`无法启动内嵌采集器：${error?.message || error}`);
+  }
+
+  embeddedLiveDebuggerHandler = (_event, method, params) => {
+    const requestUrl = params?.url || params?.request?.url;
+    if (
+      (method === "Network.webSocketCreated" || method === "Network.requestWillBeSent") &&
+      typeof requestUrl === "string" &&
+      requestUrl.includes("webcast/im/push")
+    ) {
+      void finish(requestUrl);
+    }
+  };
+  view.webContents.debugger.on("message", embeddedLiveDebuggerHandler);
+
+  embeddedLiveScanTimer = setInterval(async () => {
+    if (settled || token !== embeddedLiveCaptureToken || view.webContents.isDestroyed()) return;
+    const websocketUrl = await scanOpenWebSockets(view.webContents.debugger).catch(() => "");
+    if (websocketUrl) void finish(websocketUrl);
+  }, 1500);
+
+  embeddedLiveTimeoutTimer = setTimeout(() => {
+    if (settled || token !== embeddedLiveCaptureToken) return;
+    settled = true;
+    cleanupEmbeddedLiveCapture();
+    sendLivePkError("内嵌画面未获取到直播间 WebSocket，正在切换隐藏采集");
+    startHiddenLiveCaptureMonitor(url, cookieFallback, includeRaw).catch((fallbackError) => {
+      sendLivePkError(`隐藏采集也失败: ${fallbackError?.message || fallbackError}`);
+    });
+  }, 30000);
+}
+
+async function openEmbeddedLiveMonitor(payload) {
+  const liveRoomUrl = normalizeLiveRoomUrl(payload?.liveRoomUrl);
+  const cookie = String(payload?.cookie || "").trim() || getDefaultLiveCookie();
+  const view = ensureEmbeddedLiveView();
+  const bounds = normalizeEmbeddedBounds(payload?.bounds || {});
+
+  embeddedLiveCaptureToken += 1;
+  cleanupEmbeddedLiveCapture();
+  livePkWatcher.stop();
+  embeddedLiveUrl = liveRoomUrl;
+  setEmbeddedLiveBounds(bounds);
+
+  const injected = await injectCookieHeader(view.webContents.session, liveRoomUrl, cookie);
+  if (injected.total > 0) {
+    const critical = injected.criticalPresent.length
+      ? `关键项: ${injected.criticalPresent.join(", ")}`
+      : "关键项缺失";
+    const liveCritical = injected.criticalLivePresent?.length
+      ? `live: ${injected.criticalLivePresent.join(", ")}`
+      : "live: 缺失";
+    const wwwCritical = injected.criticalWwwPresent?.length
+      ? `www: ${injected.criticalWwwPresent.join(", ")}`
+      : "www: 缺失";
+    sendLivePkCaptureStatus(`已注入 Cookie ${injected.set}/${injected.total} 项，${critical}，${liveCritical}，${wwwCritical}`);
+  } else {
+    sendLivePkCaptureStatus("正在打开直播间");
+  }
+
+  await attachEmbeddedLiveCapture(view, liveRoomUrl, cookie, payload?.includeRaw);
+  view.webContents.loadURL(liveRoomUrl).catch((error) => {
+    sendLivePkError(`直播画面打开失败: ${error?.message || error}`);
+    closeEmbeddedLiveView({ stopMonitor: false });
+    startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, payload?.includeRaw).catch((fallbackError) => {
+      sendLivePkError(`隐藏采集也失败: ${fallbackError?.message || fallbackError}`);
+    });
+  });
+  return {
+    ...livePkWatcher.getStatus(),
+    embedded: true,
+    liveRoomUrl,
+  };
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -41,6 +385,8 @@ function createWindow() {
   });
 
   mainWindow.on("closed", () => {
+    closeEmbeddedLiveView({ stopMonitor: true });
+    closeHiddenLiveCaptureWindow();
     mainWindow = null;
   });
 
@@ -52,6 +398,9 @@ function createWindow() {
   };
   mainWindow.on("maximize", emitMaximizeState);
   mainWindow.on("unmaximize", emitMaximizeState);
+  mainWindow.on("move", () => {
+    if (embeddedLiveBounds) setEmbeddedLiveBounds(embeddedLiveBounds);
+  });
 
   // 安全加固：禁止应用内导航到非白名单地址，禁止打开新窗口。
   // 应用只应加载本地静态产物（file://）或开发期 localhost，
@@ -119,13 +468,68 @@ ipcMain.handle("app:getInfo", () => ({
   updateProxy: "github.akams.cn 节点测速",
 }));
 
+ipcMain.handle("live-pk:start", wrap((payload) => livePkWatcher.start(payload)));
+ipcMain.handle("live-pk:cookie-save", wrap((cookie) => saveLiveCookie(cookie)));
+ipcMain.handle("live-pk:cookie-read", wrap(() => readLiveCookie()));
+ipcMain.handle("live-pk:cookie-clear", wrap(() => clearLiveCookie()));
+ipcMain.handle("live-pk:embed-open", wrap((payload) => openEmbeddedLiveMonitor(payload)));
+ipcMain.handle("live-pk:embed-bounds", wrap((bounds) => {
+  setEmbeddedLiveBounds(bounds);
+  return { embedded: Boolean(embeddedLiveView), liveRoomUrl: embeddedLiveUrl };
+}));
+ipcMain.handle("live-pk:embed-close", wrap((payload) => closeEmbeddedLiveView({
+  stopMonitor: Boolean(payload?.stopMonitor),
+})));
+ipcMain.handle("live-pk:embed-reload", wrap(async () => {
+  if (!embeddedLiveView || embeddedLiveView.webContents.isDestroyed()) {
+    throw new Error("直播画面未打开");
+  }
+  await embeddedLiveView.webContents.reload();
+  return { embedded: true, liveRoomUrl: embeddedLiveUrl };
+}));
+ipcMain.handle("live-pk:embed-muted", wrap((muted) => {
+  embeddedLiveMuted = Boolean(muted);
+  if (embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()) {
+    embeddedLiveView.webContents.setAudioMuted(embeddedLiveMuted);
+  }
+  return { muted: embeddedLiveMuted };
+}));
+ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
+  const liveRoomUrl = payload?.liveRoomUrl;
+  const cookie = String(payload?.cookie || "").trim() || getDefaultLiveCookie();
+  closeEmbeddedLiveView({ stopMonitor: false });
+  closeHiddenLiveCaptureWindow();
+  livePkWatcher.stop();
+  mainWindow?.webContents.send("live-pk:capture-status", "正在隐藏采集直播间连接");
+  const capture = captureDouyinLiveOptions(liveRoomUrl, {
+    parentWindow: mainWindow,
+    onStatus: (message) => mainWindow?.webContents.send("live-pk:capture-status", message),
+    cookie,
+    show: false,
+  });
+  hiddenLiveCaptureWindow = capture.window;
+  try {
+    const options = await capture.promise;
+    if (cookie) options.cookie = cookie;
+    mainWindow?.webContents.send("live-pk:capture-status", "已获取连接，正在启动监控");
+    return livePkWatcher.start({ ...options, includeRaw: Boolean(payload?.includeRaw) });
+  } finally {
+    if (hiddenLiveCaptureWindow === capture.window) hiddenLiveCaptureWindow = null;
+  }
+}));
+ipcMain.handle("live-pk:stop", wrap(() => {
+  closeHiddenLiveCaptureWindow();
+  return livePkWatcher.stop();
+}));
+ipcMain.handle("live-pk:status", wrap(() => livePkWatcher.getStatus()));
+
 // 数据 IPC：统一返回 { success, data?, error? }
 function wrap(fn) {
   return async (_event, ...args) => {
     try {
       return { success: true, data: await fn(...args) };
     } catch (error) {
-      console.error("[ipc]", error);
+      console.error("[ipc]", error?.message || String(error));
       return { success: false, error: error?.message || String(error) };
     }
   };
@@ -230,6 +634,14 @@ ipcMain.handle(
 ipcMain.handle(
   "data:getPkRoster",
   wrap((period, groupSize) => db.getPkRoster(period, groupSize))
+);
+ipcMain.handle(
+  "data:getStarBattleScores",
+  wrap((period) => db.getStarBattleScores(period))
+);
+ipcMain.handle(
+  "data:saveStarBattleScore",
+  wrap((payload) => db.saveStarBattleScore(payload))
 );
 ipcMain.handle(
   "data:getFlagWinner",

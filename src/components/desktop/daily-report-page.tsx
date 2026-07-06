@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -289,7 +290,7 @@ export function DailyReportPage() {
   };
 
   const fetchReport = useCallback(async (d: string, g: string) => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) {
       setUnavailable(true);
       return;
@@ -313,7 +314,7 @@ export function DailyReportPage() {
   }, []);
 
   const fetchTiers = useCallback(async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     const res = await api.getTierRules();
     if (res.success) {
@@ -380,7 +381,7 @@ export function DailyReportPage() {
         r.notLiveDays ?? 0,
         r.isLive ? r.dailyWave : 0,
         r.totalWave,
-        r.isLive ? r.dailyDuration : 0,
+        r.dailyDuration > 0 ? r.dailyDuration : 0,
         r.masterName || "",
         r.tier || "",
         date,
@@ -412,7 +413,7 @@ export function DailyReportPage() {
 
   const saveTiers = async () => {
     if (!editingTiers) return;
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setSavingTiers(true);
     try {
@@ -532,14 +533,21 @@ export function DailyReportPage() {
                 ))}
               </div>
               {/* 日期选择 */}
-              <div className="relative">
-                <CalendarDays className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="h-10 w-44 rounded-xl bg-card/90 pr-3 pl-9 shadow-xs"
-                />
+              <div className="flex h-10 items-center gap-2 rounded-xl border border-border bg-card/90 px-3 shadow-xs">
+                <CalendarDays className="size-4 text-muted-foreground" />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-semibold text-muted-foreground">日期</span>
+                  <Input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                  />
+                </div>
+                <span className="h-4 w-px bg-border" />
+                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                  报告 {date}
+                </span>
               </div>
               {/* 标题设置 */}
               <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1">

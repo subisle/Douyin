@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Pencil, GitMerge, Trash2, Copy, Users, UserCog, Network, Activity } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -314,6 +315,7 @@ export function AnchorsPage() {
                   <TableHead className="w-12">#</TableHead>
                   <TableHead>主播</TableHead>
                   <TableHead>性别</TableHead>
+                  <TableHead>日报</TableHead>
                   <TableHead>师傅</TableHead>
                   <TableHead>抖音ID</TableHead>
                   <TableHead>抖音号</TableHead>
@@ -347,6 +349,15 @@ export function AnchorsPage() {
                     </TableCell>
                     <TableCell>
                       <GenderBadge gender={a.gender} />
+                    </TableCell>
+                    <TableCell>
+                      {a.hideInDailyReport ? (
+                        <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">
+                          不显示
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">显示</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {a.masterName || (a.masterId ? (masterNameMap.get(a.masterId) || "—") : "—")}
@@ -560,11 +571,12 @@ function EditInfoDialog({
   const [gender, setGender] = useState(anchor.gender);
   const [anchorId, setAnchorId] = useState(anchor.anchorId);
   const [douyinNo, setDouyinNo] = useState(anchor.douyinNo);
+  const [hideInDailyReport, setHideInDailyReport] = useState(anchor.hideInDailyReport ?? false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     const cleanName = name.trim();
     const cleanAnchorId = anchorId.trim();
@@ -581,6 +593,7 @@ function EditInfoDialog({
         gender,
         anchorId: cleanAnchorId,
         douyinNo: douyinNo.trim(),
+        hideInDailyReport,
       });
       if (res.success) {
         onSuccess();
@@ -639,6 +652,18 @@ function EditInfoDialog({
                   ))}
                 </div>
               </div>
+              <label className="flex items-center gap-3 rounded-md border border-border px-3 py-2 md:col-span-2">
+                <input
+                  type="checkbox"
+                  className="size-4 cursor-pointer rounded border-border accent-primary"
+                  checked={hideInDailyReport}
+                  onChange={(e) => setHideInDailyReport(e.target.checked)}
+                  disabled={loading}
+                />
+                <span className="text-sm">
+                  每日报表不显示
+                </span>
+              </label>
             </div>
             {error && (
               <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
@@ -679,7 +704,7 @@ function SetMasterDialog({
   );
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setLoading(true);
     setError(null);
@@ -766,7 +791,7 @@ function DailySnapshotDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api || !anchor.anchorId || !date) return;
     let alive = true;
     setLoading(true);
@@ -794,7 +819,7 @@ function DailySnapshotDialog({
   }, [anchor.anchorId, date]);
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     if (!anchor.anchorId) {
       setError("该主播没有抖音ID，不能录入数据");
@@ -915,7 +940,7 @@ function EditNameDialog({
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setError(null);
     if (!name.trim()) {
@@ -1239,7 +1264,7 @@ function DeleteConfirmDialog({
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setLoading(true);
     setError(null);
@@ -1322,7 +1347,7 @@ function DuplicateAnchorsDialog({
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setLoading(true);
     setError(null);
@@ -1345,7 +1370,7 @@ function DuplicateAnchorsDialog({
   }, [open]);
 
   const handleDelete = async (personId: number) => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setDeletingId(personId);
     try {

@@ -404,9 +404,9 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
       ctx.textAlign = "center";
       ctx.font = "12px sans-serif";
       ctx.fillStyle = C.textMuted;
-      const durText = r.isLive && r.dailyDuration > 0
+      const durText = r.dailyDuration > 0
         ? formatDuration(r.dailyDuration)
-        : r.isLive ? "0分钟" : "—";
+        : "—";
       ctx.fillText(durText, colX + durationColW / 2, rowYCenter);
       colX += durationColW;
     }
@@ -455,7 +455,7 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   ctx.textBaseline = "middle";
   ctx.font = "12px sans-serif";
   ctx.fillStyle = C.textMuted;
-  ctx.fillText(`${genderLabel} ${rows.length} 人  ·  导出日期 ${date}`, padX + 4, summaryY + 12);
+  ctx.fillText(`${genderLabel} ${rows.length} 人  ·  数据日期 ${date}`, padX + 4, summaryY + 12);
 
   if (notLiveCount > 0) {
     ctx.textAlign = "right";

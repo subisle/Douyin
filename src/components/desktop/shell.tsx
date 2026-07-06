@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useState, useEffect } from "react";
 import { FileUp } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,7 +12,9 @@ import { FamilyTreePage } from "./family-tree-page";
 import { DataPage } from "./data-page";
 import { FlowingFlagCard } from "./flowing-flag-card";
 import { PkRosterPage } from "./pk-roster-page";
+import { DouyinMonitorPage } from "./douyin-monitor-page";
 import { RewardPage } from "./reward-page";
+import { StarBattlePage } from "./star-battle-page";
 import { SettingsPage } from "./settings-page";
 import { type PageId } from "./types";
 import type { DroppedImportFile } from "./import-page";
@@ -158,6 +161,10 @@ export function DesktopShell() {
                 <FlowingFlagCard />
               ) : currentPage === "pk" ? (
                 <PkRosterPage />
+              ) : currentPage === "douyin-monitor" ? (
+                <DouyinMonitorPage />
+              ) : currentPage === "star-battle" ? (
+                <StarBattlePage />
               ) : currentPage === "reward" ? (
                 <RewardPage />
               ) : currentPage === "settings" ? (
@@ -211,7 +218,7 @@ async function runStartupChecks(updateCheck: UpdateStartupCheck) {
 async function checkStartupData(
   updateCheck: UpdateStartupCheck
 ) {
-  const api = window.electronAPI;
+  const api = getDataApi();
   if (!api?.getStartupHealth) {
     updateCheck("data", { status: "warning", detail: "浏览器预览模式，已跳过数据库检查" });
     return;
@@ -245,7 +252,7 @@ async function checkStartupData(
 async function checkStartupUpdate(
   updateCheck: UpdateStartupCheck
 ) {
-  const api = window.electronAPI;
+  const api = getDataApi();
   if (!api?.checkForUpdates) {
     updateCheck("update", { status: "warning", detail: "浏览器预览模式，已跳过更新检查" });
     return;

@@ -7,6 +7,7 @@ export interface AnchorRow {
   generation: number | null;
   masterId: number | null;
   masterName: string | null;
+  hideInDailyReport: boolean;
   anchorId: string;
   anchorName: string;
   douyinNo: string;
@@ -22,6 +23,9 @@ export interface FamilyNode {
   generation: number | null;
   masterId: number | null;
   masterName: string | null;
+  anchorId: string;
+  accountCount: number;
+  aliasIds: string[];
 }
 
 export interface DashboardSummary {
@@ -64,6 +68,269 @@ export interface AppInfo {
   arch: string;
   electron: string;
   updateProxy: string;
+}
+
+export interface LivePkMonitorStatus {
+  status: "idle" | "connecting" | "running" | "closed" | "error";
+  startedAt: string | null;
+  lastError: string | null;
+  lastRankAt: string | null;
+  cachedUsers?: number;
+  cachedDisplayNames?: number;
+  cachedGifts?: number;
+  roomId?: string;
+  embedded?: boolean;
+  liveRoomUrl?: string;
+}
+
+export interface LivePkEmbeddedBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface LivePkEmbeddedState {
+  embedded: boolean;
+  liveRoomUrl?: string;
+  error?: string;
+}
+
+export interface LivePkCookieState {
+  saved: boolean;
+  cookie?: string;
+  updatedAt?: string | null;
+}
+
+export interface LivePkRankItem {
+  rank: number;
+  nickname: string;
+  displayName?: string;
+  realName?: string;
+  userId: string;
+  secUid?: string;
+  uniqueId?: string;
+  hasStrongIdentity?: boolean;
+  identitySource?: string;
+  isMystery?: boolean;
+  mysteryMan?: number;
+  isAnonymous?: boolean;
+  userLevel?: number;
+  badgeLevel?: number;
+  consumeLevel?: number;
+  wealthLevel?: number;
+  fansClubLevel?: number;
+  honorLevel?: number;
+  payScore?: number;
+  totalRechargeDiamondCount?: number;
+  fanTicketCount?: number;
+  gender?: number;
+  followStatus?: number;
+  ipLocation?: string;
+  followerCount?: number;
+  cacheHit?: boolean;
+  scoreText: string;
+  score: number;
+  rankDelta?: number;
+  isHidden?: boolean;
+  rankSource?: string;
+}
+
+export interface LivePkRankPayload {
+  type: "rank";
+  at: string;
+  raw?: unknown;
+  rawMethod?: string;
+  interactionScoreStatus?: number;
+  interactionScoreAction?: number;
+  channelId?: string;
+  extra?: string;
+  gameExtra?: string;
+  rankSource?: string;
+  total?: number;
+  userCountText?: string;
+  currency?: string;
+  seats?: LivePkRankItem[];
+  ranks: LivePkRankItem[];
+}
+
+export interface LivePkGiftPayload {
+  type: "gift";
+  at: string;
+  raw?: unknown;
+  rawMethod?: string;
+  nickname: string;
+  displayName?: string;
+  realName?: string;
+  userId: string;
+  secUid?: string;
+  uniqueId?: string;
+  hasStrongIdentity?: boolean;
+  identitySource?: string;
+  isMystery?: boolean;
+  mysteryMan?: number;
+  isAnonymous?: boolean;
+  userLevel?: number;
+  badgeLevel?: number;
+  consumeLevel?: number;
+  wealthLevel?: number;
+  fansClubLevel?: number;
+  honorLevel?: number;
+  payScore?: number;
+  totalRechargeDiamondCount?: number;
+  fanTicketCount?: number;
+  gender?: number;
+  followStatus?: number;
+  ipLocation?: string;
+  followerCount?: number;
+  cacheHit?: boolean;
+  giftId?: string;
+  giftName: string;
+  giftKind?: "paid" | "free-cell" | "doodle" | "free" | string;
+  giftType?: number;
+  giftScene?: number;
+  giftDescribe?: string;
+  diamondCount?: number;
+  count: number;
+  comboCount?: number;
+  repeatCount?: number;
+  groupCount?: number;
+  totalCount?: number;
+  baseScore?: number;
+  bonusScore?: number;
+  bonusRate?: number;
+  fanTicket: number;
+  roomFanTicketCount?: number;
+  repeatEnd?: number;
+  groupId?: string;
+  logId?: string;
+  traceId?: string;
+  sendType?: number;
+  sendTime?: string;
+  clientGiftSource?: number;
+  multiSendEffectLevel?: number;
+  useRoomMessage?: boolean;
+  compose?: string;
+  trayText?: string;
+  freeCell?: Record<string, unknown>;
+}
+
+export interface LivePkMemberPayload {
+  type: "member";
+  at: string;
+  raw?: unknown;
+  rawMethod?: string;
+  nickname: string;
+  displayName?: string;
+  realName?: string;
+  userId: string;
+  secUid?: string;
+  uniqueId?: string;
+  hasStrongIdentity?: boolean;
+  identitySource?: string;
+  isMystery?: boolean;
+  mysteryMan?: number;
+  isAnonymous?: boolean;
+  userLevel?: number;
+  badgeLevel?: number;
+  consumeLevel?: number;
+  wealthLevel?: number;
+  fansClubLevel?: number;
+  honorLevel?: number;
+  payScore?: number;
+  totalRechargeDiamondCount?: number;
+  fanTicketCount?: number;
+  gender?: number;
+  followStatus?: number;
+  ipLocation?: string;
+  followerCount?: number;
+  cacheHit?: boolean;
+  memberCount: number;
+}
+
+export interface LivePkChatPayload {
+  type: "chat";
+  at: string;
+  raw?: unknown;
+  rawMethod?: string;
+  nickname: string;
+  displayName?: string;
+  realName?: string;
+  userId: string;
+  secUid?: string;
+  uniqueId?: string;
+  hasStrongIdentity?: boolean;
+  identitySource?: string;
+  isMystery?: boolean;
+  mysteryMan?: number;
+  isAnonymous?: boolean;
+  userLevel?: number;
+  badgeLevel?: number;
+  consumeLevel?: number;
+  wealthLevel?: number;
+  fansClubLevel?: number;
+  honorLevel?: number;
+  payScore?: number;
+  totalRechargeDiamondCount?: number;
+  fanTicketCount?: number;
+  gender?: number;
+  followStatus?: number;
+  ipLocation?: string;
+  followerCount?: number;
+  cacheHit?: boolean;
+  content: string;
+  eventTime?: string;
+  chatBy?: string;
+  priorityLevel?: number;
+  modelInfo?: Record<string, string>;
+}
+
+export interface LivePkEventPayload {
+  type: "event";
+  eventType: string;
+  at: string;
+  method?: string;
+  raw?: unknown;
+  rawMethod?: string;
+  nickname?: string;
+  displayName?: string;
+  realName?: string;
+  userId?: string;
+  secUid?: string;
+  uniqueId?: string;
+  hasStrongIdentity?: boolean;
+  identitySource?: string;
+  isMystery?: boolean;
+  mysteryMan?: number;
+  isAnonymous?: boolean;
+  userLevel?: number;
+  badgeLevel?: number;
+  consumeLevel?: number;
+  wealthLevel?: number;
+  fansClubLevel?: number;
+  honorLevel?: number;
+  payScore?: number;
+  totalRechargeDiamondCount?: number;
+  fanTicketCount?: number;
+  gender?: number;
+  followStatus?: number;
+  ipLocation?: string;
+  followerCount?: number;
+  cacheHit?: boolean;
+  content?: string;
+  count?: number;
+  total?: number;
+  displayShort?: string;
+  displayMiddle?: string;
+  displayLong?: string;
+  displayValue?: number;
+  totalUser?: number;
+  totalUserText?: string;
+  popularity?: number;
+  popularityText?: string;
+  ranks?: LivePkRankItem[];
+  seats?: LivePkRankItem[];
+  [key: string]: unknown;
 }
 
 export interface WaveRankRow {
@@ -214,6 +481,23 @@ export interface PkRosterData {
   females: PkMember[]; // 女主播列表（按总音浪降序）
 }
 
+export interface StarBattleScore {
+  period: string;
+  roundKey: string;
+  groupKey: string;
+  personId: number;
+  score: number;
+  updatedAt: string | null;
+}
+
+export interface SaveStarBattleScorePayload {
+  period: string;
+  roundKey: string;
+  groupKey: string;
+  personId: number;
+  score: number | string | null;
+}
+
 export interface FlagWinnerData {
   period: string;
   masterId: number;
@@ -299,6 +583,42 @@ declare global {
     windowIsMaximized: () => Promise<boolean>;
     onMaximizeChange: (callback: (maximized: boolean) => void) => () => void;
     getAppInfo: () => Promise<AppInfo>;
+    startLivePkMonitor: (
+      payload: { websocketUrl: string; cookie: string; includeRaw?: boolean }
+    ) => Promise<IpcResult<LivePkMonitorStatus>>;
+    openLivePkEmbeddedMonitor: (
+      payload: {
+        liveRoomUrl: string;
+        cookie?: string;
+        bounds: LivePkEmbeddedBounds;
+        includeRaw?: boolean;
+      }
+    ) => Promise<IpcResult<LivePkMonitorStatus>>;
+    setLivePkEmbeddedBounds: (
+      bounds: LivePkEmbeddedBounds
+    ) => Promise<IpcResult<{ embedded: boolean; liveRoomUrl: string }>>;
+    closeLivePkEmbeddedMonitor: (
+      payload?: { stopMonitor?: boolean }
+    ) => Promise<IpcResult<LivePkMonitorStatus>>;
+    reloadLivePkEmbeddedView: () => Promise<IpcResult<{ embedded: boolean; liveRoomUrl: string }>>;
+    setLivePkEmbeddedMuted: (muted: boolean) => Promise<IpcResult<{ muted: boolean }>>;
+    onLivePkEmbeddedState: (callback: (payload: LivePkEmbeddedState) => void) => () => void;
+    startLivePkMonitorFromUrl: (
+      payload: { liveRoomUrl: string; cookie?: string; includeRaw?: boolean }
+    ) => Promise<IpcResult<LivePkMonitorStatus>>;
+    stopLivePkMonitor: () => Promise<IpcResult<LivePkMonitorStatus>>;
+    getLivePkMonitorStatus: () => Promise<IpcResult<LivePkMonitorStatus>>;
+    saveLivePkCookie: (cookie: string) => Promise<IpcResult<{ saved: boolean; updatedAt: string }>>;
+    readLivePkCookie: () => Promise<IpcResult<LivePkCookieState>>;
+    clearLivePkCookie: () => Promise<IpcResult<{ saved: boolean }>>;
+    onLivePkStatus: (callback: (status: LivePkMonitorStatus) => void) => () => void;
+    onLivePkRank: (callback: (payload: LivePkRankPayload) => void) => () => void;
+    onLivePkGift: (callback: (payload: LivePkGiftPayload) => void) => () => void;
+    onLivePkMember: (callback: (payload: LivePkMemberPayload) => void) => () => void;
+    onLivePkChat: (callback: (payload: LivePkChatPayload) => void) => () => void;
+    onLivePkEvent: (callback: (payload: LivePkEventPayload) => void) => () => void;
+    onLivePkError: (callback: (message: string) => void) => () => void;
+    onLivePkCaptureStatus: (callback: (message: string) => void) => () => void;
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;
@@ -358,6 +678,7 @@ declare global {
       gender: string;
       anchorId: string;
       douyinNo?: string;
+      hideInDailyReport?: boolean;
     }) => Promise<IpcResult<{ ok: boolean }>>;
     updateAnchorMaster: (payload: {
       personId: number;
@@ -428,6 +749,10 @@ declare global {
       period?: string,
       groupSize?: number
     ) => Promise<IpcResult<PkRosterData>>;
+    getStarBattleScores: (period: string) => Promise<IpcResult<StarBattleScore[]>>;
+    saveStarBattleScore: (
+      payload: SaveStarBattleScorePayload
+    ) => Promise<IpcResult<{ saved: boolean; deleted: boolean }>>;
     getFlagWinner: (period: string) => Promise<IpcResult<FlagWinnerData | null>>;
     getRewardReport: (period: string, config?: RewardConfig) => Promise<IpcResult<RewardReportData>>;
 

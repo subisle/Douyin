@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+import "douyin_hack/webcast/data/User.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message RoomUserSeqMessage {
+    webcast.im.Common common = 1;
+    repeated Contributor ranks = 2;
+    int64 total = 3;
+    string pop_str = 4;
+    repeated Contributor seats = 5;
+    int64 popularity = 6;
+    int64 total_user = 7;
+    string total_user_str = 8;
+    string total_str = 9;
+    string online_user_for_anchor = 10;
+    string total_pv_for_anchor = 11;
+    string up_right_stats_str = 12;
+    string up_right_stats_str_complete = 13;
+
+    message Contributor {
+        int64 score = 1;
+        webcast.data.User user = 2;
+        int64 rank = 3;
+        int64 delta = 4;
+        bool is_hidden = 5;
+        string score_description = 6;
+        string exactly_score = 7;
+    }
+}

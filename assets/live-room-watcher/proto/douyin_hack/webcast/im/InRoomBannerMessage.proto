@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message InRoomBannerMessage {
+    webcast.im.Common common = 1;
+    string extra = 2;
+    int32 position = 3;
+    int32 action_type = 4;
+    string container_url = 5;
+    string lynx_container_url = 6;
+    int32 container_type = 7;
+    int32 op_type = 8;
+}

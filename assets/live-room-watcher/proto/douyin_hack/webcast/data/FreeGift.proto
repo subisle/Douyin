@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.data";
+
+package webcast.data;
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message FreeGift {
+    int64 id = 1;
+    int64 count = 2;
+    string content = 3;
+    int64 group_id = 4;
+    int64 repeat_count = 5;
+    int64 fan_tickets = 6;
+    int64 waterwmlon = 7;
+}

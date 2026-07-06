@@ -32,6 +32,7 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
+import { getDataApi } from "@/client/http-electron-api";
 import { useElectronData } from "./use-electron-data";
 import type { DataState } from "./use-electron-data";
 import { formatWave, formatDuration, formatNumber } from "./format";
@@ -157,7 +158,7 @@ export function DashboardPage() {
       setPersonTrends(null);
       return;
     }
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setPersonLoading(true);
     setPersonError(null);

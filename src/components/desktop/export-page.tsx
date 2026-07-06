@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Download, Loader2, Waves, Clock, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,7 +29,7 @@ export function ExportPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const unavailable = typeof window !== "undefined" && !window.electronAPI;
+  const unavailable = typeof window !== "undefined" && !getDataApi();
   if (unavailable) {
     return (
       <Card>
@@ -44,7 +45,7 @@ export function ExportPage() {
     setMsg(null);
     setError(null);
     try {
-      const api = window.electronAPI!;
+      const api = getDataApi()!;
       const res =
         opt.kind === "wave"
           ? await api.exportWave()

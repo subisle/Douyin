@@ -4,6 +4,7 @@ const mysql = require("mysql2/promise");
 const {
   ensureDatabaseIndexes,
   ensureImportRecordsTable,
+  ensurePersonDailyReportVisibilityColumn,
 } = require("./db-maintenance");
 
 // 复用根项目 .env（与 DouyinLang 同一套远程 MySQL）
@@ -20,6 +21,9 @@ require("dotenv").config({
 
 /** @type {import('mysql2/promise').Pool | null} */
 let pool = null;
+let dailyReportVisibilityColumnReady = false;
+
+const LIVE_WAVE_THRESHOLD = 2;
 
 function getPool() {
   if (!pool) {
@@ -44,6 +48,13 @@ function getPool() {
     });
   }
   return pool;
+}
+
+async function ensureDailyReportVisibilityColumn(db = getPool()) {
+  if (dailyReportVisibilityColumnReady) return false;
+  const created = await ensurePersonDailyReportVisibilityColumn(db);
+  dailyReportVisibilityColumnReady = true;
+  return created;
 }
 
 function normalizeImportMeta(meta) {
@@ -90,8 +101,10 @@ async function recordImport(db, kind, importDate, meta) {
  */
 async function getAnchors() {
   const db = getPool();
+  await ensureDailyReportVisibilityColumn(db);
   const [persons] = await db.query(
     `SELECT p.id, p.name, p.gender, p.master_id, m.name AS master_name,
+            p.hide_in_daily_report,
             p.generation, p.created_at, p.updated_at
        FROM persons p
        LEFT JOIN persons m ON m.id = p.master_id
@@ -121,6 +134,7 @@ async function getAnchors() {
       generation: p.generation ?? null,
       masterId: p.master_id ?? null,
       masterName: p.master_name || null,
+      hideInDailyReport: Number(p.hide_in_daily_report) === 1,
       anchorId: primary ? primary.anchor_id || "" : "",
       anchorName: primary ? primary.anchor_name || p.name || "" : p.name || "",
       douyinNo: primary ? primary.douyin_no || "" : "",
@@ -142,8 +156,19 @@ async function getFamilyTree() {
   );
 
   const [accounts] = await db.query(
-    "SELECT DISTINCT person_id FROM accounts WHERE person_id IS NOT NULL AND anchor_id IS NOT NULL AND anchor_id != ''"
+    `SELECT id, person_id, anchor_id, is_primary
+       FROM accounts
+      WHERE person_id IS NOT NULL
+        AND anchor_id IS NOT NULL
+        AND anchor_id != ''
+      ORDER BY person_id, is_primary DESC, id ASC`
   );
+  const accountByPerson = new Map();
+  for (const account of accounts) {
+    const personId = Number(account.person_id);
+    if (!accountByPerson.has(personId)) accountByPerson.set(personId, []);
+    accountByPerson.get(personId).push(account);
+  }
   const anchorPersonIds = new Set(accounts.map((a) => Number(a.person_id)));
   const personById = new Map(persons.map((p) => [Number(p.id), p]));
   const hiddenNames = new Set(["狼帅", "狼彬"]);
@@ -193,14 +218,23 @@ async function getFamilyTree() {
   const visiblePersons = persons.filter((p) => visibleIds.has(Number(p.id)));
   const nameById = new Map(visiblePersons.map((p) => [p.id, p.name]));
 
-  return visiblePersons.map((p) => ({
-    id: p.id,
-    name: p.name || "",
-    gender: p.gender || "",
-    generation: p.generation ?? null,
-    masterId: p.master_id ?? null,
-    masterName: p.master_id ? nameById.get(p.master_id) || null : null,
-  }));
+  return visiblePersons.map((p) => {
+    const personAccounts = accountByPerson.get(Number(p.id)) || [];
+    const primary = personAccounts.find((a) => Number(a.is_primary) === 1) || personAccounts[0] || null;
+    return {
+      id: p.id,
+      name: p.name || "",
+      gender: p.gender || "",
+      generation: p.generation ?? null,
+      masterId: p.master_id ?? null,
+      masterName: p.master_id ? nameById.get(p.master_id) || null : null,
+      anchorId: primary ? primary.anchor_id || "" : "",
+      accountCount: personAccounts.length,
+      aliasIds: primary
+        ? personAccounts.filter((a) => a.id !== primary.id).map((a) => a.anchor_id)
+        : personAccounts.map((a) => a.anchor_id),
+    };
+  });
 }
 
 /**
@@ -243,18 +277,14 @@ async function getDashboardSummary() {
   if (latestDataDate) {
     const [liveRows] = await db.query(
       `SELECT p.id AS person_id,
-              MAX(CASE
-                WHEN COALESCE(w.wave_value, 0) > 0 OR COALESCE(d.total_minutes, 0) > 0 THEN 1
-                ELSE 0
-              END) AS is_live
+              CASE WHEN COALESCE(SUM(w.wave_value), 0) >= ? THEN 1 ELSE 0 END AS is_live
          FROM persons p
          INNER JOIN accounts a ON a.person_id = p.id
           AND a.anchor_id IS NOT NULL
           AND a.anchor_id != ''
          LEFT JOIN wave_snapshots w ON w.anchor_id = a.anchor_id AND w.import_date = ?
-         LEFT JOIN duration_snapshots d ON d.anchor_id = a.anchor_id AND d.import_date = ?
         GROUP BY p.id`,
-      [latestDataDate, latestDataDate]
+      [LIVE_WAVE_THRESHOLD, latestDataDate]
     );
     notLiveCount = liveRows.filter((row) => Number(row.is_live) !== 1).length;
   }
@@ -309,13 +339,17 @@ async function getStartupHealth() {
 
   try {
     await ensureImportRecordsTable(db);
+    const createdVisibilityColumn = await ensureDailyReportVisibilityColumn(db);
+    if (createdVisibilityColumn) {
+      pushHealthCheck(checks, "daily-report-visibility", "日报显示字段", "ok", "已补齐日报隐藏字段");
+    }
   } catch (error) {
     pushHealthCheck(
       checks,
-      "import-records",
-      "导入记录表",
+      "schema-maintenance",
+      "数据表维护",
       "warning",
-      `导入记录表检查失败：${error?.message || String(error)}`
+      `数据表维护失败：${error?.message || String(error)}`
     );
   }
 
@@ -815,6 +849,7 @@ async function exportAnchors() {
   return list.map((a) => ({
     主播: a.name,
     性别: a.gender === "male" ? "男" : a.gender === "female" ? "女" : "",
+    日报显示: a.hideInDailyReport ? "不显示" : "显示",
     代数: a.generation ?? "",
     抖音ID: a.anchorId,
     抖音号: a.douyinNo,
@@ -913,6 +948,24 @@ async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+    const [[primaryPerson]] = await conn.query(
+      "SELECT id, master_id FROM persons WHERE id = ? LIMIT 1",
+      [primaryPersonId]
+    );
+    const [[secondaryPerson]] = await conn.query(
+      "SELECT id, master_id FROM persons WHERE id = ? LIMIT 1",
+      [secondaryPersonId]
+    );
+    if (!primaryPerson) throw new Error("保留的主播不存在");
+    if (!secondaryPerson) throw new Error("被合并的主播不存在");
+
+    const [primaryAccounts] = await conn.query(
+      "SELECT id FROM accounts WHERE person_id = ? ORDER BY is_primary DESC, id ASC",
+      [primaryPersonId]
+    );
+    if (primaryAccounts.length === 0) throw new Error("保留的主播没有账号");
+    const primaryAccountId = primaryAccounts[0].id;
+
     const [secAccounts] = await conn.query(
       "SELECT id FROM accounts WHERE person_id = ?",
       [secondaryPersonId]
@@ -924,22 +977,31 @@ async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
         [primaryPersonId, acc.id]
       );
     }
-    // 把「认 B 为师傅」的徒弟重定向到 A（防止悬空 master_id）
+
+    // 如果 A 原本认 B 为师，删除 B 后让 A 继承 B 的师傅，避免 A.master_id 指向自己。
+    const primaryMasterId =
+      Number(primaryPerson.master_id) === Number(secondaryPersonId)
+        ? Number(secondaryPerson.master_id) === Number(primaryPersonId)
+          ? null
+          : secondaryPerson.master_id ?? null
+        : primaryPerson.master_id ?? null;
     await conn.query(
-      "UPDATE persons SET master_id = ? WHERE master_id = ?",
-      [primaryPersonId, secondaryPersonId]
+      "UPDATE persons SET master_id = ? WHERE id = ?",
+      [primaryMasterId, primaryPersonId]
     );
-    // 确保主账号仍然存在
-    const [primaryAccounts] = await conn.query(
-      "SELECT id FROM accounts WHERE person_id = ? ORDER BY id LIMIT 1",
-      [primaryPersonId]
+
+    // 把「认 B 为师傅」的其他徒弟重定向到 A（防止悬空 master_id）。
+    await conn.query(
+      "UPDATE persons SET master_id = ? WHERE master_id = ? AND id <> ?",
+      [primaryPersonId, secondaryPersonId, primaryPersonId]
     );
-    if (primaryAccounts.length > 0) {
-      await conn.query(
-        "UPDATE accounts SET is_primary = 1 WHERE id = ?",
-        [primaryAccounts[0].id]
-      );
-    }
+
+    // 强制合并后只有一个主号，并优先保留 A 原来的主号。
+    await conn.query(
+      "UPDATE accounts SET is_primary = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE person_id = ?",
+      [primaryAccountId, primaryPersonId]
+    );
+
     await conn.query("DELETE FROM persons WHERE id = ?", [secondaryPersonId]);
     await conn.commit();
     return { moved: secAccounts.length };
@@ -1153,16 +1215,18 @@ async function updateAnchorName({ personId, name }) {
 /**
  * 更新主播基础信息：姓名、性别、主账号抖音ID、抖音号。
  */
-async function updateAnchorInfo({ personId, name, gender, anchorId, douyinNo }) {
+async function updateAnchorInfo({ personId, name, gender, anchorId, douyinNo, hideInDailyReport }) {
   const id = Number(personId);
   const cleanName = String(name || "").trim();
   const cleanGender = String(gender || "").trim();
   const cleanAnchorId = String(anchorId || "").trim();
   const cleanDouyinNo = String(douyinNo || "").trim();
+  const hideInReport = hideInDailyReport === true || hideInDailyReport === 1 || hideInDailyReport === "1";
   if (!id || !cleanName || !cleanAnchorId) throw new Error("主播姓名和抖音ID不能为空");
   if (cleanGender && !["male", "female"].includes(cleanGender)) throw new Error("性别参数不正确");
 
   const db = getPool();
+  await ensureDailyReportVisibilityColumn(db);
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -1176,8 +1240,8 @@ async function updateAnchorInfo({ personId, name, gender, anchorId, douyinNo }) 
     if (dup.length > 0) throw new Error("抖音ID已被其他主播使用");
 
     await conn.query(
-      "UPDATE persons SET name = ?, gender = ?, updated_at = NOW() WHERE id = ?",
-      [cleanName, cleanGender, id]
+      "UPDATE persons SET name = ?, gender = ?, hide_in_daily_report = ?, updated_at = NOW() WHERE id = ?",
+      [cleanName, cleanGender, hideInReport ? 1 : 0, id]
     );
 
     const [primaryRows] = await conn.query(
@@ -1784,12 +1848,14 @@ async function getFlagWinner(period) {
  */
 async function getDailyWaveReport(date, gender) {
   const db = getPool();
+  await ensureDailyReportVisibilityColumn(db);
   // 1. 获取指定性别的主播 + 其名下所有账号 anchor（含合并副号），同时获取 master_id 用于查师傅名字
   const [personRows] = await db.query(
     "SELECT p.id AS person_id, p.name, p.master_id, a.anchor_id " +
     "FROM persons p " +
     "INNER JOIN accounts a ON a.person_id = p.id " +
     "WHERE p.gender = ? AND a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
+    "AND COALESCE(p.hide_in_daily_report, 0) = 0 " +
     "ORDER BY p.id",
     [gender]
   );
@@ -1861,14 +1927,9 @@ async function getDailyWaveReport(date, gender) {
   const totalDurMap = new Map();
   for (const r of totalDurs) totalDurMap.set(r.anchor_id, Number(r.total) || 0);
 
-  const [liveWaveDates] = await db.query(
-    "SELECT DISTINCT anchor_id, import_date FROM wave_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? AND wave_value > 0",
-    [...anchorIds, monthStart, date]
-  );
-  const [liveDurationDates] = await db.query(
-    "SELECT DISTINCT anchor_id, import_date FROM duration_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? AND total_minutes > 0",
+  const [monthlyWaveDates] = await db.query(
+    "SELECT anchor_id, import_date, wave_value FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ?",
     [...anchorIds, monthStart, date]
   );
   const liveDateSet = new Set();
@@ -1879,17 +1940,22 @@ async function getDailyWaveReport(date, gender) {
   }
   const normalizeDate = (value) =>
     value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
-  const addLiveDate = (row) => {
-    const key = normalizeDate(row.import_date);
-    liveDateSet.add(key);
+  const waveByPersonDate = new Map();
+  for (const row of monthlyWaveDates) {
     const personId = personIdByAnchor.get(row.anchor_id);
-    if (!personId) return;
+    if (!personId) continue;
+    const key = `${personId}:${normalizeDate(row.import_date)}`;
+    waveByPersonDate.set(key, (waveByPersonDate.get(key) || 0) + (Number(row.wave_value) || 0));
+  }
+  for (const [key, wave] of waveByPersonDate) {
+    if (wave < LIVE_WAVE_THRESHOLD) continue;
+    const [personIdRaw, dateKey] = key.split(":");
+    const personId = Number(personIdRaw);
+    liveDateSet.add(dateKey);
     const dates = liveDatesByPerson.get(personId) ?? new Set();
-    dates.add(key);
+    dates.add(dateKey);
     liveDatesByPerson.set(personId, dates);
-  };
-  for (const row of liveWaveDates) addLiveDate(row);
-  for (const row of liveDurationDates) addLiveDate(row);
+  }
   const dateToUtc = (value) => {
     const [yy, mm, dd] = String(value).split("-").map(Number);
     return Date.UTC(yy, mm - 1, dd);
@@ -1945,7 +2011,7 @@ async function getDailyWaveReport(date, gender) {
       dd += dailyDurMap.get(aid) || 0;
       td += totalDurMap.get(aid) || 0;
     }
-    const isLive = dw > 0 || dd > 0;
+    const isLive = dw >= LIVE_WAVE_THRESHOLD;
     const personLiveDates = liveDatesByPerson.get(p.person_id) ?? new Set();
     const personNotLiveDays = reportDates.filter((key) => !personLiveDates.has(key)).length;
     let tier = "";
@@ -2079,7 +2145,7 @@ async function getPkRoster(period, groupSize) {
   }
   const waveByPerson = new Map(); // personId -> [dailyWave...]
   for (const [pid, dm] of dayByPerson) {
-    waveByPerson.set(pid, Array.from(dm.values()));
+    waveByPerson.set(pid, Array.from(dm.values()).filter((value) => value >= LIVE_WAVE_THRESHOLD));
   }
 
   // 3. 获取当月总时长（按人汇总其名下所有 anchor）
@@ -2128,6 +2194,97 @@ async function getPkRoster(period, groupSize) {
   for (let i = 0; i < females.length; i++) females[i].rank = i + 1;
 
   return { period, males, females };
+}
+
+async function ensureStarBattleScoresTable(db) {
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS star_battle_scores (
+      period VARCHAR(7) NOT NULL,
+      round_key VARCHAR(32) NOT NULL,
+      group_key VARCHAR(32) NOT NULL,
+      person_id INT NOT NULL,
+      score DECIMAL(14, 2) NOT NULL DEFAULT 0,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (period, round_key, group_key, person_id),
+      INDEX idx_star_battle_scores_period (period),
+      INDEX idx_star_battle_scores_person (person_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
+function normalizeBattlePeriod(period) {
+  if (!period) {
+    const now = new Date();
+    period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }
+  period = String(period);
+  if (!/^\d{4}-\d{2}$/.test(period)) {
+    throw new Error("period 格式应为 YYYY-MM");
+  }
+  return period;
+}
+
+function normalizeScorePayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("缺少分数数据");
+  }
+  const period = normalizeBattlePeriod(payload.period);
+  const roundKey = String(payload.roundKey || "").trim().slice(0, 32);
+  const groupKey = String(payload.groupKey || "").trim().slice(0, 32);
+  const personId = Number(payload.personId);
+  const rawScore = payload.score;
+  if (!roundKey) throw new Error("缺少轮次");
+  if (!groupKey) throw new Error("缺少分组");
+  if (!Number.isInteger(personId) || personId <= 0) throw new Error("人员ID无效");
+  if (rawScore === null || rawScore === undefined || rawScore === "") {
+    return { period, roundKey, groupKey, personId, score: null };
+  }
+  const score = Number(rawScore);
+  if (!Number.isFinite(score) || score < 0) throw new Error("分数必须是大于等于0的数字");
+  return { period, roundKey, groupKey, personId, score: Math.round(score * 100) / 100 };
+}
+
+async function getStarBattleScores(period) {
+  period = normalizeBattlePeriod(period);
+  const db = getPool();
+  await ensureStarBattleScoresTable(db);
+  const [rows] = await db.query(
+    `SELECT period, round_key, group_key, person_id, score, updated_at
+       FROM star_battle_scores
+      WHERE period = ?
+      ORDER BY round_key, group_key, score DESC, person_id`,
+    [period]
+  );
+  return rows.map((r) => ({
+    period: r.period,
+    roundKey: r.round_key,
+    groupKey: r.group_key,
+    personId: Number(r.person_id),
+    score: Number(r.score) || 0,
+    updatedAt: r.updated_at,
+  }));
+}
+
+async function saveStarBattleScore(payload) {
+  const item = normalizeScorePayload(payload);
+  const db = getPool();
+  await ensureStarBattleScoresTable(db);
+  if (item.score === null) {
+    await db.query(
+      `DELETE FROM star_battle_scores
+        WHERE period = ? AND round_key = ? AND group_key = ? AND person_id = ?`,
+      [item.period, item.roundKey, item.groupKey, item.personId]
+    );
+    return { saved: false, deleted: true };
+  }
+  await db.query(
+    `INSERT INTO star_battle_scores
+       (period, round_key, group_key, person_id, score)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE score = VALUES(score), updated_at = CURRENT_TIMESTAMP`,
+    [item.period, item.roundKey, item.groupKey, item.personId, item.score]
+  );
+  return { saved: true, deleted: false };
 }
 
 const DEFAULT_REWARD_CONFIG = {
@@ -2354,6 +2511,8 @@ module.exports = {
   saveTierRules,
   getDailyWaveReport,
   getPkRoster,
+  getStarBattleScores,
+  saveStarBattleScore,
   getFlagWinner,
   getRewardReport,
 };

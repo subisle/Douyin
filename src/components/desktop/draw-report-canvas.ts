@@ -16,6 +16,10 @@ function formatDurationText(minutes: number): string {
   return `${minutes}分`;
 }
 
+function formatDailyDurationText(minutes: number): string {
+  return minutes > 0 ? formatDurationText(minutes) : "—";
+}
+
 export function formatMonthNotLiveDaysLabel(date: string): string {
   const month = Number(date.split("-")[1]);
   return Number.isFinite(month) && month >= 1 && month <= 12 ? `${month}月未播天数` : "本月未播天数";
@@ -170,7 +174,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
       { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 28,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
       { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.45, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
       { key: "totalWave", label: "累计总音浪",     minWidth: 134, flex: 0.55, align: "right",  getText: (r) => formatWave(r.totalWave) },
-      { key: "duration",  label: "有效时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
+      { key: "duration",  label: "有效时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
       { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "—" },
       { key: "tier",      label: "等级",           minWidth: 64,  flex: 0.15, align: "center", getText: (r) => r.tier || "" },
     ];
@@ -181,7 +185,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
     { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 30,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
     { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.35, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
     { key: "totalWave", label: "累计总音浪",     minWidth: 146, flex: 1.6, align: "right",  getText: (r) => formatWave(r.totalWave) },
-    { key: "duration",  label: "有效时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => r.isLive && r.dailyDuration > 0 ? formatDurationText(r.dailyDuration) : "—" },
+    { key: "duration",  label: "有效时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
     { key: "master",    label: "师傅",           minWidth: 96,  flex: 1.2, align: "left",   getText: (r) => r.masterName || "—" },
     { key: "tier",      label: "等级",           minWidth: 72,  flex: 0.35, align: "center", getText: (r) => r.tier || "" },
   ];
@@ -496,9 +500,7 @@ export function drawReportToCanvas(
       } else if (col.key === "duration") {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        const durationText = row.isLive && row.dailyDuration > 0
-          ? formatDurationText(row.dailyDuration)
-          : "—";
+        const durationText = formatDailyDurationText(row.dailyDuration);
         ctx.fillStyle = isInactive ? "#B91C1C" : "#7C3AED";
         ctx.font = `${13 * scale}px sans-serif`;
         ctx.fillText(durationText, drawX + col.width / 2, cy);
@@ -531,7 +533,7 @@ export function drawReportToCanvas(
   ctx.fillText(truncateCanvasText(ctx, summaryText, containerW - tablePaddingX * 2), tablePaddingX, y + 26 * scale);
   ctx.font = `${12 * scale}px sans-serif`;
   ctx.fillStyle = "#64748B";
-  ctx.fillText(`导出日期 ${formattedDate}`, tablePaddingX, y + 50 * scale);
+  ctx.fillText(`数据日期 ${formattedDate}`, tablePaddingX, y + 50 * scale);
 
   if (hasInactive) {
     const warnX = tablePaddingX;
@@ -914,7 +916,7 @@ export function drawAppleReportToCanvas(
         ctx.font = `600 ${13 * scale}px ${font}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(row.isLive && row.dailyDuration > 0 ? formatDurationText(row.dailyDuration) : "-", drawX + col.width / 2, cy);
+        ctx.fillText(row.dailyDuration > 0 ? formatDurationText(row.dailyDuration) : "-", drawX + col.width / 2, cy);
       } else if (col.key === "notLiveDays") {
         ctx.fillStyle = (row.notLiveDays ?? 0) > 0 ? "#B42318" : "#027A48";
         ctx.font = `700 ${13 * scale}px ${font}`;
@@ -938,7 +940,7 @@ export function drawAppleReportToCanvas(
   ctx.font = `600 ${12 * scale}px ${font}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`导出日期 ${formatAppleDate(date)} · ${genderText} ${rows.length} 人`, tableX + 8 * scale, y);
+  ctx.fillText(`数据日期 ${formatAppleDate(date)} · ${genderText} ${rows.length} 人`, tableX + 8 * scale, y);
   ctx.textAlign = "right";
   ctx.fillText(`未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`, tableX + tableW - 8 * scale, y);
   ctx.textAlign = "center";

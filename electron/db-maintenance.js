@@ -16,6 +16,28 @@ async function ensureImportRecordsTable(db) {
   );
 }
 
+async function ensurePersonDailyReportVisibilityColumn(db) {
+  const [rows] = await db.query(
+    `SELECT column_name AS name
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = 'persons'
+        AND column_name = 'hide_in_daily_report'
+      LIMIT 1`
+  );
+  if (rows.length > 0) return false;
+
+  try {
+    await db.query(
+      "ALTER TABLE persons ADD COLUMN hide_in_daily_report TINYINT(1) NOT NULL DEFAULT 0 AFTER generation"
+    );
+    return true;
+  } catch (error) {
+    if (error?.code === "ER_DUP_FIELDNAME") return false;
+    throw error;
+  }
+}
+
 const REQUIRED_INDEXES = [
   { table: "persons", name: "idx_persons_master", columns: ["master_id"] },
   { table: "persons", name: "idx_persons_generation", columns: ["generation"] },
@@ -96,4 +118,5 @@ async function hasCoveringIndex(db, table, columns) {
 module.exports = {
   ensureDatabaseIndexes,
   ensureImportRecordsTable,
+  ensurePersonDailyReportVisibilityColumn,
 };

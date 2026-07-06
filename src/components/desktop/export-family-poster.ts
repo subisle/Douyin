@@ -7,6 +7,7 @@ import {
   FAMILY_PAD as PAD,
   FAMILY_ROW_GAP as ROW_GAP,
   getFamilyDisplayName,
+  getFamilyGenerationColor,
   getFamilyGenerationText,
 } from "./family-tree-style";
 
@@ -60,6 +61,19 @@ const C = {
   femaleText: "#C11574",
   shadow: "rgba(51, 65, 85, 0.08)",
 };
+
+function truncateCanvasText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let next = text;
+  while (next.length > 1 && ctx.measureText(`${next}…`).width > maxWidth) {
+    next = next.slice(0, -1);
+  }
+  return `${next}…`;
+}
 
 /** 将族谱导出为样式二浅色 PNG 并下载。 */
 export async function exportFamilyPoster(
@@ -170,10 +184,14 @@ export async function exportFamilyPoster(
     const ny = treeOffsetY + p.y - NODE_H / 2;
     const isRoot = rootSet.has(p.node.id);
     const isFemale = p.node.gender === "female";
+    const generationColor = getFamilyGenerationColor(p.node);
+    const hasColoredGeneration = p.node.generation === 1 || p.node.generation === 2 || p.node.generation === 3;
 
     // 节点背景
     drawRoundRect(ctx, nx, ny, NODE_W, NODE_H, 8);
-    if (isRoot) {
+    if (hasColoredGeneration) {
+      ctx.fillStyle = generationColor.nodeBg;
+    } else if (isRoot) {
       ctx.fillStyle = C.rootBg;
     } else if (isFemale) {
       ctx.fillStyle = C.femaleBg;
@@ -190,7 +208,9 @@ export async function exportFamilyPoster(
 
     // 节点边框
     drawRoundRect(ctx, nx, ny, NODE_W, NODE_H, 8);
-    if (isRoot) {
+    if (hasColoredGeneration) {
+      ctx.strokeStyle = generationColor.nodeBorder;
+    } else if (isRoot) {
       ctx.strokeStyle = C.rootBorder;
     } else if (isFemale) {
       ctx.strokeStyle = C.femaleBorder;
@@ -200,10 +220,20 @@ export async function exportFamilyPoster(
     ctx.lineWidth = 1;
     ctx.stroke();
 
+    // 代级色条
+    drawRoundRect(ctx, nx, ny, 3, NODE_H, 1.5);
+    ctx.fillStyle = hasColoredGeneration
+      ? generationColor.bar
+      : isRoot
+        ? C.blue
+        : isFemale
+          ? "#F472B6"
+          : "#38BDF8";
+    ctx.fill();
+
     // 名字
-    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "bold 15px sans-serif";
+    ctx.font = "bold 13px sans-serif";
     if (isRoot) {
       ctx.fillStyle = C.blue;
     } else if (isFemale) {
@@ -213,16 +243,56 @@ export async function exportFamilyPoster(
     }
 
     const displayName = getFamilyDisplayName(p.node, isRoot);
-    ctx.fillText(displayName, nx + NODE_W / 2, ny + 21);
-
-    // 代数
-    ctx.font = "10px sans-serif";
-    ctx.fillStyle = isRoot ? "#175CD3" : C.textMuted;
+    const accountText = p.node.accountCount > 1 ? `${p.node.accountCount}账号` : "";
+    const accountW = accountText ? 30 : 0;
+    const nameMaxW = NODE_W - 16 - accountW;
+    ctx.textAlign = "left";
     ctx.fillText(
-      getFamilyGenerationText(p.node),
-      nx + NODE_W / 2,
-      ny + 40
+      truncateCanvasText(ctx, displayName, nameMaxW),
+      nx + 9,
+      ny + 17
     );
+
+    if (accountText) {
+      const badgeW = 27;
+      const badgeH = 12;
+      const badgeX = nx + NODE_W - badgeW - 7;
+      const badgeY = ny + 11;
+      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 6);
+      ctx.fillStyle = "rgba(0, 122, 255, 0.10)";
+      ctx.fill();
+      ctx.fillStyle = C.blue;
+      ctx.font = "bold 7px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(accountText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
+    }
+
+    // 代数：0 代不显示文字，1/2/3 代用不同颜色。
+    const generationText = getFamilyGenerationText(p.node);
+    if (generationText) {
+      const chipX = nx + 9;
+      const chipY = ny + 29;
+      const chipW = Math.min(38, Math.ceil(ctx.measureText(generationText).width) + 12);
+      const chipH = 13;
+      drawRoundRect(ctx, chipX, chipY, chipW, chipH, 6.5);
+      ctx.fillStyle = generationColor.chipBg;
+      ctx.fill();
+      ctx.strokeStyle = generationColor.chipBorder;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.font = "9px sans-serif";
+      ctx.fillStyle = generationColor.text;
+      ctx.textAlign = "center";
+      ctx.fillText(generationText, chipX + chipW / 2, chipY + chipH / 2 + 0.5);
+    }
+
+    if (p.node.children.length > 0) {
+      ctx.font = "9px sans-serif";
+      ctx.fillStyle = C.textMuted;
+      ctx.textAlign = "right";
+      ctx.fillText(`${p.node.children.length}徒`, nx + NODE_W - 9, ny + 34);
+    }
   }
 
   // ---- 7. 导出下载 ----

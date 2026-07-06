@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,7 @@ const GROUP_COLORS = [
 ];
 
 const DEFAULT_GROUP_SIZE = 8;
+const LIVE_WAVE_THRESHOLD = 2;
 
 /* ---------- 辅助 ---------- */
 /** PK名单专用：万级取整，不显示小数 */
@@ -43,7 +45,7 @@ function formatPkWave(value: number): string {
 }
 
 function formatPkWaveOrInactive(value: number): string {
-  return value > 0 ? formatPkWave(value) : "未开播";
+  return value >= LIVE_WAVE_THRESHOLD ? formatPkWave(value) : "未开播";
 }
 
 /* ---------- 排除人员对话框 ---------- */
@@ -266,10 +268,10 @@ function GroupCard({
                   )}
                 </td>
                 <td className="py-1.5 text-right tabular-nums text-foreground">
-                  {m.wave > 0 ? formatPkWave(m.trimmedAvg) : "未开播"}
+                  {m.wave >= LIVE_WAVE_THRESHOLD ? formatPkWave(m.trimmedAvg) : "未开播"}
                 </td>
                 <td className="py-1.5 text-right tabular-nums text-muted-foreground">
-                  {m.maxWave > 0 ? formatPkWave(m.maxWave) : "-"}
+                  {m.maxWave >= LIVE_WAVE_THRESHOLD ? formatPkWave(m.maxWave) : "-"}
                   {m.maxWave > m.trimmedAvg * 3 && m.waveDays > 1 && (
                     <span className="ml-1 text-amber-500" title="单日异常高值">⚠</span>
                   )}
@@ -597,7 +599,7 @@ export function PkRosterPage() {
 
   /** 拉取数据 */
   const fetchRoster = useCallback(async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setLoading(true);
     setError(null);

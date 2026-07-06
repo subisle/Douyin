@@ -1,5 +1,6 @@
 "use client";
 
+import { getDataApi } from "@/client/http-electron-api";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +26,7 @@ export function FlowingFlagCard() {
   const contentRef = useRef<HTMLDivElement>(null);
 
   const fetchGroups = useCallback(async (p: string) => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) {
       setUnavailable(true);
       return;
@@ -53,7 +54,7 @@ export function FlowingFlagCard() {
   }, [period, fetchGroups]);
 
   const onSettle = useCallback(async () => {
-    const api = window.electronAPI;
+    const api = getDataApi();
     if (!api) return;
     setSettling(true);
     setError(null);

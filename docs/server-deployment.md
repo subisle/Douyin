@@ -1,0 +1,116 @@
+# 网页服务器版本部署说明
+
+> 版本：v0.1
+> 日期：2026-07-06
+
+## 1. 目标
+
+将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。
+
+```text
+Web / iOS App / Desktop
+  -> HTTPS
+  -> Next.js 网站服务器
+  -> 网站数据库 MySQL
+```
+
+## 2. 环境要求
+
+- Node.js 22 LTS 或兼容版本
+- MySQL 8.x 或兼容版本
+- Nginx/Caddy/宝塔反代均可
+- 推荐使用 PM2 或 systemd 保活
+
+## 3. 服务端环境变量
+
+网站服务器 `.env` 示例：
+
+```env
+NODE_ENV=production
+APP_URL=https://your-domain.com
+
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=douyin_app
+DB_PASSWORD=change_me
+DB_NAME=douyin
+
+# 写接口保护：设置后 POST/PUT/PATCH/DELETE 必须携带 Bearer Token 或 x-api-token
+API_TOKENS=change_me_token
+
+# 后续登录鉴权使用
+SESSION_SECRET=change_me_to_long_random_string
+JWT_SECRET=change_me_to_long_random_string
+```
+
+注意：
+
+- `.env` 只放在服务器，不提交 Git。
+- iOS App、浏览器、桌面端都不能拿数据库账号。
+- MySQL 用户建议只授权业务库，不使用 root。
+
+## 4. 构建与启动
+
+```bash
+npm ci
+npm run build
+npm run start
+```
+
+当前 `next.config.ts` 已调整：
+
+- Electron 打包：`ELECTRON=true` 时导出静态产物。
+- 网站服务器：默认保留 Next.js API Route 能力。
+
+## 5. PM2 示例
+
+```bash
+pm2 start npm --name douyin-web -- run start
+pm2 save
+```
+
+## 6. Nginx 反向代理示例
+
+```nginx
+server {
+  listen 80;
+  server_name your-domain.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+```
+
+生产环境建议启用 HTTPS。
+
+## 7. 验证
+
+部署后检查：
+
+```bash
+curl https://your-domain.com/api/v1/health
+curl https://your-domain.com/api/v1/startup-health
+curl https://your-domain.com/api/v1/dashboard/summary
+curl -X POST https://your-domain.com/api/v1/flags/settle \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer change_me_token' \
+  -d '{"period":"2026-07"}'
+```
+
+预期响应：
+
+```json
+{ "success": true, "data": { "status": "ok" } }
+```
+
+## 8. 后续对接
+
+- iOS App：使用 `/api/v1/**` REST 接口。
+- 桌面端：短期仍可使用 Electron IPC；后续切换到网站 API。
+- 兼容接口：网页内部现阶段还保留 `POST /api/ipc`，用于快速复用旧方法。

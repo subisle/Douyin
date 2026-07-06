@@ -415,7 +415,7 @@ export const PosterCard = forwardRef<HTMLDivElement, PosterProps>(
                       color: C.indigo,
                     }}
                   >
-                    {r.isLive && r.dailyDuration > 0
+                    {r.dailyDuration > 0
                       ? fmtHours(r.dailyDuration)
                       : "0 h"}
                   </div>

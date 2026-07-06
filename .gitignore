@@ -43,8 +43,15 @@ tsconfig.tsbuildinfo
 # Electron
 electron/dist/
 
+# iOS / Swift
+ios/**/.build/
+ios/**/DerivedData/
+*.xcuserdata/
+
 # Local backups
 backups/
+.codex-temp/
+/live-room-watcher/
 
 # Temp files
 tmp-query.js

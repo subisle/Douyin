@@ -1,20 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getDataApi } from "@/client/http-electron-api";
 import type { IpcResult } from "@/types/electron";
 
 export type DataState<T> = {
   data: T | null;
   loading: boolean;
   error: string | null;
-  /** electronAPI 不存在（浏览器开发模式） */
+  /** 数据 API 不存在。Web 服务器模式会自动 fallback 到 HTTP API。 */
   unavailable: boolean;
   reload: () => void;
 };
 
 /**
- * 通过 Electron IPC 拉取数据。浏览器模式下 electronAPI 不存在，
- * 返回 unavailable=true，由页面决定展示占位。
+ * 拉取数据。Electron 桌面端优先走 IPC；普通浏览器/服务器版本走 HTTP API。
  */
 export function useElectronData<T>(
   fetcher: (api: ElectronAPI) => Promise<IpcResult<T>>,
@@ -29,7 +29,7 @@ export function useElectronData<T>(
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
-    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+    const api = getDataApi();
     if (!api) {
       setUnavailable(true);
       setLoading(false);

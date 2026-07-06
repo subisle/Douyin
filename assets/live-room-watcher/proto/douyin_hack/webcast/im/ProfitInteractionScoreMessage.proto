@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.im";
+
+package webcast.im;
+
+import "douyin_hack/webcast/im/Common.proto";
+
+message ProfitInteractionScoreMessage {
+  webcast.im.Common common = 1;
+  map<int64, ProfitInteractionScoreAnchorInfo> anchor_infos = 2;
+  int32 interaction_score_status = 3;
+  int64 channel_id = 4;
+  int64 start_time = 5;
+  int32 interaction_score_action = 6;
+  string extra = 7;
+  string game_extra = 8;
+  map<string, ProfitInteractionScoreAnchorInfo> open_anchor_infos = 5000;
+}
+
+message ProfitInteractionScoreAnchorInfo {
+  string score = 1;
+  bytes interaction_setting = 2;
+  bool reach_score_display_threshold = 3;
+}

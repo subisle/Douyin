@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Crown, Download, UsersRound } from "lucide-react";
+import { Crown, Download } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
   FAMILY_ROW_GAP as ROW_GAP,
   FAMILY_TREE_PS,
   getFamilyDisplayName,
+  getFamilyGenerationColor,
   getFamilyGenerationText,
 } from "./family-tree-style";
 import {
@@ -314,36 +315,48 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
   const displayName = getFamilyDisplayName(node, isRoot);
   const rawName = node.name.trim() || "未命名";
   const isFemale = node.gender === "female";
-  const relationText =
-    node.children.length > 0
-      ? `${node.children.length}徒`
-      : node.masterId
-        ? "成员"
-        : "单人";
+  const accountText = node.accountCount > 1 ? `${node.accountCount}账号` : "";
+  const generationText = getFamilyGenerationText(node);
+  const generationColor = getFamilyGenerationColor(node);
+  const hasColoredGeneration = node.generation === 1 || node.generation === 2 || node.generation === 3;
+  const titleParts = [rawName !== displayName ? `${displayName}（原始: ${rawName}）` : displayName];
+  const accountIds = [node.anchorId, ...(node.aliasIds || [])].filter(Boolean);
+  if (accountIds.length > 0) titleParts.push(`账号：${accountIds.join("、")}`);
 
   return (
     <div
       className={cn(
-        "relative flex size-full select-none flex-col justify-between overflow-hidden rounded-lg border bg-card px-2.5 py-2 shadow-sm",
-        isRoot
+        "relative flex size-full select-none flex-col justify-center overflow-hidden rounded-md border px-2 py-1.5 shadow-sm",
+        hasColoredGeneration
+          ? "shadow-slate-200/50"
+          : isRoot
           ? "border-primary/45 bg-primary/10 shadow-primary/10"
           : isFemale
             ? "border-rose-300/50 bg-rose-50/70 dark:border-rose-500/35 dark:bg-rose-950/20"
             : "border-border/80 bg-background"
       )}
-      title={rawName !== displayName ? `${displayName}（原始: ${rawName}）` : displayName}
+      style={
+        hasColoredGeneration
+          ? {
+              backgroundColor: generationColor.nodeBg,
+              borderColor: generationColor.nodeBorder,
+            }
+          : undefined
+      }
+      title={titleParts.join("\n")}
     >
       <div
         className={cn(
-          "absolute inset-y-0 left-0 w-1",
-          isRoot ? "bg-primary" : isFemale ? "bg-rose-400" : "bg-sky-400"
+          "absolute inset-y-0 left-0 w-0.5",
+          !hasColoredGeneration && (isRoot ? "bg-primary" : isFemale ? "bg-rose-400" : "bg-sky-400")
         )}
+        style={hasColoredGeneration ? { backgroundColor: generationColor.bar } : undefined}
       />
-      <div className="flex min-w-0 items-center gap-1.5 pl-0.5">
-        {isRoot && <Crown className="size-3.5 shrink-0 text-primary" />}
+      <div className="flex min-w-0 items-center gap-1">
+        {isRoot && <Crown className="size-3 shrink-0 text-primary" />}
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-[14px] font-semibold leading-5",
+            "min-w-0 flex-1 truncate text-[13px] font-semibold leading-4",
             isRoot
               ? "text-primary"
               : isFemale
@@ -353,22 +366,30 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
         >
           {displayName}
         </span>
+        {accountText && (
+          <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium leading-none text-primary">
+            {accountText}
+          </span>
+        )}
       </div>
-      <div className="flex min-w-0 items-center justify-between gap-1.5 pl-0.5">
-        <span className="truncate text-[10px] leading-4 text-muted-foreground">
-          {getFamilyGenerationText(node)}
-        </span>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none",
-            node.children.length > 0
-              ? "border-primary/25 bg-primary/10 text-primary"
-              : "border-border bg-muted text-muted-foreground"
-          )}
-        >
-          <UsersRound className="size-2.5" />
-          {relationText}
-        </span>
+      <div className="mt-1 flex min-w-0 items-center justify-between gap-1">
+        {generationText ? (
+          <span
+            className="truncate rounded-full border px-1.5 text-[9px] font-medium leading-3"
+            style={{
+              backgroundColor: generationColor.chipBg,
+              borderColor: generationColor.chipBorder,
+              color: generationColor.text,
+            }}
+          >
+            {generationText}
+          </span>
+        ) : (
+          <span />
+        )}
+        {node.children.length > 0 && (
+          <span className="shrink-0 text-[9px] leading-3 text-muted-foreground">{node.children.length}徒</span>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "cool.scx.live_room_watcher.impl.douyin_hack.proto.webcast.data";
+
+package webcast.data;
+
+// 更新时间 : 2026-07-06, extracted from live-schema-im.aa08852d.js
+message ChatLikeCount {
+    int64 count = 1;
+    int64 version = 2;
+}
