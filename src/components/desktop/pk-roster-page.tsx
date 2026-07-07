@@ -6,10 +6,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Swords, Waves, Download, RefreshCw, X, Crown, Search } from "lucide-react";
+import { Swords, Waves, Download, RefreshCw, X, Crown, Search, ClipboardPaste, ListChecks } from "lucide-react";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 import { downloadDataUrlAsFile, elementToPngDataUrl } from "./export-image";
+import { cn } from "@/lib/utils";
 import type { PkMember, IpcResult } from "@/types/electron";
+import {
+  DEFAULT_PK_GROUP_SIZE,
+  PRESET_ROSTER_TEXT,
+  ROSTER_CONFIG_STORAGE_KEY,
+  ROSTER_SLOT_OPTIONS,
+  loadRosterConfigs,
+  resolveRosterNames,
+  type RosterConfig,
+  type RosterSlot,
+} from "./pk-roster-config";
 
 /* ---------- 类型 ---------- */
 interface GroupState {
@@ -32,7 +43,7 @@ const GROUP_COLORS = [
   "border-l-yellow-400",
 ];
 
-const DEFAULT_GROUP_SIZE = 8;
+const DEFAULT_GROUP_SIZE = DEFAULT_PK_GROUP_SIZE;
 const LIVE_WAVE_THRESHOLD = 2;
 
 /* ---------- 辅助 ---------- */
@@ -46,6 +57,14 @@ function formatPkWave(value: number): string {
 
 function formatPkWaveOrInactive(value: number): string {
   return value >= LIVE_WAVE_THRESHOLD ? formatPkWave(value) : "未开播";
+}
+
+function comparePkMembers(left: PkMember, right: PkMember) {
+  const scoreDiff = right.trimmedAvg - left.trimmedAvg;
+  if (scoreDiff !== 0) return scoreDiff;
+  const waveDiff = right.wave - left.wave;
+  if (waveDiff !== 0) return waveDiff;
+  return left.personId - right.personId;
 }
 
 /* ---------- 排除人员对话框 ---------- */
@@ -333,21 +352,23 @@ function ExportCompareBoard({
       >
         <div style={{ marginBottom: 10 }}>
           <div style={{ color: accent.text, fontSize: 18, fontWeight: 900 }}>{group.label}</div>
-          <div style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            marginTop: 7,
-            padding: "5px 9px",
-            borderRadius: 999,
-            background: accent.soft,
-            color: accent.text,
-            fontSize: 13,
-            fontWeight: 800,
-          }}>
-            <span>队长</span>
-            <span>{captain?.name || "-"}</span>
-          </div>
+          {captain && (
+            <div style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              marginTop: 7,
+              padding: "5px 9px",
+              borderRadius: 999,
+              background: accent.soft,
+              color: accent.text,
+              fontSize: 13,
+              fontWeight: 800,
+            }}>
+              <span>队长</span>
+              <span>{captain.name}</span>
+            </div>
+          )}
         </div>
         <div style={{
           display: "grid",
@@ -446,6 +467,8 @@ function ExportCompareBoard({
     );
   };
 
+  const hasCaptains = [...maleGroups, ...femaleGroups].some((group) => group.captainId !== null);
+
   return (
     <div style={{
       width: boardWidth,
@@ -500,20 +523,22 @@ function ExportCompareBoard({
           {renderBand(femaleGroups, "female")}
         </div>
 
-        <div style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          borderTop: `1px solid ${BORDER}`,
-          color: TEXT_MAIN,
-          fontSize: 18,
-          fontWeight: 900,
-          marginTop: 22,
-          paddingTop: 14,
-        }}>
-          <span>PS：</span>
-          <span>一定要跟自己的队长联系，确认自己是哪个队伍。</span>
-        </div>
+        {hasCaptains && (
+          <div style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            borderTop: `1px solid ${BORDER}`,
+            color: TEXT_MAIN,
+            fontSize: 18,
+            fontWeight: 900,
+            marginTop: 22,
+            paddingTop: 14,
+          }}>
+            <span>PS：</span>
+            <span>一定要跟自己的队长联系，确认自己是哪个队伍。</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -528,7 +553,8 @@ function buildAutoGroups(
   members: PkMember[],
   gender: "male" | "female",
   excludedIds: Set<number>,
-  groupSize = DEFAULT_GROUP_SIZE
+  groupSize = DEFAULT_GROUP_SIZE,
+  assignCaptains = true
 ): GroupState[] {
   const seen = new Set<number>();
   const eligible = members
@@ -537,11 +563,7 @@ function buildAutoGroups(
       seen.add(member.personId);
       return true;
     })
-    .sort((left, right) => {
-      const scoreDiff = right.trimmedAvg - left.trimmedAvg;
-      if (scoreDiff !== 0) return scoreDiff;
-      return right.wave - left.wave;
-    });
+    .sort(comparePkMembers);
 
   if (eligible.length === 0) return [];
 
@@ -556,23 +578,17 @@ function buildAutoGroups(
   }));
 
   eligible.forEach((member, index) => {
-    const round = Math.floor(index / groupCount);
-    const offset = index % groupCount;
-    const targetIndex = round % 2 === 0 ? offset : groupCount - 1 - offset;
+    const targetIndex = Math.floor(index / groupSize);
     groups[targetIndex].members.push(member);
   });
 
   return groups.map((group) => {
-    const sortedMembers = [...group.members].sort((left, right) => {
-      const scoreDiff = right.trimmedAvg - left.trimmedAvg;
-      if (scoreDiff !== 0) return scoreDiff;
-      return right.wave - left.wave;
-    });
+    const sortedMembers = [...group.members].sort(comparePkMembers);
 
     return {
       ...group,
       members: sortedMembers,
-      captainId: sortedMembers[0]?.personId ?? null,
+      captainId: assignCaptains ? sortedMembers[0]?.personId ?? null : null,
     };
   });
 }
@@ -584,6 +600,8 @@ export function PkRosterPage() {
   const [period, setPeriod] = useState(currentPeriod());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rosterSlot, setRosterSlot] = useState<RosterSlot>("midmonth");
+  const [rosterConfigs, setRosterConfigs] = useState<Record<RosterSlot, RosterConfig>>(loadRosterConfigs);
 
   // 后端返回的扁平列表
   const [rawMales, setRawMales] = useState<PkMember[]>([]);
@@ -591,11 +609,24 @@ export function PkRosterPage() {
   const [dataPeriod, setDataPeriod] = useState("");
 
   // 分组状态
-  const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set());
   const [excludeOpen, setExcludeOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem(ROSTER_CONFIG_STORAGE_KEY, JSON.stringify(rosterConfigs));
+  }, [rosterConfigs]);
+
+  const updateActiveConfig = useCallback((patch: Partial<RosterConfig>) => {
+    setRosterConfigs((current) => ({
+      ...current,
+      [rosterSlot]: {
+        ...current[rosterSlot],
+        ...patch,
+      },
+    }));
+  }, [rosterSlot]);
 
   /** 拉取数据 */
   const fetchRoster = useCallback(async () => {
@@ -610,7 +641,6 @@ export function PkRosterPage() {
         setRawMales(res.data.males);
         setRawFemales(res.data.females);
         setDataPeriod(res.data.period);
-        setExcludedIds(new Set());
       } else {
         setError(res.error);
       }
@@ -639,20 +669,52 @@ export function PkRosterPage() {
     return out;
   }, [rawMales, rawFemales]);
 
+  const activeConfig = rosterConfigs[rosterSlot];
+  const includeResolution = useMemo(
+    () => resolveRosterNames(allMembers, activeConfig.includeText),
+    [activeConfig.includeText, allMembers]
+  );
+  const excludeResolution = useMemo(
+    () => resolveRosterNames(allMembers, activeConfig.excludeText),
+    [activeConfig.excludeText, allMembers]
+  );
+
+  const rosterMembers = useMemo(() => {
+    const filter = (members: PkMember[]) => members.filter((member) => {
+      if (activeConfig.mode === "include" && includeResolution.names.length > 0 && !includeResolution.ids.has(member.personId)) {
+        return false;
+      }
+      if (excludeResolution.ids.has(member.personId)) return false;
+      return true;
+    });
+    return {
+      males: filter(rawMales),
+      females: filter(rawFemales),
+    };
+  }, [activeConfig.mode, excludeResolution.ids, includeResolution.ids, includeResolution.names.length, rawFemales, rawMales]);
+
+  const activeRosterCount = rosterMembers.males.length + rosterMembers.females.length;
+  const excludedCount = allMembers.length - activeRosterCount;
+  const assignCaptains = rosterSlot !== "midmonth";
+
   const maleGroups = useMemo(
-    () => buildAutoGroups(rawMales, "male", excludedIds),
-    [rawMales, excludedIds]
+    () => buildAutoGroups(rosterMembers.males, "male", new Set(), DEFAULT_GROUP_SIZE, assignCaptains),
+    [assignCaptains, rosterMembers.males]
   );
 
   const femaleGroups = useMemo(
-    () => buildAutoGroups(rawFemales, "female", excludedIds),
-    [rawFemales, excludedIds]
+    () => buildAutoGroups(rosterMembers.females, "female", new Set(), DEFAULT_GROUP_SIZE, assignCaptains),
+    [assignCaptains, rosterMembers.females]
   );
 
   /** 确认排除 */
   const handleConfirmExclude = useCallback((newExcluded: Set<number>) => {
-    setExcludedIds(newExcluded);
-  }, []);
+    const names = allMembers
+      .filter((member) => newExcluded.has(member.personId))
+      .map((member) => member.name)
+      .join("\n");
+    updateActiveConfig({ excludeText: names });
+  }, [allMembers, updateActiveConfig]);
 
   const currentMonth = useMemo(() => {
     const now = new Date();
@@ -694,8 +756,12 @@ export function PkRosterPage() {
             PK 名单
           </h2>
           <Badge variant="outline">{displayPeriod}</Badge>
-          {excludedIds.size > 0 && (
-            <Badge variant="destructive">{excludedIds.size} 人已排除</Badge>
+          <Badge variant="secondary">{ROSTER_SLOT_OPTIONS.find((item) => item.key === rosterSlot)?.label}</Badge>
+          <Badge variant={activeConfig.mode === "include" ? "default" : "outline"}>
+            {activeConfig.mode === "include" ? "只打名单" : "排除名单"}
+          </Badge>
+          {excludedCount > 0 && (
+            <Badge variant="destructive">{excludedCount} 人不参与</Badge>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -721,7 +787,131 @@ export function PkRosterPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-        💡 系统按去最高后日均音浪自动蛇形分组，默认每组最多 {DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组、队长和成员名单。
+        💡 系统按去最高后日均音浪从高到低自动分组，默认每组最多 {DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组{assignCaptains ? "、队长" : ""}和成员名单。
+      </div>
+
+      <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-md border border-border bg-background p-0.5">
+              {ROSTER_SLOT_OPTIONS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setRosterSlot(item.key)}
+                  className={cn(
+                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
+                    rosterSlot === item.key
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {item.shortLabel}
+                </button>
+              ))}
+            </div>
+            <div className="flex rounded-md border border-border bg-background p-0.5">
+              <button
+                type="button"
+                onClick={() => updateActiveConfig({ mode: "include" })}
+                className={cn(
+                  "h-8 rounded-[5px] px-3 text-xs font-bold transition",
+                  activeConfig.mode === "include"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                只打名单
+              </button>
+              <button
+                type="button"
+                onClick={() => updateActiveConfig({ mode: "exclude" })}
+                className={cn(
+                  "h-8 rounded-[5px] px-3 text-xs font-bold transition",
+                  activeConfig.mode === "exclude"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                排除名单
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
+            <Badge variant="secondary">参与 {activeRosterCount} 人</Badge>
+            <Badge variant="outline">参赛文本 {includeResolution.names.length} 人</Badge>
+            <Badge variant="outline">排除文本 {excludeResolution.names.length} 人</Badge>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className={cn(
+            "rounded-md border p-3",
+            activeConfig.mode === "include" ? "border-primary/50 bg-primary/5" : "border-border bg-muted/15"
+          )}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-black">
+                <ListChecks className="size-4 text-primary" />
+                参赛名单文本
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => updateActiveConfig({ includeText: PRESET_ROSTER_TEXT, mode: "include" })}
+              >
+                <ClipboardPaste className="size-4" />
+                使用预设
+              </Button>
+            </div>
+            <textarea
+              value={activeConfig.includeText}
+              onChange={(event) => updateActiveConfig({ includeText: event.target.value })}
+              placeholder="粘贴名单，每行一个名字，支持 1. 张三 / 张三 / 逗号分隔"
+              className="app-no-drag h-40 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-[3px] focus:ring-ring/40"
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
+              <span>匹配 {includeResolution.ids.size}/{includeResolution.names.length}</span>
+              {includeResolution.unmatchedNames.length > 0 && (
+                <span className="truncate text-destructive" title={includeResolution.unmatchedNames.join("、")}>
+                  未匹配：{includeResolution.unmatchedNames.slice(0, 6).join("、")}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className={cn(
+            "rounded-md border p-3",
+            activeConfig.mode === "exclude" ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/15"
+          )}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-black">
+                <X className="size-4 text-destructive" />
+                排除名单文本
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => updateActiveConfig({ excludeText: "" })}
+              >
+                清空
+              </Button>
+            </div>
+            <textarea
+              value={activeConfig.excludeText}
+              onChange={(event) => updateActiveConfig({ excludeText: event.target.value })}
+              placeholder="粘贴不参与名单，每行一个名字；即使使用“只打名单”，这里的人也会被排除"
+              className="app-no-drag h-40 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-[3px] focus:ring-ring/40"
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
+              <span>匹配 {excludeResolution.ids.size}/{excludeResolution.names.length}</span>
+              {excludeResolution.unmatchedNames.length > 0 && (
+                <span className="truncate text-destructive" title={excludeResolution.unmatchedNames.join("、")}>
+                  未匹配：{excludeResolution.unmatchedNames.slice(0, 6).join("、")}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* 内容 */}
@@ -800,7 +990,7 @@ export function PkRosterPage() {
         open={excludeOpen}
         onClose={() => setExcludeOpen(false)}
         allMembers={allMembers}
-        excludedIds={excludedIds}
+        excludedIds={excludeResolution.ids}
         onConfirm={handleConfirmExclude}
       />
 

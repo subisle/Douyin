@@ -34,6 +34,12 @@ import {
   LoadingState,
 } from "./states";
 import { exportElementAsImage } from "./export-image";
+import {
+  loadRosterConfigs,
+  resolveRosterNames,
+  type RosterConfig,
+  type RosterSlot,
+} from "./pk-roster-config";
 
 interface BattleGroup {
   key: string;
@@ -423,6 +429,7 @@ export function StarBattlePage() {
   const exportRef = useRef<HTMLDivElement>(null);
   const [period, setPeriod] = useState(currentPeriod());
   const [data, setData] = useState<PkRosterData | null>(null);
+  const [rosterConfigs, setRosterConfigs] = useState<Record<RosterSlot, RosterConfig>>(loadRosterConfigs);
   const [scores, setScores] = useState<StarBattleScore[]>([]);
   const [scoreDrafts, setScoreDrafts] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -495,7 +502,17 @@ export function StarBattlePage() {
     fetchScores();
   }, [fetchScores]);
 
-  const allMembers = useMemo(() => {
+  useEffect(() => {
+    const syncRosterConfig = () => setRosterConfigs(loadRosterConfigs());
+    window.addEventListener("storage", syncRosterConfig);
+    window.addEventListener("focus", syncRosterConfig);
+    return () => {
+      window.removeEventListener("storage", syncRosterConfig);
+      window.removeEventListener("focus", syncRosterConfig);
+    };
+  }, []);
+
+  const rawBattleMembers = useMemo(() => {
     const rows = data?.males ?? [];
     const seen = new Set<number>();
     return rows
@@ -506,6 +523,35 @@ export function StarBattlePage() {
       })
       .sort((a, b) => b.wave - a.wave || b.trimmedAvg - a.trimmedAvg || a.personId - b.personId);
   }, [data]);
+  const midmonthRosterConfig = rosterConfigs.midmonth;
+  const includeResolution = useMemo(
+    () => resolveRosterNames(rawBattleMembers, midmonthRosterConfig.includeText),
+    [midmonthRosterConfig.includeText, rawBattleMembers]
+  );
+  const excludeResolution = useMemo(
+    () => resolveRosterNames(rawBattleMembers, midmonthRosterConfig.excludeText),
+    [midmonthRosterConfig.excludeText, rawBattleMembers]
+  );
+  const allMembers = useMemo(
+    () => rawBattleMembers.filter((member) => {
+      if (
+        midmonthRosterConfig.mode === "include" &&
+        includeResolution.names.length > 0 &&
+        !includeResolution.ids.has(member.personId)
+      ) {
+        return false;
+      }
+      if (excludeResolution.ids.has(member.personId)) return false;
+      return true;
+    }),
+    [
+      excludeResolution.ids,
+      includeResolution.ids,
+      includeResolution.names.length,
+      midmonthRosterConfig.mode,
+      rawBattleMembers,
+    ]
+  );
 
   const initialGroups = useMemo(() => buildStageGroups(allMembers), [allMembers]);
   const activeMembers = allMembers;
@@ -565,7 +611,7 @@ export function StarBattlePage() {
         ? "小组赛第一名 + 复活赛第一名进入晋级赛"
         : roundKey === "final"
           ? "晋级赛每组第一名进入决赛"
-          : "全部男团参赛人员按月音浪分组";
+          : "按 PK 名单页的 15号分组名单分组";
   const totalPages = Math.max(1, Math.ceil(currentGroups.length / GROUPS_PER_PAGE));
   const visibleGroups = currentGroups.slice(
     groupPage * GROUPS_PER_PAGE,
@@ -921,6 +967,14 @@ export function StarBattlePage() {
                 <Badge variant={invalidGrouping ? "destructive" : "outline"}>
                   {invalidGrouping ? "人数不满足分组" : `${currentGroups.length} 组`}
                 </Badge>
+                <Badge variant="secondary">
+                  沿用PK 15号名单 {allMembers.length}人
+                </Badge>
+                {includeResolution.unmatchedNames.length > 0 && (
+                  <Badge variant="destructive">
+                    未匹配 {includeResolution.unmatchedNames.length}人
+                  </Badge>
+                )}
               </div>
             </div>
           </div>

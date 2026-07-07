@@ -112,6 +112,7 @@ export interface LivePkRankItem {
   userId: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   hasStrongIdentity?: boolean;
   identitySource?: string;
   isMystery?: boolean;
@@ -172,6 +173,7 @@ export interface LivePkGiftPayload {
   userId: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   hasStrongIdentity?: boolean;
   identitySource?: string;
   isMystery?: boolean;
@@ -233,6 +235,7 @@ export interface LivePkMemberPayload {
   userId: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   hasStrongIdentity?: boolean;
   identitySource?: string;
   isMystery?: boolean;
@@ -252,6 +255,11 @@ export interface LivePkMemberPayload {
   ipLocation?: string;
   followerCount?: number;
   cacheHit?: boolean;
+  memberAction?: number;
+  memberActionText?: string;
+  actionDescription?: string;
+  enterType?: number;
+  rankScore?: number;
   memberCount: number;
 }
 
@@ -266,6 +274,7 @@ export interface LivePkChatPayload {
   userId: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   hasStrongIdentity?: boolean;
   identitySource?: string;
   isMystery?: boolean;
@@ -305,6 +314,7 @@ export interface LivePkEventPayload {
   userId?: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   hasStrongIdentity?: boolean;
   identitySource?: string;
   isMystery?: boolean;

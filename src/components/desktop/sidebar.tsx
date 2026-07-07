@@ -21,10 +21,10 @@ export function Sidebar({
     <aside
       className={cn(
         "flex shrink-0 flex-col border-r border-border/70 bg-sidebar/80 backdrop-blur-xl transition-all duration-300",
-        collapsed ? "w-16" : "w-64"
+        collapsed ? "w-14" : "w-44"
       )}
     >
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-4">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-3">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = currentPage === item.id;
@@ -35,7 +35,7 @@ export function Sidebar({
               onClick={() => onNavigate(item.id)}
               title={collapsed ? item.label : undefined}
               className={cn(
-                "group relative flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition-all duration-200",
+                "group relative flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left transition-all duration-200",
                 isActive
                   ? "bg-primary text-primary-foreground shadow-md"
                   : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
@@ -48,34 +48,22 @@ export function Sidebar({
                 )}
               />
               {!collapsed && (
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-sm font-medium leading-tight">
-                    {item.label}
-                  </span>
-                  <span
-                    className={cn(
-                      "truncate text-xs leading-tight",
-                      isActive
-                        ? "text-primary-foreground/70"
-                        : "text-muted-foreground/70"
-                    )}
-                  >
-                    {item.description}
-                  </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">
+                  {item.label}
                 </span>
               )}
               {isActive && !collapsed && (
-                <span className="absolute right-3 size-1.5 rounded-full bg-primary-foreground" />
+                <span className="absolute right-2.5 size-1.5 rounded-full bg-primary-foreground" />
               )}
             </button>
           );
         })}
       </nav>
 
-      <div className="border-t border-border/70 px-2 py-3">
+      <div className="border-t border-border/70 px-2 py-2">
         <button
           onClick={onToggle}
-          className="flex w-full items-center justify-center rounded-2xl p-3 text-muted-foreground transition-all duration-200 hover:bg-background/70 hover:text-foreground"
+          className="flex w-full items-center justify-center rounded-lg p-2.5 text-muted-foreground transition-all duration-200 hover:bg-background/70 hover:text-foreground"
           title={collapsed ? "展开侧栏" : "收起侧栏"}
         >
           {collapsed ? (

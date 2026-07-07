@@ -8,6 +8,8 @@ const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
   captureDouyinLiveOptions,
+  describeCookieInjection,
+  detectLoginPrompt,
   getCookieHeader,
   injectCookieHeader,
   normalizeLiveRoomUrl,
@@ -27,7 +29,7 @@ for (const envPath of [path.join(__dirname, "..", ".env.local"), path.join(__dir
 let mainWindow = null;
 const updater = createUpdater({
   isDev,
-  sendStatus: (status) => mainWindow?.webContents.send("updater:status-changed", status),
+  sendStatus: (status) => sendToMainWindow("updater:status-changed", status),
 });
 const livePkWatcher = new LivePkWatcher();
 /** @type {WebContentsView | null} */
@@ -40,39 +42,51 @@ let embeddedLiveDebuggerHandler = null;
 let embeddedLiveCaptureToken = 0;
 let embeddedLiveBounds = null;
 let hiddenLiveCaptureWindow = null;
+let embeddedLiveCookieState = null;
+let embeddedLoginPromptReported = false;
+
+function sendToMainWindow(channel, ...args) {
+  const webContents = mainWindow?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  try {
+    webContents.send(channel, ...args);
+  } catch {
+    // 窗口退出时 webContents 可能刚好被销毁，忽略清理期消息。
+  }
+}
 
 livePkWatcher.on("status", (status) => {
-  mainWindow?.webContents.send("live-pk:status-changed", status);
+  sendToMainWindow("live-pk:status-changed", status);
 });
 livePkWatcher.on("rank", (payload) => {
-  mainWindow?.webContents.send("live-pk:rank", payload);
+  sendToMainWindow("live-pk:rank", payload);
 });
 livePkWatcher.on("gift", (payload) => {
-  mainWindow?.webContents.send("live-pk:gift", payload);
+  sendToMainWindow("live-pk:gift", payload);
 });
 livePkWatcher.on("member", (payload) => {
-  mainWindow?.webContents.send("live-pk:member", payload);
+  sendToMainWindow("live-pk:member", payload);
 });
 livePkWatcher.on("chat", (payload) => {
-  mainWindow?.webContents.send("live-pk:chat", payload);
+  sendToMainWindow("live-pk:chat", payload);
 });
 livePkWatcher.on("event", (payload) => {
-  mainWindow?.webContents.send("live-pk:event", payload);
+  sendToMainWindow("live-pk:event", payload);
 });
 livePkWatcher.on("error-message", (message) => {
-  mainWindow?.webContents.send("live-pk:error", message);
+  sendToMainWindow("live-pk:error", message);
 });
 
 function sendLivePkCaptureStatus(message) {
-  mainWindow?.webContents.send("live-pk:capture-status", message);
+  sendToMainWindow("live-pk:capture-status", message);
 }
 
 function sendLivePkError(message) {
-  mainWindow?.webContents.send("live-pk:error", message);
+  sendToMainWindow("live-pk:error", message);
 }
 
 function sendLivePkEmbeddedState(payload = {}) {
-  mainWindow?.webContents.send("live-pk:embed-state", {
+  sendToMainWindow("live-pk:embed-state", {
     embedded: Boolean(embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()),
     liveRoomUrl: embeddedLiveUrl,
     ...payload,
@@ -185,6 +199,42 @@ function livePkSnapshotLookupFromTarget(target) {
   };
 }
 
+function blockEmbeddedLivePointerEvents(view) {
+  const webContents = view?.webContents;
+  if (!webContents || webContents.isDestroyed()) return;
+  webContents.insertCSS(`
+    html, body, body * {
+      cursor: default !important;
+      -webkit-user-select: none !important;
+      user-select: none !important;
+    }
+  `).catch(() => {});
+  webContents.executeJavaScript(`
+    (() => {
+      if (window.__douyinMonitorPointerBlockerInstalled) return;
+      window.__douyinMonitorPointerBlockerInstalled = true;
+      const block = (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        event.stopPropagation();
+        return false;
+      };
+      [
+        "auxclick",
+        "click",
+        "contextmenu",
+        "dblclick",
+        "mousedown",
+        "mouseup",
+        "pointerdown",
+        "pointerup",
+        "touchend",
+        "touchstart"
+      ].forEach((name) => window.addEventListener(name, block, true));
+    })()
+  `, true).catch(() => {});
+}
+
 function ensureEmbeddedLiveView() {
   if (!mainWindow) throw new Error("主窗口未就绪");
   if (embeddedLiveView && !embeddedLiveView.webContents.isDestroyed()) return embeddedLiveView;
@@ -208,10 +258,24 @@ function ensureEmbeddedLiveView() {
     sendLivePkCaptureStatus("直播画面正在加载");
   });
   view.webContents.on("dom-ready", () => {
+    blockEmbeddedLivePointerEvents(view);
     sendLivePkCaptureStatus("直播页面 DOM 已就绪，正在监听 WebSocket");
   });
   view.webContents.on("did-finish-load", () => {
+    blockEmbeddedLivePointerEvents(view);
     sendLivePkCaptureStatus("直播画面已加载，正在监听 WebSocket");
+    const checkLoginPrompt = async () => {
+      if (embeddedLoginPromptReported || embeddedLiveView !== view || view.webContents.isDestroyed()) return;
+      const result = await detectLoginPrompt(view).catch(() => null);
+      if (!result?.hasLoginText) return;
+      embeddedLoginPromptReported = true;
+      const prefix = embeddedLiveCookieState?.authPresent?.length
+        ? "页面仍显示“登录”，Cookie 可能已过期或未生效"
+        : "页面显示“登录”，当前未检测到有效登录 Cookie";
+      sendLivePkCaptureStatus(`${prefix}；普通观众真实 ID 可能只能拿到脱敏信息`);
+    };
+    setTimeout(() => void checkLoginPrompt(), 1200);
+    setTimeout(() => void checkLoginPrompt(), 3500);
   });
   view.webContents.on("did-fail-load", (_event, code, description) => {
     sendLivePkCaptureStatus(`直播画面加载失败: ${description || code}`);
@@ -241,15 +305,20 @@ function setEmbeddedLiveBounds(bounds) {
 
 function closeEmbeddedLiveView({ stopMonitor = false } = {}) {
   embeddedLiveCaptureToken += 1;
+  embeddedLiveCookieState = null;
+  embeddedLoginPromptReported = false;
   cleanupEmbeddedLiveCapture();
   embeddedLiveUrl = "";
   if (embeddedLiveView) {
     const view = embeddedLiveView;
     embeddedLiveView = null;
     try {
+      view.setVisible(false);
+      view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
       mainWindow?.contentView.removeChildView(view);
       if (!view.webContents.isDestroyed()) {
-        view.webContents.close({ waitForBeforeUnload: false });
+        view.webContents.stop();
+        view.webContents.destroy();
       }
     } catch {
       // ignore remove errors
@@ -262,12 +331,12 @@ function closeEmbeddedLiveView({ stopMonitor = false } = {}) {
 
 async function startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, includeRaw) {
   closeHiddenLiveCaptureWindow();
-  sendLivePkCaptureStatus("正在使用隐藏采集模式启动监控");
+  sendLivePkCaptureStatus("正在打开可移动采集窗口");
   const capture = captureDouyinLiveOptions(liveRoomUrl, {
     parentWindow: mainWindow,
     onStatus: sendLivePkCaptureStatus,
     cookie,
-    show: false,
+    show: true,
     keepAlive: true,
   });
   hiddenLiveCaptureWindow = capture.window;
@@ -356,20 +425,8 @@ async function openEmbeddedLiveMonitor(payload) {
   setEmbeddedLiveBounds(bounds);
 
   const injected = await injectCookieHeader(view.webContents.session, liveRoomUrl, cookie);
-  if (injected.total > 0) {
-    const critical = injected.criticalPresent.length
-      ? `关键项: ${injected.criticalPresent.join(", ")}`
-      : "关键项缺失";
-    const liveCritical = injected.criticalLivePresent?.length
-      ? `live: ${injected.criticalLivePresent.join(", ")}`
-      : "live: 缺失";
-    const wwwCritical = injected.criticalWwwPresent?.length
-      ? `www: ${injected.criticalWwwPresent.join(", ")}`
-      : "www: 缺失";
-    sendLivePkCaptureStatus(`已注入 Cookie ${injected.set}/${injected.total} 项，${critical}，${liveCritical}，${wwwCritical}`);
-  } else {
-    sendLivePkCaptureStatus("正在打开直播间");
-  }
+  embeddedLiveCookieState = injected;
+  sendLivePkCaptureStatus(describeCookieInjection(injected, "，正在打开直播间"));
 
   await attachEmbeddedLiveCapture(view, liveRoomUrl, cookie, payload?.includeRaw);
   view.webContents.loadURL(liveRoomUrl).catch((error) => {
@@ -388,15 +445,15 @@ async function openEmbeddedLiveMonitor(payload) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: 1440,
+    height: 900,
     resizable: false,
     maximizable: false,
     fullScreenable: false,
-    minWidth: 1280,
-    minHeight: 800,
-    maxWidth: 1280,
-    maxHeight: 800,
+    minWidth: 1440,
+    minHeight: 900,
+    maxWidth: 1440,
+    maxHeight: 900,
     frame: false,
     backgroundColor: "#f5f3ee",
     icon: APP_ICON_PNG,
@@ -413,13 +470,13 @@ function createWindow() {
   });
 
   mainWindow.on("closed", () => {
+    mainWindow = null;
     closeEmbeddedLiveView({ stopMonitor: true });
     closeHiddenLiveCaptureWindow();
-    mainWindow = null;
   });
 
   const emitMaximizeState = () => {
-    mainWindow?.webContents.send(
+    sendToMainWindow(
       "window:maximized-changed",
       mainWindow?.isMaximized() ?? false
     );
@@ -528,19 +585,19 @@ ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
   closeEmbeddedLiveView({ stopMonitor: false });
   closeHiddenLiveCaptureWindow();
   livePkWatcher.stop();
-  mainWindow?.webContents.send("live-pk:capture-status", "正在隐藏采集直播间连接");
+  sendToMainWindow("live-pk:capture-status", "正在打开可移动采集窗口");
   const capture = captureDouyinLiveOptions(liveRoomUrl, {
     parentWindow: mainWindow,
-    onStatus: (message) => mainWindow?.webContents.send("live-pk:capture-status", message),
+    onStatus: (message) => sendToMainWindow("live-pk:capture-status", message),
     cookie,
-    show: false,
+    show: true,
     keepAlive: true,
   });
   hiddenLiveCaptureWindow = capture.window;
   try {
     const options = await capture.promise;
     if (cookie) options.cookie = cookie;
-    mainWindow?.webContents.send("live-pk:capture-status", "已获取连接，正在启动监控");
+    sendToMainWindow("live-pk:capture-status", "已获取连接，正在启动监控");
     return livePkWatcher.start({ ...options, includeRaw: Boolean(payload?.includeRaw) });
   } catch (error) {
     if (hiddenLiveCaptureWindow === capture.window) closeHiddenLiveCaptureWindow();
@@ -551,7 +608,7 @@ ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
 }));
 ipcMain.handle("live-pk:stop", wrap(() => {
   closeHiddenLiveCaptureWindow();
-  return livePkWatcher.stop();
+  return closeEmbeddedLiveView({ stopMonitor: true });
 }));
 ipcMain.handle("live-pk:status", wrap(() => livePkWatcher.getStatus()));
 

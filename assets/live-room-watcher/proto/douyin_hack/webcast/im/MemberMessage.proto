@@ -13,4 +13,13 @@ message MemberMessage {
     webcast.im.Common common = 1;
     webcast.data.User user = 2;
     int64 member_count = 3;
+    webcast.data.User operator = 4;
+    bool is_set_to_admin = 5;
+    bool is_top_user = 6;
+    int64 rank_score = 7;
+    int64 top_user_no = 8;
+    int64 enter_type = 9;
+    int64 action = 10;
+    string action_description = 11;
+    int64 user_id = 12;
 }

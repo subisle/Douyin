@@ -1,24 +1,35 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
+  ChevronDown,
+  Cookie,
   Download,
   Eraser,
+  FileJson,
+  FileSpreadsheet,
   Gift,
+  Grip,
   MessageSquareText,
+  Monitor,
   Play,
+  Swords,
   Square,
   Users,
+  X,
 } from "lucide-react";
 import { getDataApi } from "@/client/http-electron-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type {
   IpcResult,
   LivePkChatPayload,
+  LivePkEmbeddedBounds,
+  LivePkEmbeddedState,
   LivePkEventPayload,
   LivePkGiftPayload,
   LivePkMemberPayload,
@@ -41,6 +52,12 @@ interface MonitorLogRow {
   payload: unknown;
 }
 
+interface MonitorRoomAppearance {
+  roomLabel: string;
+  roomId: string;
+  anchorId: string;
+}
+
 interface MonitorUserRow {
   key: string;
   nickname: string;
@@ -49,6 +66,7 @@ interface MonitorUserRow {
   douyinId: string;
   userId: string;
   secUid: string;
+  webcastUid: string;
   userLevel: number;
   badgeLevel: number;
   consumeLevel: number;
@@ -70,8 +88,10 @@ interface MonitorUserRow {
   lastType: MonitorLogType;
   chats: number;
   gifts: number;
+  giftNames: string[];
   members: number;
   fanTicket: number;
+  roomAppearances: MonitorRoomAppearance[];
 }
 
 interface MonitorRoomInfo {
@@ -94,6 +114,9 @@ interface MonitorScoreRow {
   name: string;
   score: number;
   scoreText: string;
+  scoreRelative: boolean;
+  multiPkTeamScore: number;
+  source: string;
 }
 
 interface MonitorRoundRow {
@@ -121,12 +144,11 @@ const FILTERS: { key: MonitorFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "gift", label: "礼物" },
   { key: "chat", label: "弹幕" },
-  { key: "member", label: "进场" },
-  { key: "rank", label: "分数" },
+  { key: "member", label: "进/离" },
   { key: "event", label: "事件" },
   { key: "user", label: "用户" },
-  { key: "status", label: "状态" },
 ];
+const USER_CACHE_STORAGE_KEY = "douyin-monitor-user-cache-v1";
 
 function formatTime(value?: string) {
   const date = value ? new Date(value) : new Date();
@@ -158,6 +180,14 @@ function compactNumber(value: unknown) {
   return String(number || 0);
 }
 
+function countdownText(value: unknown) {
+  const seconds = Math.max(0, safeNumber(value));
+  if (seconds < 60) return `${seconds.toFixed(seconds < 20 ? 1 : 0)}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds - minutes * 60;
+  return `${minutes}分${rest.toFixed(1)}秒`;
+}
+
 function compactId(value: string) {
   if (!value) return "-";
   if (value.length <= 16) return value;
@@ -166,6 +196,135 @@ function compactId(value: string) {
 
 function moneyText(value: number) {
   return `¥${value.toFixed(2)}`;
+}
+
+function giftMoney(user: Pick<MonitorUserRow, "fanTicket">) {
+  return user.fanTicket / 10;
+}
+
+function giftTier(user: Pick<MonitorUserRow, "fanTicket" | "gifts">) {
+  if (user.gifts <= 0) return "";
+  const amount = giftMoney(user);
+  if (amount >= 1000) return "1000+";
+  if (amount >= 500) return "500+";
+  if (amount >= 100) return "100+";
+  return "";
+}
+
+function levelText(user: Pick<MonitorUserRow, "wealthLevel" | "consumeLevel">) {
+  const level = user.wealthLevel || user.consumeLevel;
+  return level ? `财富 ${level}` : "-";
+}
+
+function userLevelSummary(user: Pick<MonitorUserRow, "wealthLevel" | "consumeLevel" | "fansClubLevel" | "userLevel" | "badgeLevel">) {
+  const levels = [
+    user.wealthLevel || user.consumeLevel ? `财富${user.wealthLevel || user.consumeLevel}` : "",
+    user.fansClubLevel ? `粉丝团${user.fansClubLevel}` : "",
+    user.userLevel ? `用户${user.userLevel}` : "",
+    user.badgeLevel ? `徽章${user.badgeLevel}` : "",
+  ].filter(Boolean);
+  return levels.length ? levels.join(" / ") : "-";
+}
+
+function giftLabelFromPayload(payload: Record<string, unknown>) {
+  const giftName = safeText(payload.giftName) || safeText(payload.giftId);
+  if (!giftName) return "";
+  const count = giftCountFromPayload(payload);
+  return `${giftName} x${count}`;
+}
+
+function giftCountFromPayload(payload: Record<string, unknown>) {
+  return Math.max(1, safeNumber(payload.count));
+}
+
+function mergeGiftNames(...lists: string[][]) {
+  const totals = new Map<string, number>();
+  for (const list of lists) {
+    for (const item of list) {
+      const text = safeText(item);
+      if (!text) continue;
+      const match = text.match(/^(.*?)\s*x(\d+)$/i);
+      const name = (match?.[1] || text).trim();
+      const count = match?.[2] ? Number(match[2]) || 1 : 1;
+      totals.set(name, (totals.get(name) || 0) + count);
+    }
+  }
+  return Array.from(totals.entries()).map(([name, count]) => `${name} x${count}`);
+}
+
+function mergeRoomAppearances(...lists: MonitorRoomAppearance[][]) {
+  const rooms = new Map<string, MonitorRoomAppearance>();
+  for (const list of lists) {
+    for (const item of list) {
+      const roomId = safeText(item.roomId);
+      const anchorId = safeText(item.anchorId);
+      const roomLabel = safeText(item.roomLabel) || roomId || "抖音直播间";
+      if (!roomId && !anchorId && !roomLabel) continue;
+      const key = roomId || `${roomLabel}:${anchorId}`;
+      const previous = rooms.get(key);
+      rooms.set(key, {
+        roomLabel: roomLabel || previous?.roomLabel || "抖音直播间",
+        roomId: roomId || previous?.roomId || "",
+        anchorId: anchorId || previous?.anchorId || "",
+      });
+    }
+  }
+  return Array.from(rooms.values());
+}
+
+function roomAppearanceFromPayload(payload: Record<string, unknown>, fallbackUrl = ""): MonitorRoomAppearance {
+  const roomId = safeText(payload.roomId);
+  const title = safeText(payload.title);
+  const anchorId =
+    safeText(payload.ownerDouyinId) ||
+    safeText(payload.ownerUserId) ||
+    safeText(payload.ownerWebRid) ||
+    safeText(payload.ownerSecUid);
+  const roomLabel = [
+    title || fallbackUrl || "抖音直播间",
+    roomId ? `直播间ID ${roomId}` : "",
+  ].filter(Boolean).join(" / ");
+  return { roomLabel, roomId, anchorId };
+}
+
+function exportRoomAppearanceText(rooms: MonitorRoomAppearance[]) {
+  const labels = rooms
+    .map((room) => {
+      const label = safeText(room.roomLabel)
+        .replace(/\s*\/\s*直播间ID\s*\S+/g, "")
+        .replace(/直播间ID\s*\S+/g, "")
+        .replace(/https?:\/\/live\.douyin\.com\/\S+/g, "抖音直播间")
+        .trim();
+      return label || "抖音直播间";
+    })
+    .filter(Boolean);
+  const uniqueLabels = Array.from(new Set(labels));
+  return uniqueLabels.length ? uniqueLabels.join("；") : "-";
+}
+
+function roomAnchorIdsText(rooms: MonitorRoomAppearance[]) {
+  const ids = Array.from(new Set(rooms.map((room) => room.anchorId).filter(Boolean)));
+  return ids.length ? ids.join("；") : "-";
+}
+
+function collectAnchorIdsFromRoomInfoPayload(payload: Record<string, unknown>) {
+  return [
+    payload.ownerDouyinId,
+    payload.ownerUserId,
+    payload.ownerWebRid,
+    payload.ownerSecUid,
+    payload.uniqueId,
+    payload.userId,
+    payload.webRid,
+    payload.secUid,
+  ].map(safeText).filter(Boolean);
+}
+
+function userMatchesAnyId(user: MonitorUserRow, ids: Set<string>) {
+  if (ids.size === 0) return false;
+  return [user.douyinId, user.userId, user.secUid, user.webcastUid, user.key]
+    .map(safeText)
+    .some((id) => id && ids.has(id));
 }
 
 function scoreNumber(value: unknown) {
@@ -182,14 +341,16 @@ function scoreNumber(value: unknown) {
   return Math.round(base);
 }
 
-function scoreFromPayload(value: unknown): MonitorScoreRow | null {
+function scoreFromPayload(value: unknown, source = ""): MonitorScoreRow | null {
   if (!value || typeof value !== "object") return null;
   const payload = value as Record<string, unknown>;
   const anchorId =
     safeText(payload.anchorId) ||
     safeText(payload.anchorID) ||
+    safeText(payload.anchor_id) ||
     safeText(payload.userId) ||
     safeText(payload.userID) ||
+    safeText(payload.user_id) ||
     safeText(payload.openId);
   if (!anchorId || anchorId === "0") return null;
   const name =
@@ -197,25 +358,143 @@ function scoreFromPayload(value: unknown): MonitorScoreRow | null {
     safeText(payload.displayName) ||
     safeText(payload.nickname) ||
     safeText(payload.anchorName);
-  const scoreText =
+  const baseScoreText =
     safeText(payload.scoreText) ||
-    safeText(payload.score_str) ||
-    safeText(payload.multiPkTeamScoreText);
-  const score = scoreNumber(payload.score) || scoreNumber(scoreText) || scoreNumber(payload.multiPkTeamScore);
+    safeText(payload.score_str);
+  const teamScoreText = safeText(payload.multiPkTeamScoreText);
+  const teamScore = scoreNumber(payload.multiPkTeamScore) || scoreNumber(teamScoreText);
+  const baseScore = scoreNumber(payload.score) || scoreNumber(payload.hotScore) || scoreNumber(baseScoreText);
+  const score = teamScore || baseScore;
+  const scoreText = teamScoreText || (teamScore ? compactNumber(teamScore) : baseScoreText) || compactNumber(score);
   return {
     anchorId,
     name,
     score,
-    scoreText: scoreText || compactNumber(score),
+    scoreText,
+    scoreRelative: safeBoolean(payload.scoreRelative),
+    multiPkTeamScore: teamScore,
+    source: source || safeText(payload.rankSource) || safeText(payload.identitySource),
   };
 }
 
-function scoreSummary(scores: MonitorScoreRow[], limit = 4) {
+function scoreIdentityKey(score: MonitorScoreRow) {
+  const visibleName = displayScoreName(score).replace(/\s+/g, "");
+  if (visibleName && visibleName !== "未知用户") return `name:${visibleName}`;
+  return `id:${score.anchorId}`;
+}
+
+function dedupeScoreRows(rows: MonitorScoreRow[]) {
+  const scores = new Map<string, MonitorScoreRow>();
+  for (const row of rows) {
+    if (!hasEffectiveScore(row)) continue;
+    const key = scoreIdentityKey(row);
+    const previous = scores.get(key);
+    if (!previous || row.score >= previous.score) scores.set(key, row);
+  }
+  return Array.from(scores.values());
+}
+
+function sameScoreRows(a: MonitorScoreRow[], b: MonitorScoreRow[]) {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (
+      left.anchorId !== right.anchorId ||
+      left.name !== right.name ||
+      left.score !== right.score ||
+      left.scoreText !== right.scoreText ||
+      left.multiPkTeamScore !== right.multiPkTeamScore
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function scoreSummary(scores: MonitorScoreRow[], limit = 9) {
   if (scores.length === 0) return "暂无";
   return scores
     .slice(0, limit)
     .map((score) => `${score.name || compactId(score.anchorId)} ${score.scoreText || compactNumber(score.score)}`)
     .join(" / ");
+}
+
+function scorePointText(score: MonitorScoreRow) {
+  const value = score.scoreText || compactNumber(score.score);
+  if (!value) return "0分";
+  return /分|票|音浪/.test(value) ? value : `${value}分`;
+}
+
+function currentScoreSummary(scores: MonitorScoreRow[], limit = 9) {
+  if (scores.length === 0) return "暂无";
+  return scores
+    .slice(0, limit)
+    .map(scorePointText)
+    .join(" / ");
+}
+
+function roundScoreSummary(round?: MonitorRoundRow) {
+  if (!round || round.scores.length === 0) return "暂无";
+  return currentScoreSummary(round.scores);
+}
+
+function hasEffectiveScore(score: MonitorScoreRow) {
+  return score.score > 0 || scoreNumber(score.scoreText) > 0;
+}
+
+function mergeScoreRows(
+  current: MonitorScoreRow[],
+  next: MonitorScoreRow[],
+  replace = false
+) {
+  if (next.length === 0) return current;
+  if (replace) return dedupeScoreRows(next);
+  const scores = new Map(current.map((score) => [scoreIdentityKey(score), score]));
+  next.forEach((score) => scores.set(scoreIdentityKey(score), score));
+  return dedupeScoreRows(Array.from(scores.values()));
+}
+
+function scoreRowsFromEvent(payload: LivePkEventPayload, source = "") {
+  if (Array.isArray(payload.scores)) {
+    return dedupeScoreRows(payload.scores.map((score) => scoreFromPayload(score, source)).filter(Boolean) as MonitorScoreRow[]);
+  }
+  const score = scoreFromPayload(payload, source);
+  return score ? [score] : [];
+}
+
+function isAnchorScoreRankPayload(payload: LivePkRankPayload | Record<string, unknown>) {
+  return (
+    payload.interactionScoreStatus !== undefined ||
+    payload.interactionScoreAction !== undefined ||
+    safeText(payload.rankSource) === "interaction-score"
+  );
+}
+
+function scoreRowsFromRankPayload(payload: LivePkRankPayload) {
+  if (!isAnchorScoreRankPayload(payload)) return [];
+  return dedupeScoreRows(payload.ranks.map((rank) => scoreFromPayload(rank, "interaction-score")).filter(Boolean) as MonitorScoreRow[]);
+}
+
+function sameBattleId(a: string, b: string) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (!/^\d{16,}$/.test(a) || !/^\d{16,}$/.test(b)) return false;
+  if (a.slice(0, 12) !== b.slice(0, 12)) return false;
+  try {
+    const diff = BigInt(a) - BigInt(b);
+    return diff * diff <= BigInt(100000000);
+  } catch {
+    return false;
+  }
+}
+
+function preferBattleId(current: string, next: string) {
+  if (!next) return current;
+  if (!current) return next;
+  if (!sameBattleId(current, next)) return current;
+  if (/0{3,}$/.test(current) && !/0{3,}$/.test(next)) return next;
+  return current;
 }
 
 function monitorName(payload: {
@@ -232,14 +511,80 @@ function monitorName(payload: {
   return realName || displayName || "未知";
 }
 
+function looksMaskedName(value: string) {
+  const text = value.trim();
+  return !text || text === "未知" || /[*＊]/.test(text);
+}
+
+function looksGarbledName(value: string) {
+  const text = value.trim();
+  if (!text) return true;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) return true;
+  if (/[�ÃÂÐÑåäöøæ]/.test(text)) return true;
+  const letters = text.match(/[A-Za-z]/g)?.length || 0;
+  const oddLatin = text.match(/[À-ÿ]/g)?.length || 0;
+  return oddLatin > 0 && oddLatin + letters >= Math.max(2, text.length - 1);
+}
+
+function displayScoreName(score: MonitorScoreRow) {
+  const name = score.name.trim();
+  return looksGarbledName(name) || looksMaskedName(name) ? "" : name;
+}
+
+function realUserName(user: MonitorUserRow) {
+  const candidates = [user.realName, user.nickname, user.displayName]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return candidates.find((value) => !looksMaskedName(value) && !looksGarbledName(value)) || candidates[0] || "未知用户";
+}
+
+function visibleIdentitySource(source?: string) {
+  return (source || "")
+    .replace(/sec_uid|webcast_uid|protobuf_user_id|user_id/gi, "内部ID")
+    .replace(/内部ID(\.内部ID)+/g, "内部ID");
+}
+
+function hasInternalIdentity(user: Pick<MonitorUserRow, "userId" | "secUid" | "webcastUid">) {
+  const userId = user.userId.trim();
+  return Boolean(user.secUid || user.webcastUid || (userId && userId !== "111111"));
+}
+
+function logIdentityText(row: MonitorLogRow) {
+  const payload = row.payload as { uniqueId?: string } | undefined;
+  if (payload?.uniqueId) return payload.uniqueId;
+  return row.userId ? "已关联" : "-";
+}
+
+function identityStatus(user: MonitorUserRow) {
+  if (user.douyinId) return { label: "抖音号", tone: "default" as const };
+  if (hasInternalIdentity(user)) return { label: "已关联", tone: "secondary" as const };
+  return { label: "待补全", tone: "outline" as const };
+}
+
+function identityValue(user: MonitorUserRow) {
+  if (user.douyinId) return user.douyinId;
+  if (hasInternalIdentity(user)) return "内部记录";
+  return "-";
+}
+
+function userSourceText(user: MonitorUserRow) {
+  return visibleIdentitySource(user.identitySource) || (user.lastType === "chat" ? "弹幕" : user.lastType);
+}
+
+function userInteractionText(user: Pick<MonitorUserRow, "chats" | "gifts" | "members">) {
+  return `弹${user.chats} 礼${user.gifts} 进/离${user.members}`;
+}
+
 function userKey(payload: Partial<MonitorUserRow> & {
   uniqueId?: string;
+  webcastUid?: string;
 }) {
   return (
     payload.userId ||
     payload.secUid ||
     payload.uniqueId ||
     payload.douyinId ||
+    payload.webcastUid ||
     payload.realName ||
     payload.nickname ||
     payload.displayName ||
@@ -251,6 +596,7 @@ function hasStrongIdentity(payload: {
   userId?: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   douyinId?: string;
 }) {
   const userId = String(payload.userId || "").trim();
@@ -258,6 +604,7 @@ function hasStrongIdentity(payload: {
     payload.secUid ||
     payload.uniqueId ||
     payload.douyinId ||
+    payload.webcastUid ||
     (userId && userId !== "111111")
   );
 }
@@ -269,11 +616,13 @@ function identitySourceFor(type: MonitorLogType, payload: Record<string, unknown
     userId: safeText(payload.userId),
     secUid: safeText(payload.secUid),
     uniqueId: safeText(payload.uniqueId),
+    webcastUid: safeText(payload.webcastUid),
   })) {
     return "礼物消息";
   }
   if (safeText(payload.uniqueId)) return "抖音号字段";
   if (safeText(payload.secUid)) return "sec_uid";
+  if (safeText(payload.webcastUid)) return "webcast_uid";
   if (safeText(payload.userId)) return "用户ID";
   return "";
 }
@@ -289,11 +638,12 @@ function userFromPayload(
   const douyinId = safeText(payload.uniqueId);
   const userId = safeText(payload.userId);
   const secUid = safeText(payload.secUid);
-  const key = userKey({ userId, secUid, douyinId, realName, nickname, displayName });
+  const webcastUid = safeText(payload.webcastUid);
+  const key = userKey({ userId, secUid, douyinId, webcastUid, realName, nickname, displayName });
   if (!key || key === "未知") return null;
   const fanTicket = Number(payload.fanTicket || 0);
   const strongIdentity =
-    payload.hasStrongIdentity === true || hasStrongIdentity({ userId, secUid, douyinId });
+    payload.hasStrongIdentity === true || hasStrongIdentity({ userId, secUid, douyinId, webcastUid });
   return {
     key,
     nickname: monitorName({
@@ -307,6 +657,7 @@ function userFromPayload(
     douyinId,
     userId,
     secUid,
+    webcastUid,
     userLevel: Number(payload.userLevel || 0),
     badgeLevel: Number(payload.badgeLevel || 0),
     consumeLevel: Number(payload.consumeLevel || 0),
@@ -327,15 +678,18 @@ function userFromPayload(
     lastAt: at,
     lastType: type,
     chats: type === "chat" ? 1 : 0,
-    gifts: type === "gift" ? 1 : 0,
+    gifts: type === "gift" ? giftCountFromPayload(payload) : 0,
+    giftNames: type === "gift" ? [giftLabelFromPayload(payload)].filter(Boolean) : [],
     members: type === "member" ? 1 : 0,
     fanTicket,
+    roomAppearances: [],
   };
 }
 
 function mergeUserRow(previous: MonitorUserRow | undefined, next: MonitorUserRow) {
   if (!previous) return next;
   const prefer = (a: string, b: string) => a || b;
+  const nextHasInteraction = next.chats > 0 || next.gifts > 0 || next.members > 0 || next.fanTicket > 0;
   return {
     ...previous,
     nickname: prefer(next.nickname !== "未知" ? next.nickname : "", previous.nickname) || "未知",
@@ -344,6 +698,7 @@ function mergeUserRow(previous: MonitorUserRow | undefined, next: MonitorUserRow
     douyinId: prefer(next.douyinId, previous.douyinId),
     userId: prefer(next.userId, previous.userId),
     secUid: prefer(next.secUid, previous.secUid),
+    webcastUid: prefer(next.webcastUid, previous.webcastUid),
     userLevel: Math.max(previous.userLevel, next.userLevel),
     badgeLevel: Math.max(previous.badgeLevel, next.badgeLevel),
     consumeLevel: Math.max(previous.consumeLevel, next.consumeLevel),
@@ -365,12 +720,143 @@ function mergeUserRow(previous: MonitorUserRow | undefined, next: MonitorUserRow
     hasStrongIdentity: previous.hasStrongIdentity || next.hasStrongIdentity,
     identitySource: prefer(next.identitySource, previous.identitySource),
     lastAt: next.lastAt || previous.lastAt,
-    lastType: next.lastType || previous.lastType,
+    lastType: nextHasInteraction ? next.lastType || previous.lastType : previous.lastType,
     chats: previous.chats + next.chats,
     gifts: previous.gifts + next.gifts,
+    giftNames: mergeGiftNames(previous.giftNames, next.giftNames),
     members: previous.members + next.members,
     fanTicket: previous.fanTicket + next.fanTicket,
+    roomAppearances: mergeRoomAppearances(previous.roomAppearances, next.roomAppearances),
   };
+}
+
+function userWithRoom(user: MonitorUserRow, room: MonitorRoomAppearance | null) {
+  if (!room) return user;
+  return {
+    ...user,
+    roomAppearances: mergeRoomAppearances(user.roomAppearances, [room]),
+  };
+}
+
+function hasCachedUserActivity(user: Pick<MonitorUserRow, "chats" | "gifts" | "members" | "fanTicket" | "giftNames">) {
+  return (
+    safeNumber(user.chats) > 0 ||
+    safeNumber(user.gifts) > 0 ||
+    safeNumber(user.members) > 0 ||
+    safeNumber(user.fanTicket) > 0 ||
+    user.giftNames.length > 0
+  );
+}
+
+function normalizeCachedUser(value: unknown): MonitorUserRow | null {
+  if (!value || typeof value !== "object") return null;
+  const user = value as Partial<MonitorUserRow>;
+  const douyinId = safeText(user.douyinId);
+  if (!douyinId) return null;
+  const cachedGifts = safeNumber(user.gifts);
+  const cachedGiftNames = Array.isArray(user.giftNames) ? user.giftNames.map(safeText).filter(Boolean) : [];
+  if (!hasCachedUserActivity({
+    chats: safeNumber(user.chats),
+    gifts: cachedGifts,
+    members: safeNumber(user.members),
+    fanTicket: safeNumber(user.fanTicket),
+    giftNames: cachedGiftNames,
+  })) return null;
+  return {
+    key: safeText(user.key) || douyinId,
+    nickname: safeText(user.nickname),
+    displayName: safeText(user.displayName),
+    realName: safeText(user.realName),
+    douyinId,
+    userId: safeText(user.userId),
+    secUid: safeText(user.secUid),
+    webcastUid: safeText(user.webcastUid),
+    userLevel: safeNumber(user.userLevel),
+    badgeLevel: safeNumber(user.badgeLevel),
+    consumeLevel: safeNumber(user.consumeLevel),
+    wealthLevel: safeNumber(user.wealthLevel),
+    fansClubLevel: safeNumber(user.fansClubLevel),
+    honorLevel: safeNumber(user.honorLevel),
+    payScore: safeNumber(user.payScore),
+    fanTicketCount: safeNumber(user.fanTicketCount),
+    totalRechargeDiamondCount: safeNumber(user.totalRechargeDiamondCount),
+    gender: safeNumber(user.gender),
+    followStatus: safeNumber(user.followStatus),
+    ipLocation: safeText(user.ipLocation),
+    followerCount: safeNumber(user.followerCount),
+    isMystery: Boolean(user.isMystery),
+    cacheHit: Boolean(user.cacheHit),
+    hasStrongIdentity: true,
+    identitySource: safeText(user.identitySource) || "本地缓存",
+    lastAt: safeText(user.lastAt),
+    lastType: (safeText(user.lastType) as MonitorLogType) || "event",
+    chats: safeNumber(user.chats),
+    gifts: safeNumber(user.gifts),
+    giftNames: cachedGiftNames,
+    members: safeNumber(user.members),
+    fanTicket: safeNumber(user.fanTicket),
+    roomAppearances: Array.isArray(user.roomAppearances)
+      ? mergeRoomAppearances(user.roomAppearances)
+      : [],
+  };
+}
+
+function loadCachedMonitorUsers() {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(USER_CACHE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeCachedUser).filter(Boolean) as MonitorUserRow[];
+  } catch {
+    return [];
+  }
+}
+
+function userAliasKeys(user: MonitorUserRow) {
+  return [
+    user.douyinId,
+    user.userId,
+    user.secUid,
+    user.webcastUid,
+    user.key,
+    user.realName,
+    user.nickname,
+    user.displayName,
+  ].filter(Boolean);
+}
+
+function hasAnyUserAlias(user: MonitorUserRow, aliases: Set<string>) {
+  return userAliasKeys(user).some((key) => aliases.has(key));
+}
+
+function mergeUserCollection(users: MonitorUserRow[]) {
+  const merged = new Map<string, MonitorUserRow>();
+  const aliases = new Map<string, string>();
+  for (const user of users) {
+    const aliasKeys = userAliasKeys(user);
+    const existingKey = aliasKeys.map((key) => aliases.get(key)).find(Boolean);
+    const canonicalKey = existingKey || user.douyinId || user.secUid || user.userId || user.webcastUid || user.key;
+    const mergedUser = mergeUserRow(merged.get(canonicalKey), { ...user, key: canonicalKey });
+    merged.set(canonicalKey, mergedUser);
+    for (const key of userAliasKeys(mergedUser)) aliases.set(key, canonicalKey);
+  }
+  return Array.from(merged.values());
+}
+
+function sortMonitorUsers(users: MonitorUserRow[]) {
+  return [...users].sort((a, b) => {
+    if (Boolean(a.douyinId) !== Boolean(b.douyinId)) return a.douyinId ? -1 : 1;
+    if (a.hasStrongIdentity !== b.hasStrongIdentity) return a.hasStrongIdentity ? -1 : 1;
+    const timeDelta = new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
+    if (timeDelta) return timeDelta;
+    return b.fanTicket - a.fanTicket;
+  });
+}
+
+function sameCachedUsers(left: MonitorUserRow[], right: MonitorUserRow[]) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function collectUsersFromLog(row: MonitorLogRow) {
@@ -384,7 +870,7 @@ function collectUsersFromLog(row: MonitorLogRow) {
 
   if (row.type === "gift") {
     push(payload, "gift");
-    return users.filter((user) => user.hasStrongIdentity);
+    return users;
   }
 
   push(payload);
@@ -393,7 +879,12 @@ function collectUsersFromLog(row: MonitorLogRow) {
   push(payload.toUser, "event");
   if (Array.isArray(payload.ranks)) payload.ranks.forEach((item) => push(item, "rank"));
   if (Array.isArray(payload.seats)) payload.seats.forEach((item) => push(item, "event"));
-  return users.filter((user) => user.hasStrongIdentity);
+  return users;
+}
+
+function isProfileEnrichmentLog(row: MonitorLogRow) {
+  const payload = row.payload as Record<string, unknown>;
+  return row.type === "event" && payload.eventType === "user-profile";
 }
 
 function identityDetail(payload: {
@@ -402,6 +893,7 @@ function identityDetail(payload: {
   userId?: string;
   secUid?: string;
   uniqueId?: string;
+  webcastUid?: string;
   isMystery?: boolean;
   mysteryMan?: number;
   userLevel?: number;
@@ -424,19 +916,23 @@ function identityDetail(payload: {
     parts.push(`${payload.displayName} -> ${payload.realName}`);
   }
   if (payload.uniqueId) parts.push(`抖音号:${payload.uniqueId}`);
-  if (payload.userId) parts.push(`user_id:${payload.userId}`);
-  if (payload.secUid) parts.push(`sec:${payload.secUid.slice(0, 12)}...`);
-  if (payload.userLevel) parts.push(`用户等级:${payload.userLevel}`);
-  if (payload.wealthLevel || payload.consumeLevel || payload.honorLevel) {
-    parts.push(`财富/荣誉:${payload.wealthLevel || payload.consumeLevel || payload.honorLevel}`);
+  if (payload.wealthLevel || payload.consumeLevel) {
+    parts.push(`财富等级:${payload.wealthLevel || payload.consumeLevel}`);
   }
-  if (payload.fansClubLevel || payload.badgeLevel) parts.push(`粉丝团:${payload.fansClubLevel || payload.badgeLevel}`);
   if (payload.payScore) parts.push(`付费分:${payload.payScore}`);
   if (payload.totalRechargeDiamondCount) parts.push(`充值钻石:${payload.totalRechargeDiamondCount}`);
   if (payload.fanTicketCount) parts.push(`粉丝票:${payload.fanTicketCount}`);
   if (payload.ipLocation) parts.push(`IP:${payload.ipLocation}`);
   if (payload.followerCount) parts.push(`粉丝:${payload.followerCount}`);
   return parts.join(" / ");
+}
+
+function memberActionLabel(payload: Pick<LivePkMemberPayload, "memberAction" | "memberActionText" | "actionDescription">) {
+  const text = safeText(payload.memberActionText) || safeText(payload.actionDescription);
+  if (text) return text;
+  if (payload.memberAction === 2) return "离场";
+  if (payload.memberAction === 1 || payload.memberAction === undefined) return "进场";
+  return `动作 ${payload.memberAction}`;
 }
 
 function eventLabel(eventType: string) {
@@ -465,6 +961,7 @@ function eventLabel(eventType: string) {
     "audience-rank": "观众榜",
     "wish-list": "心愿单",
     "interaction-info": "互动配置",
+    "user-profile": "资料补齐",
   };
   return labels[eventType] || eventType || "事件";
 }
@@ -472,11 +969,8 @@ function eventLabel(eventType: string) {
 function eventValue(payload: LivePkEventPayload) {
   const likeCount = safeNumber(payload.likeCount);
   const paidCount = safeNumber(payload.paidCount);
-  const scores = Array.isArray(payload.scores) ? payload.scores as Record<string, unknown>[] : [];
   if (payload.eventType === "live-mode") return safeText(payload.liveModeLabel) || safeText(payload.liveMode);
-  if ((payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot") && scores.length > 0) {
-    return scores.map((score) => safeText(score.scoreText) || String(safeNumber(score.score))).join(" : ");
-  }
+  if (payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot" || payload.eventType === "linkmic-score") return "";
   if (typeof payload.displayValue === "number" && payload.displayValue > 0) return String(payload.displayValue);
   if (typeof payload.totalUser === "number" && payload.totalUser > 0) return String(payload.totalUser);
   if (typeof payload.hotScore === "number" && payload.hotScore > 0) return String(payload.hotScore);
@@ -496,17 +990,7 @@ function eventDetail(payload: LivePkEventPayload) {
   const wishSwitch = safeNumber(payload.wishSwitch);
   const likeIconCount = safeNumber(payload.likeIconCount);
   const frequentlyChatCount = safeNumber(payload.frequentlyChatCount);
-  const scores = Array.isArray(payload.scores) ? payload.scores as Record<string, unknown>[] : [];
   const participants = Array.isArray(payload.participants) ? payload.participants as Record<string, unknown>[] : [];
-  const scoreText = scores
-    .map((score) => {
-      const name = safeText(score.realName) || safeText(score.displayName) || safeText(score.nickname) || safeText(score.anchorId);
-      const id = safeText(score.anchorId) || safeText(score.userId);
-      const value = safeText(score.scoreText) || String(safeNumber(score.score));
-      return [name, id ? `(${id})` : "", value].filter(Boolean).join(" ");
-    })
-    .filter(Boolean)
-    .join(" / ");
   const participantText = participants
     .slice(0, 6)
     .map((item) => safeText(item.realName) || safeText(item.displayName) || safeText(item.nickname) || safeText(item.userId))
@@ -544,7 +1028,6 @@ function eventDetail(payload: LivePkEventPayload) {
           ? [
               payload.isPkActive ? "PK中" : "非PK中",
               payload.participantCount ? `${safeText(payload.participantCount)}方` : "",
-              scoreText,
               payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
               payload.duration ? `${safeText(payload.duration)}秒` : "",
               safeText(payload.battleId),
@@ -553,8 +1036,7 @@ function eventDetail(payload: LivePkEventPayload) {
           ? [
               payload.isPkActive ? "PK中" : "非PK中",
               payload.participantCount ? `${safeText(payload.participantCount)}方` : "",
-              payload.pkCountDown !== undefined ? `倒计时 ${safeText(payload.pkCountDown)}秒` : "",
-              scoreText,
+              payload.pkCountDown !== undefined ? `倒计时 ${countdownText(payload.pkCountDown)}` : "",
               payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
               safeText(payload.battleId),
             ].filter(Boolean).join(" / ")
@@ -589,7 +1071,6 @@ function eventDetail(payload: LivePkEventPayload) {
               ].filter(Boolean).join(" / ")
             : payload.eventType === "linkmic-score"
               ? [
-                  payload.hotScore ? `热度分 ${payload.hotScore}` : "",
                   payload.scoreSource !== undefined ? `来源 ${safeText(payload.scoreSource)}` : "",
                   safeText(payload.extra),
                 ].filter(Boolean).join(" / ")
@@ -633,7 +1114,7 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
+function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = []): MonitorLiveState {
   const scores = new Map<string, MonitorScoreRow>();
   const rounds: MonitorRoundRow[] = [];
   let round = 0;
@@ -643,6 +1124,7 @@ function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
   let isPkActive = false;
   let isLinkmic = false;
   let participantCount = 0;
+  let hasLiveParticipantCount = false;
   let channelId = "";
   let countdown = 0;
   let phase = "";
@@ -650,11 +1132,15 @@ function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
 
   const ensureRound = (battleId: string, forceNew = false) => {
     const nextBattleId = battleId || currentBattleId || `round-${round || 1}`;
-    if (forceNew || round === 0 || (battleId && battleId !== currentBattleId)) {
+    const isSameBattle = battleId && sameBattleId(battleId, currentBattleId);
+    if (forceNew || round === 0 || (battleId && currentBattleId && !isSameBattle)) {
       round = round + 1;
       currentBattleId = nextBattleId;
       scores.clear();
       rounds.push({ round, battleId: nextBattleId, scores: [] });
+    } else if (battleId) {
+      currentBattleId = preferBattleId(currentBattleId, battleId);
+      if (round > 0) rounds[rounds.length - 1] = { ...rounds[rounds.length - 1], battleId: currentBattleId };
     }
   };
 
@@ -667,54 +1153,70 @@ function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
     };
   };
 
+  const applyScores = (nextScores: MonitorScoreRow[], replace: boolean) => {
+    if (nextScores.length === 0) return;
+    if (replace) scores.clear();
+    nextScores.forEach((score) => scores.set(score.anchorId, score));
+    participantCount = Math.max(participantCount, scores.size);
+    snapshotRound();
+  };
+
   for (const row of logs.slice().reverse()) {
     const payload = row.payload as Record<string, unknown>;
     if (row.type === "event") {
       const eventType = safeText(payload.eventType);
-      if (eventType === "room-info" || eventType === "live-mode" || eventType === "pk-battle" || eventType === "pk-score-snapshot") {
+      if (eventType === "room-info" || eventType === "live-mode" || eventType === "pk-battle" || eventType === "pk-score-snapshot" || eventType === "linkmic-score") {
         const nextMode = safeText(payload.liveMode);
+        const hasPkActive = Object.prototype.hasOwnProperty.call(payload, "isPkActive");
+        const nextPkActive = hasPkActive ? safeBoolean(payload.isPkActive) : nextMode === "pk";
         if (nextMode) mode = nextMode;
-        modeLabel = safeText(payload.liveModeLabel) || eventLabel(eventType);
-        isPkActive = safeBoolean(payload.isPkActive) || mode === "pk" || isPkActive;
-        isLinkmic = mode === "linkmic" || mode === "pk" || isPkActive || isLinkmic;
-        participantCount = Math.max(participantCount, safeNumber(payload.participantCount));
+        if (nextMode || hasPkActive) {
+          isPkActive = nextPkActive || mode === "pk";
+          isLinkmic = !isPkActive && mode === "linkmic";
+          modeLabel = liveModeStatusText({ mode, modeLabel, isPkActive, isLinkmic });
+        } else if (safeText(payload.liveModeLabel)) {
+          modeLabel = safeText(payload.liveModeLabel);
+        }
+        if (payload.participantCount !== undefined) {
+          participantCount = safeNumber(payload.participantCount);
+          hasLiveParticipantCount = true;
+        }
         channelId = safeText(payload.channelId) || channelId;
-        countdown = Math.max(0, safeNumber(payload.pkCountDown) || countdown);
+        if (payload.pkCountDown !== undefined) {
+          countdown = Math.max(0, safeNumber(payload.pkCountDown));
+        }
         phase = safeText(payload.battlePhase) || phase;
         updatedAt = row.at || updatedAt;
       }
 
       if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
         const battleId = safeText(payload.battleId);
-        ensureRound(battleId, Boolean(battleId && battleId !== currentBattleId));
-        const nextScores = Array.isArray(payload.scores)
-          ? payload.scores.map(scoreFromPayload).filter(Boolean) as MonitorScoreRow[]
-          : [];
-        if (nextScores.length > 0) {
-          scores.clear();
-          nextScores.forEach((score) => scores.set(score.anchorId, score));
-          snapshotRound();
-        }
+        ensureRound(battleId, Boolean(battleId && currentBattleId && !sameBattleId(battleId, currentBattleId)));
+        const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType);
+        applyScores(nextScores, true);
       }
     }
 
     if (row.type === "rank") {
-      const rankScore = scoreFromPayload(payload.rank || payload);
-      if (rankScore) {
+      if (isAnchorScoreRankPayload(payload)) {
         ensureRound(safeText(payload.battleId));
-        scores.set(rankScore.anchorId, rankScore);
-        participantCount = Math.max(participantCount, scores.size);
+        const nextScores = Array.isArray(payload.ranks)
+          ? dedupeScoreRows(payload.ranks.map((rank) => scoreFromPayload(rank, "interaction-score")).filter(Boolean) as MonitorScoreRow[])
+          : [];
+        applyScores(nextScores, false);
         updatedAt = row.at || updatedAt;
-        snapshotRound();
       }
     }
+
   }
 
-  const currentScores = Array.from(scores.values());
-  participantCount = Math.max(participantCount, currentScores.length);
-  if (isPkActive) modeLabel = "PK";
-  else if (isLinkmic) modeLabel = modeLabel === "未知" ? "连麦" : modeLabel;
-  else if (mode === "single") modeLabel = "单人";
+  const currentScores = liveScores.length > 0 ? liveScores : Array.from(scores.values());
+  if (!hasLiveParticipantCount) {
+    participantCount = Math.max(participantCount, currentScores.length);
+  } else if (liveScores.length > 0) {
+    participantCount = Math.max(participantCount, liveScores.length);
+  }
+  modeLabel = liveModeStatusText({ mode, modeLabel, isPkActive, isLinkmic });
 
   return {
     mode,
@@ -732,48 +1234,62 @@ function buildLiveState(logs: MonitorLogRow[]): MonitorLiveState {
   };
 }
 
+function liveModeStatusText({
+  mode,
+  modeLabel,
+  isPkActive,
+  isLinkmic,
+}: Pick<MonitorLiveState, "mode" | "modeLabel" | "isPkActive" | "isLinkmic">) {
+  if (isPkActive || mode === "pk") return "PK";
+  if (isLinkmic || mode === "linkmic") return "连麦";
+  if (mode === "single" || mode === "normal" || mode === "unknown" || modeLabel === "未知") return "正常";
+  return modeLabel || "正常";
+}
+
 function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
   const payload = row.payload as Record<string, unknown>;
+  const visibleIdentity = logIdentityText(row);
+  const identity = visibleIdentity && visibleIdentity !== "-" && visibleIdentity !== "已关联"
+    ? ` (${visibleIdentity})`
+    : "";
   if (row.type === "gift") {
     const gift = payload as unknown as LivePkGiftPayload;
     const rmb = safeNumber(gift.diamondCount) * safeNumber(gift.count) / 10;
     return [
-      `${row.name} 送出 ${gift.giftName || "礼物"} x${gift.count || 1}`,
+      `${row.name}${identity} 送出 ${gift.giftName || "礼物"} x${gift.count || 1}`,
       rmb ? moneyText(rmb) : "",
       gift.fanTicket ? `音浪 ${compactNumber(gift.fanTicket)}` : "",
-      liveState.scores.length ? `分数 ${scoreSummary(liveState.scores, 2)}` : "",
     ].filter(Boolean).join(" · ");
   }
   if (row.type === "chat") {
     const chat = payload as unknown as LivePkChatPayload;
-    return [
-      `${row.name}: ${chat.content || row.detail}`,
-      liveState.scores.length ? `分数 ${scoreSummary(liveState.scores, 2)}` : "",
-    ].filter(Boolean).join(" · ");
+    return `${row.name}${identity}: ${chat.content || row.detail}`;
   }
-  if (row.type === "rank") {
-    const rank = (payload.rank || payload) as Record<string, unknown>;
-    const score = scoreFromPayload(rank);
-    return score
-      ? `主播ID ${compactId(score.anchorId)} · ${score.name || "主播"} · 分数 ${score.scoreText || compactNumber(score.score)}`
+    if (row.type === "rank") {
+      const rank = (payload.rank || payload) as Record<string, unknown>;
+      const score = scoreFromPayload(rank);
+      return score
+      ? `主播ID ${compactId(score.anchorId)} · ${score.name || "主播"}`
       : row.detail;
-  }
+    }
   if (row.type === "event") {
     const eventType = safeText(payload.eventType);
     if (eventType === "live-mode") {
-      return `${safeText(payload.liveModeLabel) || liveState.modeLabel} · PK ${safeBoolean(payload.isPkActive) ? "是" : "否"} · 连麦 ${liveState.isLinkmic ? "是" : "否"} · ${safeNumber(payload.participantCount) || liveState.participantCount}人`;
+      return `${liveState.modeLabel} · ${safeNumber(payload.participantCount) || liveState.participantCount}人`;
     }
     if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
       const eventScores = Array.isArray(payload.scores)
-        ? payload.scores.map(scoreFromPayload).filter(Boolean) as MonitorScoreRow[]
+        ? scoreRowsFromEvent(payload as LivePkEventPayload, eventType)
         : liveState.scores;
-      return `PK ${safeBoolean(payload.isPkActive) ? "进行中" : "未开始"} · ${safeNumber(payload.participantCount) || eventScores.length}人 · ${scoreSummary(eventScores)}`;
+      return `PK ${safeBoolean(payload.isPkActive) ? "进行中" : "未开始"} · ${safeNumber(payload.participantCount) || eventScores.length}人`;
     }
   }
   return row.detail;
 }
 
 export function DouyinMonitorPage() {
+  const previewRef = useRef<HTMLDivElement>(null);
+  const previewStageRef = useRef<HTMLDivElement>(null);
   const [liveRoomUrl, setLiveRoomUrl] = useState("");
   const [cookie, setCookie] = useState("");
   const [status, setStatus] = useState<LivePkMonitorStatus>({
@@ -784,17 +1300,93 @@ export function DouyinMonitorPage() {
   });
   const [message, setMessage] = useState("");
   const [logs, setLogs] = useState<MonitorLogRow[]>([]);
+  const [cachedUsers, setCachedUsers] = useState<MonitorUserRow[]>(loadCachedMonitorUsers);
   const [filter, setFilter] = useState<MonitorFilter>("all");
   const [busy, setBusy] = useState(false);
+  const [liveScores, setLiveScores] = useState<MonitorScoreRow[]>([]);
+  const liveScoresRef = useRef<MonitorScoreRow[]>([]);
+  const [liveCountdownMs, setLiveCountdownMs] = useState(0);
+  const countdownEndAtRef = useRef<number | null>(null);
+  const countdownSourceMsRef = useRef<number | null>(null);
   const [cookieSaved, setCookieSaved] = useState(false);
   const [cookieUpdatedAt, setCookieUpdatedAt] = useState<string | null>(null);
+  const [showCookiePanel, setShowCookiePanel] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [embeddedState, setEmbeddedState] = useState<LivePkEmbeddedState>({
+    embedded: false,
+    liveRoomUrl: "",
+  });
+  const [previewFrame, setPreviewFrame] = useState({ x: 24, y: 128, width: 460, height: 680 });
+
+  const syncPreviewBounds = useCallback(async () => {
+    const api = getDataApi();
+    const stage = previewStageRef.current;
+    if (!api?.setLivePkEmbeddedBounds || !stage || !previewOpen) return;
+    const rect = stage.getBoundingClientRect();
+    const bounds: LivePkEmbeddedBounds = {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
+    await api.setLivePkEmbeddedBounds(bounds);
+  }, [previewOpen]);
 
   const appendRows = useCallback((rows: Omit<MonitorLogRow, "id">[]) => {
     if (rows.length === 0) return;
     setLogs((prev) => [
       ...rows.map((row) => ({ ...row, id: makeId(row.type) })),
       ...prev,
-    ].slice(0, 2000));
+    ].slice(0, 800));
+  }, []);
+
+  const clearLiveScores = useCallback(() => {
+    liveScoresRef.current = [];
+    setLiveScores([]);
+  }, []);
+
+  const commitLiveScores = useCallback((updater: (current: MonitorScoreRow[]) => MonitorScoreRow[]) => {
+    const nextScores = updater(liveScoresRef.current);
+    if (nextScores === liveScoresRef.current || sameScoreRows(liveScoresRef.current, nextScores)) return;
+    liveScoresRef.current = nextScores;
+    setLiveScores(nextScores);
+  }, []);
+
+  const clearLiveCountdown = useCallback(() => {
+    countdownEndAtRef.current = null;
+    countdownSourceMsRef.current = null;
+    setLiveCountdownMs(0);
+  }, []);
+
+  const syncLiveCountdown = useCallback((payload: LivePkEventPayload) => {
+    if (payload.pkCountDown === undefined) return;
+    const nextMs = Math.max(0, safeNumber(payload.pkCountDown) * 1000);
+    if (nextMs <= 0 || (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && !safeBoolean(payload.isPkActive))) {
+      clearLiveCountdown();
+      return;
+    }
+    const now = performance.now();
+    const currentMs = countdownEndAtRef.current === null
+      ? 0
+      : Math.max(0, countdownEndAtRef.current - now);
+    if (countdownSourceMsRef.current === nextMs && currentMs > 0) return;
+    countdownSourceMsRef.current = nextMs;
+    countdownEndAtRef.current = now + nextMs;
+    setLiveCountdownMs(nextMs);
+  }, [clearLiveCountdown]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const endAt = countdownEndAtRef.current;
+      if (endAt === null) return;
+      const nextMs = Math.max(0, endAt - performance.now());
+      setLiveCountdownMs((current) => (Math.abs(current - nextMs) < 40 ? current : nextMs));
+      if (nextMs <= 0) {
+        countdownEndAtRef.current = null;
+        countdownSourceMsRef.current = null;
+      }
+    }, 100);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -802,6 +1394,10 @@ export function DouyinMonitorPage() {
     if (!api) return;
     const offStatus = api.onLivePkStatus((next) => {
       setStatus(next);
+      if (next.status !== "running") {
+        clearLiveScores();
+        clearLiveCountdown();
+      }
       appendRows([{
         at: formatTime(),
         type: "status",
@@ -839,6 +1435,10 @@ export function DouyinMonitorPage() {
         payload: { message: next },
       }]);
     }) ?? (() => undefined);
+    const offEmbedded = api.onLivePkEmbeddedState?.((payload) => {
+      setEmbeddedState(payload);
+      if (!payload.embedded) setPreviewOpen(false);
+    }) ?? (() => undefined);
     const offGift = api.onLivePkGift?.((payload: LivePkGiftPayload) => {
       const giftDetail = [
         identityDetail(payload),
@@ -858,7 +1458,7 @@ export function DouyinMonitorPage() {
         type: "gift",
         label: "礼物",
         name: monitorName(payload),
-        userId: payload.uniqueId || payload.userId || payload.secUid || "",
+        userId: payload.uniqueId || "",
         value: String(payload.fanTicket || ""),
         detail: giftDetail,
         payload,
@@ -870,51 +1470,48 @@ export function DouyinMonitorPage() {
         type: "chat",
         label: "弹幕",
         name: monitorName(payload),
-        userId: payload.uniqueId || payload.userId || payload.secUid || "",
+        userId: payload.uniqueId || "",
         value: "",
         detail: [identityDetail(payload), payload.content].filter(Boolean).join(" / "),
         payload,
       }]);
     }) ?? (() => undefined);
     const offMember = api.onLivePkMember?.((payload: LivePkMemberPayload) => {
+      const actionLabel = memberActionLabel(payload);
       appendRows([{
         at: formatTime(payload.at),
         type: "member",
-        label: "进场",
+        label: actionLabel,
         name: monitorName(payload),
-        userId: payload.uniqueId || payload.userId || payload.secUid || "",
+        userId: payload.uniqueId || "",
         value: payload.memberCount ? String(payload.memberCount) : "",
-        detail: identityDetail(payload),
+        detail: [identityDetail(payload), actionLabel !== "进场" ? actionLabel : ""].filter(Boolean).join(" / "),
         payload,
       }]);
     }) ?? (() => undefined);
     const offRank = api.onLivePkRank?.((payload: LivePkRankPayload) => {
-      const rows = payload.ranks.slice(0, 20).map((rank) => ({
-        at: formatTime(payload.at),
-        type: "rank" as const,
-        label: "分数",
-        name: monitorName(rank),
-        userId: rank.uniqueId || rank.userId || rank.secUid || "",
-        value: String(rank.score || ""),
-        detail: [
-          payload.rankSource || rank.rankSource ? `来源 ${payload.rankSource || rank.rankSource}` : "",
-          rank.rank ? `第${rank.rank}` : "",
-          identityDetail(rank),
-          rank.scoreText,
-        ].filter(Boolean).join(" / "),
-        payload: { ...payload, rank },
-      }));
-      appendRows(rows);
+      const nextScores = scoreRowsFromRankPayload(payload);
+      commitLiveScores((current) => mergeScoreRows(current, nextScores, true));
     }) ?? (() => undefined);
     const offEvent = api.onLivePkEvent?.((payload: LivePkEventPayload) => {
+      syncLiveCountdown(payload);
+      if (payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot") {
+        if (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && !safeBoolean(payload.isPkActive)) {
+          clearLiveScores();
+          clearLiveCountdown();
+        } else {
+          commitLiveScores((current) => mergeScoreRows(current, scoreRowsFromEvent(payload, payload.eventType), true));
+        }
+      }
+      if (payload.eventType === "pk-score-snapshot" || payload.eventType === "linkmic-score") return;
       appendRows([{
         at: formatTime(payload.at),
         type: "event",
         label: eventLabel(payload.eventType),
-        name: payload.uniqueId || payload.userId || payload.secUid
+        name: payload.uniqueId || payload.userId || payload.secUid || payload.webcastUid
           ? monitorName(payload)
           : eventLabel(payload.eventType),
-        userId: payload.uniqueId || payload.userId || payload.secUid || "",
+        userId: payload.uniqueId || "",
         value: eventValue(payload),
         detail: eventDetail(payload),
         payload,
@@ -932,8 +1529,21 @@ export function DouyinMonitorPage() {
       offMember();
       offRank();
       offEvent();
+      offEmbedded();
     };
-  }, [appendRows]);
+  }, [appendRows, clearLiveCountdown, clearLiveScores, commitLiveScores, syncLiveCountdown]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    void syncPreviewBounds();
+  }, [previewFrame, previewOpen, syncPreviewBounds]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    const onResize = () => void syncPreviewBounds();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [previewOpen, syncPreviewBounds]);
 
   useEffect(() => {
     const api = getDataApi();
@@ -952,35 +1562,73 @@ export function DouyinMonitorPage() {
     };
   }, []);
 
-  const userRows = useMemo(() => {
-    const merged = new Map<string, MonitorUserRow>();
-    const aliases = new Map<string, string>();
-    const keysFor = (user: MonitorUserRow) => [
-      user.key,
-      user.userId,
-      user.secUid,
-      user.douyinId,
-      user.realName,
-      user.nickname,
-      user.displayName,
-    ].filter(Boolean);
+  const currentLogUsers = useMemo(() => {
+    const users: MonitorUserRow[] = [];
+    const profileUsers: MonitorUserRow[] = [];
+    const anchorIds = new Set<string>();
+    let currentRoom: MonitorRoomAppearance | null = null;
     for (const row of logs.slice().reverse()) {
+      const payload = row.payload as Record<string, unknown>;
+      if (row.type === "event" && payload.eventType === "room-info") {
+        currentRoom = roomAppearanceFromPayload(payload, liveRoomUrl);
+        collectAnchorIdsFromRoomInfoPayload(payload).forEach((id) => anchorIds.add(id));
+      }
       for (const user of collectUsersFromLog(row)) {
-        const aliasKeys = keysFor(user);
-        const existingKey = aliasKeys.map((key) => aliases.get(key)).find(Boolean);
-        const canonicalKey = existingKey || user.secUid || user.userId || user.douyinId || user.key;
-        const mergedUser = mergeUserRow(merged.get(canonicalKey), { ...user, key: canonicalKey });
-        merged.set(canonicalKey, mergedUser);
-        for (const key of keysFor(mergedUser)) aliases.set(key, canonicalKey);
+        const rowUser = userWithRoom(user, currentRoom);
+        if (isProfileEnrichmentLog(row)) {
+          profileUsers.push(rowUser);
+        } else {
+          users.push(rowUser);
+        }
       }
     }
-    return Array.from(merged.values()).sort((a, b) => {
-      if (a.hasStrongIdentity !== b.hasStrongIdentity) return a.hasStrongIdentity ? -1 : 1;
-      const timeDelta = new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
-      if (timeDelta) return timeDelta;
-      return b.fanTicket - a.fanTicket;
-    });
+    const activityUsers = mergeUserCollection(users);
+    const activityAliases = new Set(activityUsers.flatMap(userAliasKeys));
+    const matchedProfileUsers = profileUsers.filter((user) => hasAnyUserAlias(user, activityAliases));
+    return sortMonitorUsers(
+      mergeUserCollection([...activityUsers, ...matchedProfileUsers])
+        .filter((user) => !userMatchesAnyId(user, anchorIds))
+    );
+  }, [liveRoomUrl, logs]);
+
+  const currentAnchorIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of logs) {
+      const payload = row.payload as Record<string, unknown>;
+      if (row.type === "event" && payload.eventType === "room-info") {
+        collectAnchorIdsFromRoomInfoPayload(payload).forEach((id) => ids.add(id));
+      }
+    }
+    return ids;
   }, [logs]);
+
+  useEffect(() => {
+    const cacheableUsers = currentLogUsers.filter((user) => Boolean(user.douyinId));
+    setCachedUsers((previous) => {
+      const next = sortMonitorUsers(mergeUserCollection([...previous, ...cacheableUsers]))
+        .filter((user) => Boolean(user.douyinId))
+        .filter(hasCachedUserActivity)
+        .filter((user) => !userMatchesAnyId(user, currentAnchorIds));
+      if (sameCachedUsers(previous, next)) return previous;
+      window.localStorage.setItem(USER_CACHE_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [currentAnchorIds, currentLogUsers]);
+
+  const userRows = useMemo(
+    () => sortMonitorUsers(mergeUserCollection([...cachedUsers, ...currentLogUsers]).filter((user) => !userMatchesAnyId(user, currentAnchorIds))),
+    [cachedUsers, currentAnchorIds, currentLogUsers]
+  );
+  const exportableUserRows = useMemo(
+    () => userRows.filter((user) => Boolean(user.douyinId)),
+    [userRows]
+  );
+
+  const userIdentitySummary = useMemo(() => ({
+    douyin: userRows.filter((user) => Boolean(user.douyinId)).length,
+    linked: userRows.filter((user) => !user.douyinId && hasInternalIdentity(user)).length,
+    pending: userRows.filter((user) => !user.douyinId && !hasInternalIdentity(user)).length,
+  }), [userRows]);
 
   const roomInfo = useMemo<MonitorRoomInfo>(() => {
     const info: MonitorRoomInfo = {
@@ -1023,7 +1671,12 @@ export function DouyinMonitorPage() {
     return info;
   }, [logs]);
 
-  const liveState = useMemo(() => buildLiveState(logs), [logs]);
+  const liveState = useMemo(() => {
+    const next = buildLiveState(logs, liveScores);
+    return liveCountdownMs > 0
+      ? { ...next, countdown: liveCountdownMs / 1000 }
+      : next;
+  }, [liveCountdownMs, liveScores, logs]);
 
   const stats = useMemo(() => {
     const giftRows = logs.filter((row) => row.type === "gift");
@@ -1038,7 +1691,7 @@ export function DouyinMonitorPage() {
     }, 0);
     return {
       total: logs.length,
-      gifts: giftRows.length,
+      gifts: giftRows.reduce((total, row) => total + giftCountFromPayload(row.payload as Record<string, unknown>), 0),
       chats: logs.filter((row) => row.type === "chat").length,
       members: logs.filter((row) => row.type === "member").length,
       events: eventRows.length,
@@ -1067,6 +1720,10 @@ export function DouyinMonitorPage() {
       setMessage("请填写直播间地址");
       return;
     }
+    const previousLogs = logs;
+    setLogs([]);
+    clearLiveScores();
+    clearLiveCountdown();
     setBusy(true);
     setMessage("正在隐藏采集直播间连接");
     const cookieText = cookie.trim();
@@ -1076,10 +1733,43 @@ export function DouyinMonitorPage() {
     });
     setBusy(false);
     if (!result.success) {
+      setLogs(previousLogs);
       setMessage(result.error || "启动失败");
       return;
     }
     setStatus(result.data);
+  };
+
+  const openPreview = async () => {
+    const api = getDataApi();
+    if (!api?.openLivePkEmbeddedMonitor) {
+      setMessage("当前环境不支持直播预览");
+      return;
+    }
+    if (!liveRoomUrl.trim()) {
+      setMessage("请填写直播间地址");
+      return;
+    }
+    setBusy(true);
+    setPreviewOpen(true);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const stage = previewStageRef.current;
+    const rect = stage?.getBoundingClientRect();
+    const result: IpcResult<LivePkMonitorStatus> = await api.openLivePkEmbeddedMonitor({
+      liveRoomUrl,
+      cookie: cookie.trim(),
+      bounds: rect
+        ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
+        : { x: previewFrame.x, y: previewFrame.y + 42, width: previewFrame.width, height: previewFrame.height - 42 },
+    });
+    setBusy(false);
+    if (!result.success) {
+      setPreviewOpen(false);
+      setMessage(result.error || "直播预览打开失败");
+      return;
+    }
+    setStatus(result.data);
+    setEmbeddedState({ embedded: true, liveRoomUrl });
   };
 
   const stopMonitor = async () => {
@@ -1088,6 +1778,40 @@ export function DouyinMonitorPage() {
     const result = await api?.stopLivePkMonitor?.();
     setBusy(false);
     if (result?.success) setStatus(result.data);
+    if (result?.success) {
+      clearLiveScores();
+      clearLiveCountdown();
+    }
+    setPreviewOpen(false);
+    setEmbeddedState({ embedded: false, liveRoomUrl: "" });
+  };
+
+  const closePreview = async () => {
+    setPreviewOpen(false);
+    setEmbeddedState({ embedded: false, liveRoomUrl: "" });
+    const result = await getDataApi()?.closeLivePkEmbeddedMonitor?.({ stopMonitor: false });
+    if (result?.success) setStatus(result.data);
+  };
+
+  const beginPreviewDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startFrame = previewFrame;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const move = (moveEvent: PointerEvent) => {
+      setPreviewFrame((frame) => ({
+        ...frame,
+        x: Math.max(8, startFrame.x + moveEvent.clientX - startX),
+        y: Math.max(72, startFrame.y + moveEvent.clientY - startY),
+      }));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   };
 
   const saveCookie = async () => {
@@ -1118,13 +1842,19 @@ export function DouyinMonitorPage() {
     setMessage("已清除本机 Cookie");
   };
 
+  const clearCachedUsers = () => {
+    window.localStorage.removeItem(USER_CACHE_STORAGE_KEY);
+    setCachedUsers([]);
+    setMessage("已清空用户列表缓存");
+  };
+
   const exportCsv = () => {
-    const header = ["时间", "类型", "昵称", "用户ID", "数值", "详情"];
+    const header = ["时间", "类型", "昵称", "抖音号", "数值", "详情"];
     const rows = logs.slice().reverse().map((row) => [
       row.at,
       row.label,
       row.name,
-      row.userId,
+      logIdentityText(row),
       row.value,
       row.detail,
     ]);
@@ -1142,244 +1872,341 @@ export function DouyinMonitorPage() {
 
   const exportUsersCsv = () => {
     const header = [
+      "序号",
       "昵称",
-      "脱敏昵称",
-      "抖音ID",
-      "用户ID",
-      "sec_uid",
-      "用户等级",
-      "财富等级",
-      "粉丝团等级",
-      "荣誉等级",
-      "徽章等级",
-      "付费分",
-      "粉丝票",
-      "充值钻石",
+      "抖音号",
+      "等级",
       "IP",
-      "粉丝数",
-      "是否真实ID",
-      "身份来源",
-      "是否神秘/脱敏",
-      "是否缓存命中",
-      "弹幕",
-      "礼物",
-      "进场",
-      "音浪",
-      "最近时间",
-      "最近类型",
+      "送过的礼物",
+      "出现在哪个直播间",
+      "直播间主播ID",
     ];
-    const rows = userRows.map((user) => [
-      user.realName || user.nickname,
-      user.displayName,
-      user.douyinId,
-      user.userId,
-      user.secUid,
-      user.userLevel,
-      user.wealthLevel || user.consumeLevel,
-      user.fansClubLevel,
-      user.honorLevel,
-      user.badgeLevel,
-      user.payScore,
-      user.fanTicketCount,
-      user.totalRechargeDiamondCount,
-      user.ipLocation,
-      user.followerCount,
-      user.hasStrongIdentity ? "是" : "否",
-      user.identitySource,
-      user.isMystery ? "是" : "否",
-      user.cacheHit ? "是" : "否",
-      user.chats,
-      user.gifts,
-      user.members,
-      user.fanTicket,
-      user.lastAt,
-      user.lastType,
-    ]);
+    const fallbackRoom = {
+      roomLabel: roomInfo.title || "抖音直播间",
+      roomId: "",
+      anchorId: roomInfo.ownerDouyinId || roomInfo.ownerUserId || roomInfo.ownerWebRid || roomInfo.ownerSecUid || "",
+    };
+    const rows = exportableUserRows.map((user, index) => {
+      const rooms = user.roomAppearances.length ? user.roomAppearances : [fallbackRoom];
+      return [
+        index + 1,
+        realUserName(user),
+        user.douyinId,
+        userLevelSummary(user),
+        user.ipLocation,
+        user.giftNames.length ? user.giftNames.join("；") : "-",
+        exportRoomAppearanceText(rooms),
+        roomAnchorIdsText(rooms),
+      ];
+    });
     const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(",")).join("\n");
     downloadText(`抖音直播用户_${Date.now()}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
   };
 
   const exportUsersJson = () => {
+    const rows = exportableUserRows.map((user) => ({
+      ...user,
+      roomAppearances: user.roomAppearances.map((room) => ({
+        roomLabel: exportRoomAppearanceText([room]),
+        anchorId: room.anchorId,
+      })),
+    }));
     downloadText(
       `抖音直播用户_${Date.now()}.json`,
-      JSON.stringify(userRows, null, 2),
+      JSON.stringify(rows, null, 2),
       "application/json;charset=utf-8"
     );
   };
 
+  const running = status.status === "running";
+
   return (
-    <div className="flex h-[calc(100vh-8rem)] min-h-[620px] flex-col gap-4">
-      <section className="shrink-0 rounded-xl border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="truncate text-xl font-black tracking-normal">抖音直播监控</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <Badge variant={status.status === "running" ? "default" : "secondary"}>
-                {status.status}
-              </Badge>
-              {stats.online && <Badge variant="outline">在线 {stats.online}</Badge>}
-              {message && <span className="text-xs font-semibold text-muted-foreground">{message}</span>}
+    <div className="flex h-[calc(100vh-8rem)] min-h-[600px] flex-col gap-3">
+      <section className="shrink-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-muted/25 px-3 py-2.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className={cn("size-2.5 rounded-full", running ? "bg-primary ring-4 ring-primary/15" : "bg-muted-foreground/35")} />
+            <div className="min-w-0">
+              <h2 className="truncate text-base font-black tracking-normal">抖音直播监控</h2>
+              <div className="mt-0.5 flex items-center gap-2 text-[11px] font-semibold text-muted-foreground">
+                <span>{running ? "实时采集中" : "待启动"}</span>
+                {status.startedAt && <span className="tabular-nums">{formatTime(status.startedAt)}</span>}
+              </div>
             </div>
+            <Badge variant={running ? "default" : "secondary"}>
+              {status.status}
+            </Badge>
+            {stats.online && <Badge variant="outline">在线 {stats.online}</Badge>}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             <Button size="sm" onClick={startMonitor} disabled={busy || status.status === "running"}>
-              <Play className="size-4" />
+              <Play data-icon="inline-start" />
               开始
             </Button>
+            <Button size="sm" variant="outline" onClick={openPreview} disabled={busy || previewOpen}>
+              <Monitor data-icon="inline-start" />
+              预览
+            </Button>
             <Button size="sm" variant="outline" onClick={stopMonitor} disabled={busy}>
-              <Square className="size-4" />
+              <Square data-icon="inline-start" />
               停止
             </Button>
-            <Button size="sm" variant="outline" onClick={exportCsv} disabled={logs.length === 0}>
-              <Download className="size-4" />
-              CSV
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={exportCsv}
+              disabled={logs.length === 0}
+              title="导出事件 CSV"
+            >
+              <FileSpreadsheet />
             </Button>
-            <Button size="sm" variant="outline" onClick={exportJson} disabled={logs.length === 0}>
-              <Download className="size-4" />
-              JSON
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={exportJson}
+              disabled={logs.length === 0}
+              title="导出事件 JSON"
+            >
+              <FileJson />
             </Button>
-            <Button size="sm" variant="outline" onClick={exportUsersCsv} disabled={userRows.length === 0}>
-              <Download className="size-4" />
-              用户CSV
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={exportUsersCsv}
+              disabled={exportableUserRows.length === 0}
+              title="导出用户 CSV"
+            >
+              <Download />
             </Button>
-            <Button size="sm" variant="outline" onClick={exportUsersJson} disabled={userRows.length === 0}>
-              <Download className="size-4" />
-              用户JSON
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={exportUsersJson}
+              disabled={exportableUserRows.length === 0}
+              title="导出用户 JSON"
+            >
+              <Users />
             </Button>
-            <Button size="icon" variant="outline" onClick={() => setLogs([])} disabled={logs.length === 0} title="清空">
-              <Eraser className="size-4" />
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={() => setLogs([])}
+              disabled={logs.length === 0}
+              title="清空日志"
+            >
+              <Eraser />
             </Button>
           </div>
         </div>
-        <LiveStateStrip liveState={liveState} stats={stats} />
-      </section>
 
-      <section className="grid min-h-0 flex-1 grid-cols-[minmax(340px,0.52fr)_minmax(0,1.48fr)] gap-4">
-        <div className="flex min-h-0 flex-col gap-3">
-          <div className="grid shrink-0 gap-2">
+        <div className="grid gap-2 px-3 py-2.5 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-background/80 px-2 py-1 shadow-xs">
+            <span className="shrink-0 text-xs font-semibold text-muted-foreground">直播间</span>
             <Input
               value={liveRoomUrl}
               onChange={(event) => setLiveRoomUrl(event.target.value)}
-              placeholder="直播间地址：https://live.douyin.com/...（不要填 Cookie）"
-              className="h-10 bg-background"
+              placeholder="https://live.douyin.com/..."
+              className="h-7 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
             />
           </div>
-          <textarea
-            value={cookie}
-            onChange={(event) => setCookie(event.target.value)}
-            placeholder="Cookie"
-            className="h-20 shrink-0 resize-none rounded-lg border border-border bg-background px-3 py-2 text-xs outline-none focus:border-primary"
-          />
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={saveCookie}>
-              保存 Cookie
+          <div className="flex min-w-0 items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setShowCookiePanel((value) => !value)}
+              className="h-9"
+            >
+              <Cookie data-icon="inline-start" />
+              Cookie
+              <ChevronDown
+                data-icon="inline-end"
+                className={cn("transition-transform", showCookiePanel && "rotate-180")}
+              />
             </Button>
-            <Button size="sm" variant="outline" onClick={clearCookie} disabled={!cookieSaved && !cookie}>
-              清除 Cookie
-            </Button>
-            <span className="text-xs font-semibold text-muted-foreground">
-              {cookieSaved
-                ? `已保存${cookieUpdatedAt ? ` ${new Date(cookieUpdatedAt).toLocaleString("zh-CN", { hour12: false })}` : ""}`
-                : "未保存"}
-            </span>
-          </div>
-          <div className="shrink-0 overflow-hidden rounded-xl border border-border bg-card">
-            <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
-              采集状态
-            </div>
-            <div className="space-y-2 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">运行状态</span>
-                <Badge variant={status.status === "running" ? "default" : "secondary"}>
-                  {status.status}
-                </Badge>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">用户缓存</span>
-                <span className="font-semibold tabular-nums">{status.cachedUsers || 0}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">昵称缓存</span>
-                <span className="font-semibold tabular-nums">{status.cachedDisplayNames || 0}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-muted-foreground">礼物缓存</span>
-                <span className="font-semibold tabular-nums">{status.cachedGifts || 0}</span>
-              </div>
-              {status.startedAt && (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground">开始时间</span>
-                  <span className="font-semibold">{formatTime(status.startedAt)}</span>
-                </div>
-              )}
-              {status.lastError && (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs font-semibold text-destructive">
-                  {status.lastError}
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card">
-            <div className="border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
-              直播间信息
-            </div>
-            <div className="space-y-2 overflow-auto p-3 text-sm">
-              <InfoRow label="房间标题" value={roomInfo.title || "-"} />
-              <InfoRow label="房间 ID" value={roomInfo.roomId || status.roomId || "-"} />
-              <InfoRow label="主播昵称" value={roomInfo.ownerNickname || "-"} />
-              <InfoRow label="主播 ID" value={roomInfo.ownerUserId || "-"} />
-              <InfoRow label="抖音号" value={roomInfo.ownerDouyinId || "未返回"} />
-              <InfoRow label="抖音号来源" value={roomInfo.ownerDouyinIdSource || "-"} />
-              <InfoRow label="web_rid" value={roomInfo.ownerWebRid || "-"} />
-              <InfoRow label="sec_uid" value={roomInfo.ownerSecUid || "-"} wrap />
-              <InfoRow label="在线" value={roomInfo.onlineText || stats.online || "-"} />
-              <InfoRow label="本场点赞" value={roomInfo.likeCount || "-"} />
-              <InfoRow label="直播间音浪" value={stats.fanTicket || "等待服务端累计字段"} />
+            <div className="hidden min-w-[220px] truncate rounded-md border border-border/70 bg-background/70 px-2 py-2 text-xs font-semibold text-muted-foreground sm:block">
+              {message || (cookieSaved ? "已加载本机 Cookie" : "未保存 Cookie")}
             </div>
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-3">
-          <div className="grid shrink-0 grid-cols-6 gap-2">
-            <StatCard icon={Activity} label="事件" value={stats.total} />
+        {showCookiePanel && (
+          <div className="mx-3 mb-3 grid gap-2 rounded-md border border-border bg-background/80 p-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <textarea
+              value={cookie}
+              onChange={(event) => setCookie(event.target.value)}
+              placeholder="Cookie"
+              className="h-14 min-w-0 resize-none rounded-md border border-input bg-transparent px-2 py-1.5 text-xs outline-none transition focus:border-ring focus:ring-[3px] focus:ring-ring/50"
+            />
+            <div className="flex flex-wrap items-center gap-2 md:w-[250px]">
+              <Button size="sm" variant="outline" onClick={saveCookie}>
+                保存
+              </Button>
+              <Button size="sm" variant="outline" onClick={clearCookie} disabled={!cookieSaved && !cookie}>
+                清除
+              </Button>
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-muted-foreground">
+                {cookieSaved
+                  ? `已保存${cookieUpdatedAt ? ` ${new Date(cookieUpdatedAt).toLocaleString("zh-CN", { hour12: false })}` : ""}`
+                  : "未保存"}
+              </span>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] gap-3 max-lg:grid-cols-1">
+        <aside className="flex min-h-0 flex-col gap-3">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+            <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/35 px-3 py-2 text-xs font-bold text-muted-foreground">
+              <div className="flex min-w-0 items-center gap-2">
+                <Users className="size-3.5" />
+                <span className="truncate">用户列表</span>
+                <span className="shrink-0 text-[11px] font-black tabular-nums text-foreground">{userRows.length} 人</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  onClick={exportUsersCsv}
+                  disabled={exportableUserRows.length === 0}
+                  title="导出用户列表 CSV"
+                >
+                  <Download />
+                </Button>
+                <Button
+                  size="icon-sm"
+                  variant="outline"
+                  onClick={clearCachedUsers}
+                  disabled={cachedUsers.length === 0}
+                  title="清空有抖音号的用户缓存"
+                >
+                  <Eraser />
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-1 border-b border-border/70 bg-muted/25 p-2 text-center text-[10px] font-bold tabular-nums">
+              <div className="rounded-md bg-background/70 px-1.5 py-1">
+                <div className="text-muted-foreground">抖音号</div>
+                <div>{userIdentitySummary.douyin}</div>
+              </div>
+              <div className="rounded-md bg-background/70 px-1.5 py-1">
+                <div className="text-muted-foreground">已关联</div>
+                <div>{userIdentitySummary.linked}</div>
+              </div>
+              <div className="rounded-md bg-background/70 px-1.5 py-1">
+                <div className="text-muted-foreground">待补</div>
+                <div>{userIdentitySummary.pending}</div>
+              </div>
+            </div>
+            <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_4.75rem] border-b border-border/70 bg-muted/45 px-2 py-1.5 text-[10px] font-bold text-muted-foreground">
+              <div>用户 / 身份</div>
+              <div className="text-right">财富</div>
+            </div>
+            <div className="h-full min-h-0 overflow-auto pb-8">
+              {userRows.length === 0 ? (
+                <div className="flex min-h-32 items-center justify-center px-4 text-center text-xs font-semibold text-muted-foreground">
+                  等待弹幕、礼物或进场用户
+                </div>
+              ) : (
+                userRows.map((user) => (
+                  <div
+                    key={user.key}
+                    className="grid grid-cols-[minmax(0,1fr)_4.75rem] items-start gap-2 border-b border-border/60 px-2 py-2 text-xs transition hover:bg-muted/30"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <div className="truncate font-bold" title={`${realUserName(user)} ${identityValue(user)}`}>
+                          {realUserName(user)}
+                        </div>
+                        {user.isMystery && <span className="shrink-0 text-[10px] text-muted-foreground">脱敏</span>}
+                      </div>
+                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                        <Badge variant={identityStatus(user).tone} className="h-4 shrink-0 px-1 text-[9px]">
+                          {identityStatus(user).label}
+                        </Badge>
+                        <span className="truncate text-[10px] font-semibold text-muted-foreground" title={user.douyinId || identityValue(user)}>
+                          {identityValue(user)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex min-w-0 items-center justify-between gap-2 text-[10px] font-semibold text-muted-foreground">
+                        <span className="truncate" title={userSourceText(user)}>{userSourceText(user)}</span>
+                        <span className="shrink-0 tabular-nums">{userInteractionText(user)}</span>
+                      </div>
+                    </div>
+                    <div className="min-w-0 text-right">
+                      <div className="truncate text-[10px] font-black tabular-nums" title={levelText(user)}>
+                        {levelText(user)}
+                      </div>
+                      {giftTier(user) ? (
+                        <Badge
+                          variant={giftMoney(user) >= 1000 ? "default" : "outline"}
+                          className="mt-1 h-5 px-1.5 text-[10px] tabular-nums"
+                          title={`${moneyText(giftMoney(user))}，礼物 ${user.gifts} 次`}
+                        >
+                          ¥{giftTier(user)}
+                        </Badge>
+                      ) : (
+                        <div className="mt-1 text-[10px] font-semibold text-muted-foreground">-</div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </aside>
+
+        <main className="flex min-h-0 flex-col gap-3">
+          <LiveStateStrip liveState={liveState} stats={stats} />
+          <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(8.25rem,1fr))] gap-2 rounded-lg border border-border bg-card p-2 shadow-sm">
+            <StatCard icon={Activity} label="总事件" value={stats.total} />
             <StatCard icon={Gift} label="礼物" value={stats.gifts} />
             <StatCard icon={MessageSquareText} label="弹幕" value={stats.chats} />
             <StatCard icon={Users} label="用户" value={stats.users} />
-            <StatCard icon={BarChart3} label="服务端音浪" value={stats.fanTicket} />
-            <StatCard icon={Users} label="进场" value={stats.members} />
+            <StatCard icon={BarChart3} label="音浪" value={compactNumber(stats.fanTicket)} />
+            <StatCard icon={Users} label="进/离" value={stats.members} />
           </div>
-          <div className="flex shrink-0 flex-wrap gap-2 rounded-xl border border-border bg-card p-2">
-            {FILTERS.map((item) => (
-              <button
-                key={item.key}
-                onClick={() => setFilter(item.key)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                  filter === item.key
-                    ? "bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card">
+          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-muted/25 px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <MessageSquareText className="size-4 text-muted-foreground" />
+                <span className="text-xs font-black">事件流</span>
+                <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{filteredLogs.length} 条</span>
+              </div>
+              <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 p-0.5">
+                {FILTERS.map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => setFilter(item.key)}
+                    className={cn(
+                      "h-6 shrink-0 rounded-[5px] px-2.5 text-[11px] font-semibold transition",
+                      filter === item.key
+                        ? "bg-foreground text-background shadow-xs"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {filter === "user" ? (
-              <div className="grid min-w-[980px] grid-cols-[150px_130px_210px_82px_82px_100px_110px_minmax(120px,1fr)] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+              <div className="grid min-w-[1120px] grid-cols-[150px_190px_170px_90px_140px_110px_110px_minmax(130px,1fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>昵称</div>
-                <div>抖音号</div>
-                <div>用户ID / sec_uid</div>
-                <div>等级</div>
+                <div>抖音号 / 状态</div>
+                <div>内部记录</div>
                 <div>财富</div>
+                <div>来源</div>
                 <div>互动</div>
                 <div>音浪</div>
                 <div>最近</div>
               </div>
             ) : (
-              <div className="grid grid-cols-[72px_56px_minmax(100px,0.6fr)_minmax(0,2fr)] border-b border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+              <div className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>时间</div>
                 <div>类型</div>
                 <div>昵称</div>
+                <div>抖音号</div>
                 <div>内容</div>
               </div>
             )}
@@ -1387,34 +2214,58 @@ export function DouyinMonitorPage() {
               {filter === "user" ? (
                 userRows.length === 0 ? (
                   <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-                    暂无真实身份用户，等待礼物/榜单/弹幕下发 user_id、sec_uid 或抖音号
+                    暂无用户，等待弹幕、礼物或进场数据
                   </div>
                 ) : (
                   userRows.map((user) => (
                     <div
                       key={user.key}
-                      className="grid min-w-[980px] grid-cols-[150px_130px_210px_82px_82px_100px_110px_minmax(120px,1fr)] border-b border-border/70 px-3 py-2 text-xs"
+                      className="grid min-w-[1120px] grid-cols-[150px_190px_170px_90px_140px_110px_110px_minmax(130px,1fr)] border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
                     >
-                      <div className="break-words font-semibold" title={user.realName || user.nickname}>
-                        {user.realName || user.nickname}
+                      <div className="break-words font-semibold" title={realUserName(user)}>
+                        {realUserName(user)}
                         {user.isMystery && <span className="ml-1 text-[10px] text-muted-foreground">脱敏</span>}
                       </div>
-                      <div className="break-words text-muted-foreground" title={user.douyinId}>
-                        {user.douyinId || "-"}
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <Badge variant={identityStatus(user).tone} className="h-5 shrink-0 px-1.5 text-[10px]">
+                            {identityStatus(user).label}
+                          </Badge>
+                          <span className="truncate font-semibold" title={identityValue(user)}>
+                            {identityValue(user)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={user.douyinId || identityValue(user)}>
+                          {user.hasStrongIdentity ? "已识别" : "等待补全"}
+                        </div>
                       </div>
-                      <div className="break-all text-[10px] text-muted-foreground" title={`${user.secUid || ""} ${user.userId || ""}`}>
-                        {compactId(user.userId || user.secUid)}
+                      <div className="text-[10px] font-semibold text-muted-foreground">
+                        {hasInternalIdentity(user) ? "内部字段已记录" : "-"}
                       </div>
-                      <div className="tabular-nums">{user.userLevel || "-"}</div>
-                      <div className="tabular-nums">{user.wealthLevel || user.consumeLevel || "-"}</div>
+                      <div className="tabular-nums">{levelText(user)}</div>
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-muted-foreground" title={userSourceText(user)}>
+                          {userSourceText(user)}
+                        </div>
+                        {user.cacheHit && <div className="mt-0.5 text-[10px] text-muted-foreground">缓存命中</div>}
+                      </div>
                       <div className="space-y-0.5 tabular-nums">
                         <div>弹幕 {user.chats}</div>
                         <div>礼物 {user.gifts}</div>
-                        <div>进场 {user.members}</div>
+                        <div>进/离 {user.members}</div>
                       </div>
                       <div className="space-y-0.5">
                         <div className="tabular-nums">本场 {compactNumber(user.fanTicket)}</div>
                         <div className="tabular-nums text-muted-foreground">累计 {compactNumber(user.fanTicketCount)}</div>
+                        {giftTier(user) && (
+                          <Badge
+                            variant={giftMoney(user) >= 1000 ? "default" : "outline"}
+                            className="h-5 px-1.5 text-[10px] tabular-nums"
+                            title={`${moneyText(giftMoney(user))}，礼物 ${user.gifts} 次`}
+                          >
+                            ¥{giftTier(user)}
+                          </Badge>
+                        )}
                       </div>
                       <div className="space-y-0.5 text-muted-foreground">
                         <div className="tabular-nums">{user.lastAt || "-"}</div>
@@ -1431,11 +2282,14 @@ export function DouyinMonitorPage() {
                 filteredLogs.map((row) => (
                   <div
                     key={row.id}
-                    className="grid grid-cols-[72px_56px_minmax(100px,0.6fr)_minmax(0,2fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs"
+                    className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
                   >
                     <div className="text-muted-foreground">{row.at}</div>
                     <div><Badge variant="outline" className="h-5 px-1.5 text-[10px]">{row.label}</Badge></div>
-                    <div className="truncate font-semibold">{row.name}</div>
+                    <div className="truncate font-semibold" title={row.name}>{row.name}</div>
+                    <div className="truncate font-mono text-[11px] text-muted-foreground" title={logIdentityText(row)}>
+                      {logIdentityText(row)}
+                    </div>
                     <div className="truncate text-muted-foreground" title={compactLogDetail(row, liveState)}>
                       {compactLogDetail(row, liveState)}
                     </div>
@@ -1444,8 +2298,48 @@ export function DouyinMonitorPage() {
               )}
             </div>
           </div>
-        </div>
+        </main>
       </section>
+      {previewOpen && (
+        <div
+          ref={previewRef}
+          className="app-no-drag fixed z-40 overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+          style={{
+            left: previewFrame.x,
+            top: previewFrame.y,
+            width: previewFrame.width,
+            height: previewFrame.height,
+          }}
+        >
+          <div
+            className="flex h-10 cursor-move select-none items-center justify-between gap-2 border-b border-border bg-card px-3"
+            onPointerDown={beginPreviewDrag}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <Grip className="size-4 text-muted-foreground" />
+              <span className="truncate text-sm font-bold">直播预览</span>
+              <Badge variant={embeddedState.embedded ? "default" : "secondary"} className="h-5 px-1.5 text-[10px]">
+                {embeddedState.embedded ? "已连接" : "加载中"}
+              </Badge>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button size="icon-sm" variant="outline" onClick={closePreview} title="关闭直播预览">
+                <X />
+              </Button>
+            </div>
+          </div>
+          <div
+            ref={previewStageRef}
+            className="relative h-[calc(100%-40px)] bg-black"
+          >
+            {!embeddedState.embedded && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm font-semibold text-white/70">
+                正在加载直播画面
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1466,44 +2360,191 @@ function LiveStateStrip({
     online: string;
   };
 }) {
+  const [showRounds, setShowRounds] = useState(false);
   const latestRound = liveState.rounds[liveState.rounds.length - 1];
+  const currentScore = currentScoreSummary(liveState.scores);
+  const visibleScores = [...liveState.scores]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 9);
+  const leaderScore = visibleScores.reduce((max, score) => Math.max(max, score.score), 0);
+  const pkRounds = liveState.rounds
+    .map((round) => ({ ...round, scores: round.scores.filter(hasEffectiveScore) }))
+    .filter((round) => round.scores.length > 0);
+  const showHistory = !liveState.isPkActive;
   return (
-    <div className="mt-3 grid gap-2 md:grid-cols-[1.1fr_1.5fr_1.4fr]">
-      <div className="rounded-lg border border-border bg-background px-3 py-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-muted-foreground">直播形态</span>
-          <Badge variant={liveState.isPkActive ? "default" : liveState.isLinkmic ? "outline" : "secondary"}>
-            {liveState.isPkActive ? "PK中" : liveState.isLinkmic ? "连麦" : liveState.modeLabel}
-          </Badge>
+    <>
+      <div className="grid shrink-0 gap-2 rounded-lg border border-border bg-card p-2 shadow-sm lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="min-w-0 rounded-md bg-muted/25 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className={cn("size-2 rounded-full", liveState.isPkActive ? "bg-primary" : liveState.isLinkmic ? "bg-chart-2" : "bg-muted-foreground/40")} />
+            <span className="text-xs font-semibold text-muted-foreground">直播状态</span>
+            <Badge variant={liveState.isPkActive ? "default" : liveState.isLinkmic ? "outline" : "secondary"}>
+              {liveState.modeLabel}
+            </Badge>
+          </div>
+          <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-1 text-xs font-semibold">
+            <span className="text-lg font-black leading-none">{liveState.modeLabel === "正常" ? "普通直播" : `${liveState.modeLabel}中`}</span>
+            <span className="pb-0.5 tabular-nums text-muted-foreground">{liveState.participantCount || 0} 人</span>
+            {liveState.countdown > 0 && <span>倒计时 {countdownText(liveState.countdown)}</span>}
+          </div>
+          <div className="mt-3 rounded-md border border-border/60 bg-background/60 px-3 py-2" title={currentScore}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-muted-foreground">主播分数</div>
+              <div className="text-[11px] font-black tabular-nums text-muted-foreground">{visibleScores.length} 方</div>
+            </div>
+            {visibleScores.length > 0 ? (
+              <div className="mt-2 space-y-1.5">
+                {visibleScores.map((score, index) => (
+                  <div key={score.anchorId || index} className="grid grid-cols-[minmax(4.5rem,7rem)_minmax(0,1fr)_4rem] items-center gap-2">
+                    <div className="truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score) || score.anchorId}>
+                      {displayScoreName(score) || compactId(score.anchorId) || `第${index + 1}方`}
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-border/60">
+                      <div
+                        className={cn(
+                          "h-full rounded-full",
+                          score.score > 0 && score.score === leaderScore ? "bg-primary" : "bg-muted-foreground/45"
+                        )}
+                        style={{
+                          width: `${leaderScore > 0 ? Math.max(4, Math.min(100, (score.score / leaderScore) * 100)) : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="truncate text-right text-sm font-black tabular-nums">
+                      {scorePointText(score)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-2 truncate text-sm font-black tabular-nums text-muted-foreground">
+                {currentScore}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs font-semibold">
-          <span>PK {liveState.isPkActive ? "是" : "否"}</span>
-          <span>连麦 {liveState.isLinkmic ? "是" : "否"}</span>
-          <span>{liveState.participantCount || 0} 人</span>
-          {liveState.countdown > 0 && <span>倒计时 {liveState.countdown}s</span>}
-        </div>
-      </div>
 
-      <div className="rounded-lg border border-border bg-background px-3 py-2">
-        <div className="text-xs font-semibold text-muted-foreground">当前分数</div>
-        <div className="mt-1 truncate text-sm font-black" title={scoreSummary(liveState.scores)}>
-          {scoreSummary(liveState.scores)}
-        </div>
-        <div className="mt-1 truncate text-[11px] font-semibold text-muted-foreground">
-          battle {compactId(liveState.battleId)} · channel {compactId(liveState.channelId)}
-        </div>
+        {showHistory && (
+          <button
+            type="button"
+            onClick={() => setShowRounds(true)}
+            className="min-w-0 rounded-md bg-muted/25 px-3 py-2 text-left transition hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-muted-foreground">历史轮次</span>
+              <span className="text-xs font-black tabular-nums">{pkRounds.length} 场 PK</span>
+            </div>
+            <div
+              className="mt-2 truncate text-sm font-black tabular-nums"
+              title={pkRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
+            >
+              {latestRound ? `第${latestRound.round}轮 · ${roundScoreSummary(latestRound)}` : "暂无"}
+            </div>
+            <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+              礼物 {stats.gifts} · 弹幕 {stats.chats} · 用户 {stats.users} · 音浪 {compactNumber(stats.fanTicket)}
+            </div>
+          </button>
+        )}
       </div>
+      <PkRoundsDialog
+        open={showRounds && showHistory}
+        onClose={() => setShowRounds(false)}
+        rounds={pkRounds}
+      />
+    </>
+  );
+}
 
-      <div className="rounded-lg border border-border bg-background px-3 py-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-muted-foreground">历史轮次</span>
-          <span className="text-xs font-black tabular-nums">{liveState.rounds.length} 轮</span>
+function PkRoundsDialog({
+  open,
+  onClose,
+  rounds,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rounds: MonitorRoundRow[];
+}) {
+  if (!open) return null;
+  const visibleRounds = rounds
+    .map((round) => ({
+      ...round,
+      scores: round.scores.filter((score) => score.score > 0 || scoreNumber(score.scoreText) > 0),
+    }))
+    .filter((round) => round.scores.length > 0);
+  return (
+    <div
+      className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pk-rounds-title"
+        className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <h3 id="pk-rounds-title" className="truncate text-base font-black">
+              PK 场次汇总
+            </h3>
+            <p className="mt-1 text-xs font-semibold text-muted-foreground">
+              本次监控共 {visibleRounds.length} 场 PK
+            </p>
+          </div>
+          <Button size="icon-sm" variant="outline" onClick={onClose} title="关闭">
+            <X />
+          </Button>
         </div>
-        <div className="mt-1 truncate text-sm font-semibold" title={liveState.rounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}>
-          {latestRound ? `第${latestRound.round}轮 ${scoreSummary(latestRound.scores)}` : "暂无"}
-        </div>
-        <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
-          礼物 {stats.gifts} · 弹幕 {stats.chats} · 用户 {stats.users} · 音浪 {compactNumber(stats.fanTicket)}
+
+        <div className="min-h-0 overflow-auto p-4">
+          {visibleRounds.length === 0 ? (
+            <div className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border text-center">
+              <Swords className="size-6 text-muted-foreground" />
+              <div className="text-sm font-semibold">暂无 PK 场次</div>
+              <div className="text-xs text-muted-foreground">开始监控后，PK 分数快照会自动汇总到这里</div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {visibleRounds.map((round) => (
+                <div key={`${round.round}-${round.battleId}`} className="overflow-hidden rounded-lg border border-border">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/35 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">第 {round.round} 场</Badge>
+                      <span className="text-xs font-semibold text-muted-foreground">
+                        battle {compactId(round.battleId)}
+                      </span>
+                    </div>
+                    <span className="text-xs font-black tabular-nums">{round.scores.length} 位主播</span>
+                  </div>
+                  <div className="grid grid-cols-[minmax(0,1fr)_120px] border-b border-border bg-background/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    <div>主播 ID</div>
+                    <div className="text-right">分数</div>
+                  </div>
+                  {round.scores.map((score) => (
+                    <div
+                      key={`${round.round}-${score.anchorId}`}
+                      className="grid grid-cols-[minmax(0,1fr)_120px] border-b border-border/60 px-3 py-2 text-xs last:border-b-0"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-bold" title={score.anchorId}>
+                          {score.anchorId || "-"}
+                        </div>
+                        {displayScoreName(score) && (
+                          <div className="mt-0.5 truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score)}>
+                            {displayScoreName(score)}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right text-sm font-black tabular-nums">
+                        {scorePointText(score)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1520,31 +2561,14 @@ function StatCard({
   value: number | string;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
+    <div className="min-w-0 rounded-md border border-border/70 bg-background/60 px-3 py-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-        <Icon className="size-4 text-muted-foreground" />
+        <span className="flex size-6 items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
+          <Icon className="size-3.5" />
+        </span>
       </div>
-      <div className="mt-2 truncate text-lg font-black tabular-nums">{value || 0}</div>
-    </div>
-  );
-}
-
-function InfoRow({
-  label,
-  value,
-  wrap = false,
-}: {
-  label: string;
-  value: React.ReactNode;
-  wrap?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-[82px_minmax(0,1fr)] gap-3">
-      <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-      <span className={`text-xs font-semibold ${wrap ? "break-all" : "truncate"}`} title={String(value ?? "")}>
-        {value}
-      </span>
+      <div className="mt-1 truncate text-base font-black tabular-nums">{value || 0}</div>
     </div>
   );
 }

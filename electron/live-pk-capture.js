@@ -193,8 +193,17 @@ async function captureLivePkSnapshot(win) {
       const linkmicStore = store.linkmicStore || {};
       const room = store.roomStore?.roomInfo?.room || {};
       const pkListData = pkStore.pkListData || {};
-      const battleStats = pkStore.pkStatusData || pkListData.battle_stats || pkListData.battleStats || {};
-      const users = Array.isArray(pkListData.user) ? pkListData.user : [];
+      const pkStatusData = pkStore.pkStatusData || {};
+      const battleStats = pkStatusData.battle_stats
+        || pkStatusData.battleStats
+        || (Object.keys(pkStatusData).length ? pkStatusData : (pkListData.battle_stats || pkListData.battleStats || {}));
+      const users = Array.isArray(pkListData.user)
+        ? pkListData.user
+        : Array.isArray(pkStatusData.user)
+          ? pkStatusData.user
+          : Array.isArray(pkStatusData.users)
+            ? pkStatusData.users
+            : [];
       const hasRoomLinker = Boolean(room.linker_map || room.linkerMap || room.linker_detail || room.linkerDetail);
       const hasSnapshot = users.length > 0 || Object.keys(battleStats || {}).length > 0 || hasRoomLinker || linkmicStore.roomBattleType;
       if (!hasSnapshot) return null;
@@ -234,6 +243,29 @@ function parseCookiePairs(cookieText) {
       };
     })
     .filter((item) => item.name && item.value && !/[\u0000-\u001f\u007f]/.test(item.value));
+}
+
+const AUTH_COOKIE_NAMES = ["sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss"];
+const BROWSER_COOKIE_NAMES = ["ttwid"];
+
+function describeCookieInjection(injected, suffix = "") {
+  if (!injected || injected.total <= 0) {
+    return `未提供 Cookie，将以未登录状态打开直播间${suffix}`;
+  }
+  const auth = injected.authPresent?.length
+    ? `登录项: ${injected.authPresent.join(", ")}`
+    : "登录项缺失";
+  const browser = injected.browserPresent?.length
+    ? `浏览器项: ${injected.browserPresent.join(", ")}`
+    : "浏览器项缺失";
+  const liveCritical = injected.criticalLivePresent?.length
+    ? `live: ${injected.criticalLivePresent.join(", ")}`
+    : "live: 缺失";
+  const wwwCritical = injected.criticalWwwPresent?.length
+    ? `www: ${injected.criticalWwwPresent.join(", ")}`
+    : "www: 缺失";
+  const warning = injected.authPresent?.length ? "" : "，可能仍是未登录状态";
+  return `已注入 Cookie ${injected.set}/${injected.total} 项，${auth}，${browser}，${liveCritical}，${wwwCritical}${warning}${suffix}`;
 }
 
 async function removeExistingCookies(ses, targetUrl, names) {
@@ -285,9 +317,16 @@ function cookieWriteTargets(targetUrl, cookie) {
 
 async function injectCookieHeader(ses, targetUrl, cookieText) {
   const pairs = parseCookiePairs(cookieText);
-  const criticalNames = ["sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "ttwid"];
+  const criticalNames = [...AUTH_COOKIE_NAMES, ...BROWSER_COOKIE_NAMES];
   if (pairs.length === 0) {
-    return { total: 0, set: 0, failed: 0, criticalPresent: [] };
+    return {
+      total: 0,
+      set: 0,
+      failed: 0,
+      criticalPresent: [],
+      authPresent: [],
+      browserPresent: [],
+    };
   }
 
   await removeExistingCookies(ses, targetUrl, pairs.map((item) => item.name));
@@ -325,9 +364,33 @@ async function injectCookieHeader(ses, targetUrl, cookieText) {
     set,
     failed,
     criticalPresent: criticalNames.filter((name) => present.has(name)),
+    authPresent: AUTH_COOKIE_NAMES.filter((name) => present.has(name)),
+    browserPresent: BROWSER_COOKIE_NAMES.filter((name) => present.has(name)),
     criticalLivePresent: criticalNames.filter((name) => livePresent.has(name)),
     criticalWwwPresent: criticalNames.filter((name) => wwwPresent.has(name)),
   };
+}
+
+async function detectLoginPrompt(win) {
+  const webContents = win?.webContents || win;
+  if (!webContents || webContents.isDestroyed?.()) return null;
+  if (win?.isDestroyed?.()) return null;
+  return webContents.executeJavaScript(`
+    (() => {
+      const text = String(document.body?.innerText || "");
+      const nodes = Array.from(document.querySelectorAll("button,a,div,span"))
+        .slice(0, 3000)
+        .map((node) => String(node.innerText || node.textContent || "").trim())
+        .filter(Boolean);
+      const exactLogin = nodes.some((value) => value === "登录" || value === "立即登录");
+      const loginHint = /登录后|扫码登录|验证码登录|密码登录|立即登录/.test(text);
+      return {
+        hasLoginText: exactLogin || loginHint,
+        exactLogin,
+        loginHint,
+      };
+    })()
+  `, true).catch(() => null);
 }
 
 async function getCookieHeader(ses, url) {
@@ -392,18 +455,27 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
     sourceUrl: url,
     webRid: sourceUrl.pathname.split("/").filter(Boolean)[0] || "",
   };
+  let injectedCookieState = null;
+  let loginPromptReported = false;
 
+  const interactiveWindow = show !== false;
   const win = new BrowserWindow({
-    width: show ? 1120 : 480,
-    height: show ? 760 : 854,
-    x: show ? undefined : -10000,
-    y: show ? undefined : -10000,
-    parent: parentWindow || undefined,
-    title: "直播监控采集",
+    width: interactiveWindow ? 1120 : 480,
+    height: interactiveWindow ? 760 : 854,
+    x: interactiveWindow ? undefined : -10000,
+    y: interactiveWindow ? undefined : -10000,
+    parent: interactiveWindow ? undefined : parentWindow || undefined,
+    title: "抖音直播",
     backgroundColor: "#ffffff",
-    show: true,
-    skipTaskbar: !show,
-    focusable: show,
+    show: interactiveWindow,
+    skipTaskbar: !interactiveWindow,
+    focusable: interactiveWindow,
+    movable: true,
+    minimizable: true,
+    maximizable: true,
+    resizable: true,
+    fullscreenable: true,
+    autoHideMenuBar: true,
     webPreferences: {
       partition: "persist:live-pk-capture",
       contextIsolation: true,
@@ -429,6 +501,17 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
   };
 
   const promise = new Promise((resolve, reject) => {
+    const checkLoginPrompt = async () => {
+      if (settled || loginPromptReported || !win || win.isDestroyed()) return;
+      const result = await detectLoginPrompt(win).catch(() => null);
+      if (!result?.hasLoginText) return;
+      loginPromptReported = true;
+      const prefix = injectedCookieState?.authPresent?.length
+        ? "页面仍显示“登录”，Cookie 可能已过期或未生效"
+        : "页面显示“登录”，当前未检测到有效登录 Cookie";
+      onStatus?.(`${prefix}；普通观众真实 ID 可能只能拿到脱敏信息`);
+    };
+
     const ensureAnchorProfile = (roomEnter) => {
       if (bootstrap.anchorProfile || pendingProfilePromise) return;
       const secUid = readAnchorSecUidFromRoomEnter(roomEnter);
@@ -539,6 +622,8 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
 
     win.webContents.on("did-finish-load", () => {
       onStatus?.("直播间已打开，正在等待 IM 连接");
+      setTimeout(() => void checkLoginPrompt(), 1200);
+      setTimeout(() => void checkLoginPrompt(), 3500);
     });
 
     win.on("closed", () => {
@@ -565,20 +650,8 @@ function captureDouyinLiveOptions(liveRoomUrl, { parentWindow, onStatus, cookie,
     Promise.resolve()
       .then(async () => {
         const injected = await injectCookieHeader(win.webContents.session, url, cookie);
-        if (injected.total > 0) {
-          const critical = injected.criticalPresent.length
-            ? `关键项: ${injected.criticalPresent.join(", ")}`
-            : "关键项缺失";
-          const liveCritical = injected.criticalLivePresent?.length
-            ? `live: ${injected.criticalLivePresent.join(", ")}`
-            : "live: 缺失";
-          const wwwCritical = injected.criticalWwwPresent?.length
-            ? `www: ${injected.criticalWwwPresent.join(", ")}`
-            : "www: 缺失";
-          onStatus?.(`已注入 Cookie ${injected.set}/${injected.total} 项，${critical}，${liveCritical}，${wwwCritical}，正在打开直播间`);
-        } else {
-          onStatus?.("正在打开直播间");
-        }
+        injectedCookieState = injected;
+        onStatus?.(describeCookieInjection(injected, "，正在打开直播间"));
         await win.loadURL(url);
       })
       .catch(reject);
@@ -591,6 +664,8 @@ module.exports = {
   captureDouyinLiveOptions,
   getCookieHeader,
   injectCookieHeader,
+  describeCookieInjection,
+  detectLoginPrompt,
   normalizeLiveRoomUrl,
   captureSignedUserProfile,
   captureLivePkSnapshot,
