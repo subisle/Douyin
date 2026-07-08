@@ -212,6 +212,10 @@ export function createHttpElectronApi(): ElectronAPI {
       return request(`/rewards/report${qs({ period })}`);
     },
 
+    // ── 应用密码锁（Web 模式 stub）──
+    verifyAppPassword: () => Promise.resolve({ success: true, data: { ok: true, role: "admin" as const } }),
+    hasAppPassword: () => Promise.resolve({ success: true, data: { hasPassword: false } }),
+
     checkForUpdates: () => Promise.resolve({ success: true, data: { status: "web-unavailable" } }),
     downloadUpdate: () => Promise.resolve({ success: true, data: { status: "web-unavailable" } }),
     installUpdate: () => Promise.resolve({ success: true, data: { status: "web-unavailable" } }),

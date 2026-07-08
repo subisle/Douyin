@@ -59,10 +59,13 @@ export const PRESET_ROSTER_TEXT = `浩雨
 狼辉
 啸帆
 狼哲
-浩辰
 浩哲
 啸强
 浩启`;
+
+const ROSTER_NAME_ALIASES: Record<string, string> = {
+  辰辰: "浩辰",
+};
 
 export const ROSTER_SLOT_OPTIONS: { key: RosterSlot; label: string; shortLabel: string }[] = [
   { key: "midmonth", label: "15号分组名单", shortLabel: "15号" },
@@ -88,6 +91,11 @@ export function normalizeRosterName(value: string) {
   return value.replace(/\s+/g, "").trim();
 }
 
+function canonicalRosterName(value: string) {
+  const key = normalizeRosterName(value);
+  return ROSTER_NAME_ALIASES[key] || key;
+}
+
 export function parseRosterText(value: string) {
   const names: string[] = [];
   const seen = new Set<string>();
@@ -96,7 +104,7 @@ export function parseRosterText(value: string) {
     .map((line) => line.replace(/^\s*\d+\s*[.)、．]\s*/, "").trim())
     .filter(Boolean)
     .forEach((name) => {
-      const key = normalizeRosterName(name);
+      const key = canonicalRosterName(name);
       if (!key || seen.has(key)) return;
       seen.add(key);
       names.push(name.trim());
@@ -108,7 +116,7 @@ export function resolveRosterNames(allMembers: PkMember[], text: string) {
   const names = parseRosterText(text);
   const byName = new Map<string, PkMember[]>();
   allMembers.forEach((member) => {
-    const key = normalizeRosterName(member.name);
+    const key = canonicalRosterName(member.name);
     const members = byName.get(key) || [];
     members.push(member);
     byName.set(key, members);
@@ -118,7 +126,7 @@ export function resolveRosterNames(allMembers: PkMember[], text: string) {
   const matchedNames: string[] = [];
   const unmatchedNames: string[] = [];
   names.forEach((name) => {
-    const matches = byName.get(normalizeRosterName(name)) || [];
+    const matches = byName.get(canonicalRosterName(name)) || [];
     if (matches.length === 0) {
       unmatchedNames.push(name);
       return;

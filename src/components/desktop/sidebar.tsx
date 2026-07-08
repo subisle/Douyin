@@ -2,13 +2,14 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NAV_ITEMS, type PageId } from "./types";
+import { NAV_ITEMS, type PageId, type AppRole } from "./types";
 
 interface SidebarProps {
   currentPage: PageId;
   collapsed: boolean;
   onNavigate: (page: PageId) => void;
   onToggle: () => void;
+  userRole: AppRole;
 }
 
 export function Sidebar({
@@ -16,7 +17,12 @@ export function Sidebar({
   collapsed,
   onNavigate,
   onToggle,
+  userRole,
 }: SidebarProps) {
+  const visibleItems = NAV_ITEMS.filter((item) => {
+    if (item.adminOnly && userRole === "guest") return false;
+    return true;
+  });
   return (
     <aside
       className={cn(
@@ -25,7 +31,7 @@ export function Sidebar({
       )}
     >
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-3">
-        {NAV_ITEMS.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           const isActive = currentPage === item.id;
 

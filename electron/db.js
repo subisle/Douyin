@@ -2094,11 +2094,11 @@ async function getPkRoster(period, groupSize) {
 
   // 1. 获取所有主播 + 其名下所有账号 anchor（含合并副号）
   const [personRows] = await db.query(
-    "SELECT p.id AS person_id, p.name, p.gender, a.anchor_id " +
+    "SELECT p.id AS person_id, p.name, p.gender, a.anchor_id, a.douyin_no " +
     "FROM persons p " +
     "INNER JOIN accounts a ON a.person_id = p.id " +
     "WHERE a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
-    "ORDER BY p.id"
+    "ORDER BY p.id, a.is_primary DESC, a.id ASC"
   );
   if (personRows.length === 0) {
     return { period, males: [], females: [] };
@@ -2114,9 +2114,11 @@ async function getPkRoster(period, groupSize) {
         name: r.name,
         gender: r.gender,
         anchorIds: [],
+        douyinNos: [],
       });
     }
     personMap.get(r.person_id).anchorIds.push(r.anchor_id);
+    if (r.douyin_no) personMap.get(r.person_id).douyinNos.push(r.douyin_no);
     anchorToPerson.set(r.anchor_id, r.person_id);
   }
   const persons = Array.from(personMap.values());
@@ -2182,6 +2184,8 @@ async function getPkRoster(period, groupSize) {
     const duration = durMap.get(p.person_id) || 0;
     const member = {
       personId: p.person_id, name: p.name, gender: p.gender, anchorId: p.anchorIds[0] || "",
+      anchorIds: p.anchorIds,
+      douyinNos: p.douyinNos,
       wave: totalWave, trimmedAvg, maxWave, minWave, waveDays, duration, rank: 0,
     };
     if (p.gender === "male") males.push(member);
@@ -2476,6 +2480,38 @@ async function getRewardReport(period, config) {
   };
 }
 
+/**
+ * 验证应用密码，返回角色信息
+ * - app_password → admin（全部权限）
+ * - guest_password → guest（受限权限）
+ */
+async function verifyAppPassword(password) {
+  const db = getPool();
+  const input = String(password || "").trim();
+  const [rows] = await db.query(
+    "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('app_password', 'guest_password')"
+  );
+  for (const row of rows) {
+    const stored = String(row.setting_value || "").trim();
+    if (stored === input) {
+      const role = row.setting_key === 'app_password' ? 'admin' : 'guest';
+      return { ok: true, role };
+    }
+  }
+  return { ok: false, reason: "密码错误" };
+}
+
+/**
+ * 检查是否已设置应用密码（admin 或 guest 任一存在即可）
+ */
+async function hasAppPassword() {
+  const db = getPool();
+  const [rows] = await db.query(
+    "SELECT setting_value FROM app_settings WHERE setting_key IN ('app_password', 'guest_password') AND setting_value IS NOT NULL AND setting_value != ''"
+  );
+  return { hasPassword: rows.length > 0 };
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -2515,4 +2551,6 @@ module.exports = {
   saveStarBattleScore,
   getFlagWinner,
   getRewardReport,
+  verifyAppPassword,
+  hasAppPassword,
 };

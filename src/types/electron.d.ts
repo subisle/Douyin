@@ -483,6 +483,8 @@ export interface PkMember {
   name: string;
   gender: string;
   anchorId: string;
+  anchorIds: string[];
+  douyinNos: string[];
   wave: number;        // 总音浪（展示用）
   trimmedAvg: number;  // 去最高后日均（分组用）
   maxWave: number;     // 本月最高单日音浪
@@ -772,6 +774,10 @@ declare global {
     ) => Promise<IpcResult<{ saved: boolean; deleted: boolean }>>;
     getFlagWinner: (period: string) => Promise<IpcResult<FlagWinnerData | null>>;
     getRewardReport: (period: string, config?: RewardConfig) => Promise<IpcResult<RewardReportData>>;
+
+    // ── 应用密码锁 ──
+    verifyAppPassword: (password: string) => Promise<IpcResult<{ ok: boolean; role: "admin" | "guest"; reason?: string }>>;
+    hasAppPassword: () => Promise<IpcResult<{ hasPassword: boolean }>>;
 
     // ── 自动更新 API ──
     checkForUpdates: () => Promise<IpcResult<{ status: string }>>;

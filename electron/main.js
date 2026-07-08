@@ -741,6 +741,10 @@ ipcMain.handle(
   wrap((period, config) => db.getRewardReport(period, config))
 );
 
+// ── 应用密码锁 ──────────────────────────────────────────
+ipcMain.handle("auth:verifyPassword", wrap((password) => db.verifyAppPassword(password)));
+ipcMain.handle("auth:hasPassword", wrap(() => db.hasAppPassword()));
+
 // ── 自动更新 IPC ──────────────────────────────────────────
 ipcMain.handle("updater:check", async () => {
   try {

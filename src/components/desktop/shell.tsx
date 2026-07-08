@@ -16,7 +16,8 @@ import { DouyinMonitorPage } from "./douyin-monitor-page";
 import { RewardPage } from "./reward-page";
 import { StarBattlePage } from "./star-battle-page";
 import { SettingsPage } from "./settings-page";
-import { type PageId } from "./types";
+import { LockScreen } from "./lock-screen";
+import { type PageId, type AppRole } from "./types";
 import type { DroppedImportFile } from "./import-page";
 
 type StartupCheckStatus = "checking" | "ok" | "warning" | "error";
@@ -40,6 +41,8 @@ export function DesktopShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [draggingFile, setDraggingFile] = useState(false);
   const [showStartup, setShowStartup] = useState(true);
+  const [unlocked, setUnlocked] = useState(false);
+  const [userRole, setUserRole] = useState<AppRole>("admin");
   const [droppedImportFile, setDroppedImportFile] = useState<DroppedImportFile | null>(null);
 
   useEffect(() => {
@@ -125,6 +128,14 @@ export function DesktopShell() {
     return <StartupSplash />;
   }
 
+  if (!unlocked) {
+    return <LockScreen onUnlocked={(role) => {
+      setUnlocked(true);
+      setUserRole(role);
+      if (role === "guest") setCurrentPage("data");
+    }} />;
+  }
+
   return (
     <div className="relative flex h-screen w-full flex-col overflow-hidden bg-background text-foreground">
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
@@ -142,6 +153,7 @@ export function DesktopShell() {
             collapsed={collapsed}
             onNavigate={setCurrentPage}
             onToggle={() => setCollapsed((v) => !v)}
+            userRole={userRole}
           />
 
           <ScrollArea className="min-w-0 flex-1">

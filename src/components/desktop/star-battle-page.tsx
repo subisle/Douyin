@@ -228,8 +228,16 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function memberIdentityValues(member: PkMember) {
+  return Array.from(new Set([
+    member.anchorId,
+    ...(member.anchorIds || []),
+    ...(member.douyinNos || []),
+  ].map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
 function findScoreInText(text: string, member: PkMember) {
-  const candidates = [member.name, member.anchorId].filter(Boolean);
+  const candidates = [member.name, ...memberIdentityValues(member)].filter(Boolean);
   for (const candidate of candidates) {
     const pattern = new RegExp(`${escapeRegExp(candidate)}[^\\d]{0,20}(\\d+(?:\\.\\d+)?)`, "i");
     const match = text.match(pattern);
@@ -415,14 +423,24 @@ function monitorEventDetail(payload: LivePkEventPayload) {
 }
 
 function findRankScore(payload: LivePkRankPayload, member: PkMember) {
+  const memberIds = new Set(memberIdentityValues(member));
   const hit = payload.ranks.find(
     (rank) =>
-      (rank.userId && rank.userId === member.anchorId) ||
-      (rank.uniqueId && rank.uniqueId === member.anchorId) ||
+      (rank.userId && memberIds.has(rank.userId)) ||
+      (rank.uniqueId && memberIds.has(rank.uniqueId)) ||
       namesMatch(rank.nickname, member.name)
   );
   if (!hit || !Number.isFinite(hit.score) || hit.score <= 0) return "";
   return String(hit.score);
+}
+
+function rankMatchesMember(rank: LivePkRankPayload["ranks"][number], member: PkMember) {
+  const memberIds = new Set(memberIdentityValues(member));
+  return (
+    (rank.userId && memberIds.has(rank.userId)) ||
+    (rank.uniqueId && memberIds.has(rank.uniqueId)) ||
+    namesMatch(rank.nickname, member.name)
+  );
 }
 
 export function StarBattlePage() {
@@ -858,11 +876,7 @@ export function StarBattlePage() {
       const unmatched = payload.ranks
         .filter((rank) => rank.score > 0)
         .filter((rank) => !currentGroups.some((group) =>
-          group.members.some((member) =>
-            rank.userId === member.anchorId ||
-            rank.uniqueId === member.anchorId ||
-            namesMatch(rank.nickname, member.name)
-          )
+          group.members.some((member) => rankMatchesMember(rank, member))
         ))
         .slice(0, 12)
         .map((rank) => ({

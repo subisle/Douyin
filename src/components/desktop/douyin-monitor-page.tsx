@@ -538,12 +538,6 @@ function realUserName(user: MonitorUserRow) {
   return candidates.find((value) => !looksMaskedName(value) && !looksGarbledName(value)) || candidates[0] || "未知用户";
 }
 
-function visibleIdentitySource(source?: string) {
-  return (source || "")
-    .replace(/sec_uid|webcast_uid|protobuf_user_id|user_id/gi, "内部ID")
-    .replace(/内部ID(\.内部ID)+/g, "内部ID");
-}
-
 function hasInternalIdentity(user: Pick<MonitorUserRow, "userId" | "secUid" | "webcastUid">) {
   const userId = user.userId.trim();
   return Boolean(user.secUid || user.webcastUid || (userId && userId !== "111111"));
@@ -565,14 +559,6 @@ function identityValue(user: MonitorUserRow) {
   if (user.douyinId) return user.douyinId;
   if (hasInternalIdentity(user)) return "内部记录";
   return "-";
-}
-
-function userSourceText(user: MonitorUserRow) {
-  return visibleIdentitySource(user.identitySource) || (user.lastType === "chat" ? "弹幕" : user.lastType);
-}
-
-function userInteractionText(user: Pick<MonitorUserRow, "chats" | "gifts" | "members">) {
-  return `弹${user.chats} 礼${user.gifts} 进/离${user.members}`;
 }
 
 function userKey(payload: Partial<MonitorUserRow> & {
@@ -1019,7 +1005,9 @@ function eventDetail(payload: LivePkEventPayload) {
         : payload.eventType === "live-mode"
           ? [
               safeText(payload.liveModeLabel) || safeText(payload.liveMode),
-              payload.participantCount ? `${safeText(payload.participantCount)}人` : "",
+              payload.participantCount
+                ? `${safeText(payload.participantCount)}${safeText(payload.liveMode) === "pk" || safeBoolean(payload.isPkActive) ? "方" : "人"}`
+                : "",
               payload.battlePhase ? `阶段 ${safeText(payload.battlePhase)}` : "",
               payload.battleStatus !== undefined ? `状态 ${safeText(payload.battleStatus)}` : "",
               participantText,
@@ -1119,6 +1107,8 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
   const rounds: MonitorRoundRow[] = [];
   let round = 0;
   let currentBattleId = "";
+  let roomOwnerScore: MonitorScoreRow | null = null;
+  let roomOwnerGiftScore = 0;
   let mode = "unknown";
   let modeLabel = "未知";
   let isPkActive = false;
@@ -1161,6 +1151,52 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
     snapshotRound();
   };
 
+  const rememberRoomOwner = (payload: Record<string, unknown>) => {
+    const anchorId =
+      safeText(payload.ownerUserId) ||
+      safeText(payload.userId) ||
+      safeText(payload.ownerDouyinId) ||
+      safeText(payload.uniqueId) ||
+      safeText(payload.ownerWebRid) ||
+      safeText(payload.ownerSecUid) ||
+      safeText(payload.roomId);
+    if (!anchorId) return;
+    roomOwnerScore = {
+      anchorId,
+      name:
+        safeText(payload.ownerNickname) ||
+        safeText(payload.realName) ||
+        safeText(payload.nickname) ||
+        safeText(payload.title) ||
+        "本直播间",
+      score: roomOwnerGiftScore,
+      scoreText: roomOwnerGiftScore ? compactNumber(roomOwnerGiftScore) : "0",
+      scoreRelative: false,
+      multiPkTeamScore: 0,
+      source: "room-gift-score",
+    };
+  };
+
+  const applyGiftScore = (payload: Record<string, unknown>, at: string) => {
+    if (!roomOwnerScore) return;
+    const roomFanTicketCount = safeNumber(payload.roomFanTicketCount);
+    const fanTicket = safeNumber(payload.fanTicket);
+    const nextScore = roomFanTicketCount > 0
+      ? Math.max(roomOwnerGiftScore, roomFanTicketCount)
+      : roomOwnerGiftScore + fanTicket;
+    if (nextScore <= roomOwnerGiftScore) return;
+    roomOwnerGiftScore = nextScore;
+    const nextOwnerScore = {
+      ...roomOwnerScore,
+      score: roomOwnerGiftScore,
+      scoreText: compactNumber(roomOwnerGiftScore),
+      source: "room-gift-score",
+    };
+    roomOwnerScore = nextOwnerScore;
+    scores.set(nextOwnerScore.anchorId, nextOwnerScore);
+    updatedAt = at || updatedAt;
+  };
+
   for (const row of logs.slice().reverse()) {
     const payload = row.payload as Record<string, unknown>;
     if (row.type === "event") {
@@ -1189,11 +1225,18 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
         updatedAt = row.at || updatedAt;
       }
 
+      if (eventType === "room-info") {
+        rememberRoomOwner(payload);
+      }
+
       if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
         const battleId = safeText(payload.battleId);
         ensureRound(battleId, Boolean(battleId && currentBattleId && !sameBattleId(battleId, currentBattleId)));
         const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType);
         applyScores(nextScores, true);
+      } else if (eventType === "linkmic-score") {
+        const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType);
+        applyScores(nextScores, false);
       }
     }
 
@@ -1208,13 +1251,18 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
       }
     }
 
+    if (row.type === "gift") {
+      applyGiftScore(payload, row.at);
+    }
+
   }
 
-  const currentScores = liveScores.length > 0 ? liveScores : Array.from(scores.values());
+  const logScores = Array.from(scores.values());
+  const currentScores = liveScores.length > 0
+    ? mergeScoreRows(logScores, liveScores, false)
+    : logScores;
   if (!hasLiveParticipantCount) {
     participantCount = Math.max(participantCount, currentScores.length);
-  } else if (liveScores.length > 0) {
-    participantCount = Math.max(participantCount, liveScores.length);
   }
   modeLabel = liveModeStatusText({ mode, modeLabel, isPkActive, isLinkmic });
 
@@ -1275,13 +1323,14 @@ function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
   if (row.type === "event") {
     const eventType = safeText(payload.eventType);
     if (eventType === "live-mode") {
-      return `${liveState.modeLabel} · ${safeNumber(payload.participantCount) || liveState.participantCount}人`;
+      const unit = safeBoolean(payload.isPkActive) || safeText(payload.liveMode) === "pk" ? "方" : "人";
+      return `${liveState.modeLabel} · ${safeNumber(payload.participantCount) || liveState.participantCount}${unit}`;
     }
     if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
       const eventScores = Array.isArray(payload.scores)
         ? scoreRowsFromEvent(payload as LivePkEventPayload, eventType)
         : liveState.scores;
-      return `PK ${safeBoolean(payload.isPkActive) ? "进行中" : "未开始"} · ${safeNumber(payload.participantCount) || eventScores.length}人`;
+      return `PK ${safeBoolean(payload.isPkActive) ? "进行中" : "未开始"} · ${safeNumber(payload.participantCount) || eventScores.length}方`;
     }
   }
   return row.detail;
@@ -1502,6 +1551,8 @@ export function DouyinMonitorPage() {
         } else {
           commitLiveScores((current) => mergeScoreRows(current, scoreRowsFromEvent(payload, payload.eventType), true));
         }
+      } else if (payload.eventType === "linkmic-score") {
+        commitLiveScores((current) => mergeScoreRows(current, scoreRowsFromEvent(payload, payload.eventType), false));
       }
       if (payload.eventType === "pk-score-snapshot" || payload.eventType === "linkmic-score") return;
       appendRows([{
@@ -2056,108 +2107,10 @@ export function DouyinMonitorPage() {
 
       <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] gap-3 max-lg:grid-cols-1">
         <aside className="flex min-h-0 flex-col gap-3">
-          <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
-            <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/35 px-3 py-2 text-xs font-bold text-muted-foreground">
-              <div className="flex min-w-0 items-center gap-2">
-                <Users className="size-3.5" />
-                <span className="truncate">用户列表</span>
-                <span className="shrink-0 text-[11px] font-black tabular-nums text-foreground">{userRows.length} 人</span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  onClick={exportUsersCsv}
-                  disabled={exportableUserRows.length === 0}
-                  title="导出用户列表 CSV"
-                >
-                  <Download />
-                </Button>
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  onClick={clearCachedUsers}
-                  disabled={cachedUsers.length === 0}
-                  title="清空有抖音号的用户缓存"
-                >
-                  <Eraser />
-                </Button>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-1 border-b border-border/70 bg-muted/25 p-2 text-center text-[10px] font-bold tabular-nums">
-              <div className="rounded-md bg-background/70 px-1.5 py-1">
-                <div className="text-muted-foreground">抖音号</div>
-                <div>{userIdentitySummary.douyin}</div>
-              </div>
-              <div className="rounded-md bg-background/70 px-1.5 py-1">
-                <div className="text-muted-foreground">已关联</div>
-                <div>{userIdentitySummary.linked}</div>
-              </div>
-              <div className="rounded-md bg-background/70 px-1.5 py-1">
-                <div className="text-muted-foreground">待补</div>
-                <div>{userIdentitySummary.pending}</div>
-              </div>
-            </div>
-            <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_4.75rem] border-b border-border/70 bg-muted/45 px-2 py-1.5 text-[10px] font-bold text-muted-foreground">
-              <div>用户 / 身份</div>
-              <div className="text-right">财富</div>
-            </div>
-            <div className="h-full min-h-0 overflow-auto pb-8">
-              {userRows.length === 0 ? (
-                <div className="flex min-h-32 items-center justify-center px-4 text-center text-xs font-semibold text-muted-foreground">
-                  等待弹幕、礼物或进场用户
-                </div>
-              ) : (
-                userRows.map((user) => (
-                  <div
-                    key={user.key}
-                    className="grid grid-cols-[minmax(0,1fr)_4.75rem] items-start gap-2 border-b border-border/60 px-2 py-2 text-xs transition hover:bg-muted/30"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <div className="truncate font-bold" title={`${realUserName(user)} ${identityValue(user)}`}>
-                          {realUserName(user)}
-                        </div>
-                        {user.isMystery && <span className="shrink-0 text-[10px] text-muted-foreground">脱敏</span>}
-                      </div>
-                      <div className="mt-1 flex min-w-0 items-center gap-1.5">
-                        <Badge variant={identityStatus(user).tone} className="h-4 shrink-0 px-1 text-[9px]">
-                          {identityStatus(user).label}
-                        </Badge>
-                        <span className="truncate text-[10px] font-semibold text-muted-foreground" title={user.douyinId || identityValue(user)}>
-                          {identityValue(user)}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex min-w-0 items-center justify-between gap-2 text-[10px] font-semibold text-muted-foreground">
-                        <span className="truncate" title={userSourceText(user)}>{userSourceText(user)}</span>
-                        <span className="shrink-0 tabular-nums">{userInteractionText(user)}</span>
-                      </div>
-                    </div>
-                    <div className="min-w-0 text-right">
-                      <div className="truncate text-[10px] font-black tabular-nums" title={levelText(user)}>
-                        {levelText(user)}
-                      </div>
-                      {giftTier(user) ? (
-                        <Badge
-                          variant={giftMoney(user) >= 1000 ? "default" : "outline"}
-                          className="mt-1 h-5 px-1.5 text-[10px] tabular-nums"
-                          title={`${moneyText(giftMoney(user))}，礼物 ${user.gifts} 次`}
-                        >
-                          ¥{giftTier(user)}
-                        </Badge>
-                      ) : (
-                        <div className="mt-1 text-[10px] font-semibold text-muted-foreground">-</div>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          <LiveStateStrip liveState={liveState} />
         </aside>
 
         <main className="flex min-h-0 flex-col gap-3">
-          <LiveStateStrip liveState={liveState} stats={stats} />
           <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(8.25rem,1fr))] gap-2 rounded-lg border border-border bg-card p-2 shadow-sm">
             <StatCard icon={Activity} label="总事件" value={stats.total} />
             <StatCard icon={Gift} label="礼物" value={stats.gifts} />
@@ -2172,34 +2125,75 @@ export function DouyinMonitorPage() {
                 <MessageSquareText className="size-4 text-muted-foreground" />
                 <span className="text-xs font-black">事件流</span>
                 <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{filteredLogs.length} 条</span>
+                {filter === "user" && (
+                  <span className="hidden text-[11px] font-semibold tabular-nums text-muted-foreground sm:inline">
+                    用户 {userRows.length} · 抖音号 {userIdentitySummary.douyin} · 已关联 {userIdentitySummary.linked} · 待补 {userIdentitySummary.pending}
+                  </span>
+                )}
               </div>
-              <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 p-0.5">
-                {FILTERS.map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => setFilter(item.key)}
-                    className={cn(
-                      "h-6 shrink-0 rounded-[5px] px-2.5 text-[11px] font-semibold transition",
-                      filter === item.key
-                        ? "bg-foreground text-background shadow-xs"
-                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <div className="flex max-w-full items-center gap-1 overflow-x-auto">
+                {filter === "user" && (
+                  <>
+                    <Button
+                      size="icon-sm"
+                      variant="outline"
+                      onClick={exportUsersCsv}
+                      disabled={exportableUserRows.length === 0}
+                      title="导出用户列表 CSV"
+                    >
+                      <Download />
+                    </Button>
+                    <Button
+                      size="icon-sm"
+                      variant="outline"
+                      onClick={clearCachedUsers}
+                      disabled={cachedUsers.length === 0}
+                      title="清空有抖音号的用户缓存"
+                    >
+                      <Eraser />
+                    </Button>
+                  </>
+                )}
+                <div className="flex items-center gap-1 rounded-md border border-border/70 bg-background/80 p-0.5">
+                  {FILTERS.map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setFilter(item.key)}
+                      className={cn(
+                        "h-6 shrink-0 rounded-[5px] px-2.5 text-[11px] font-semibold transition",
+                        filter === item.key
+                          ? "bg-foreground text-background shadow-xs"
+                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
+            {filter === "user" && (
+              <div className="grid grid-cols-3 gap-1 border-b border-border/70 bg-muted/20 p-2 text-center text-[10px] font-bold tabular-nums sm:hidden">
+                <div className="rounded-md bg-background/70 px-1.5 py-1">
+                  <div className="text-muted-foreground">抖音号</div>
+                  <div>{userIdentitySummary.douyin}</div>
+                </div>
+                <div className="rounded-md bg-background/70 px-1.5 py-1">
+                  <div className="text-muted-foreground">已关联</div>
+                  <div>{userIdentitySummary.linked}</div>
+                </div>
+                <div className="rounded-md bg-background/70 px-1.5 py-1">
+                  <div className="text-muted-foreground">待补</div>
+                  <div>{userIdentitySummary.pending}</div>
+                </div>
+              </div>
+            )}
             {filter === "user" ? (
-              <div className="grid min-w-[1120px] grid-cols-[150px_190px_170px_90px_140px_110px_110px_minmax(130px,1fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
+              <div className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>昵称</div>
                 <div>抖音号 / 状态</div>
-                <div>内部记录</div>
                 <div>财富</div>
-                <div>来源</div>
-                <div>互动</div>
                 <div>音浪</div>
-                <div>最近</div>
               </div>
             ) : (
               <div className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
@@ -2217,11 +2211,11 @@ export function DouyinMonitorPage() {
                     暂无用户，等待弹幕、礼物或进场数据
                   </div>
                 ) : (
-                  userRows.map((user) => (
-                    <div
-                      key={user.key}
-                      className="grid min-w-[1120px] grid-cols-[150px_190px_170px_90px_140px_110px_110px_minmax(130px,1fr)] border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
-                    >
+	                  userRows.map((user) => (
+	                    <div
+	                      key={user.key}
+	                      className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
+	                    >
                       <div className="break-words font-semibold" title={realUserName(user)}>
                         {realUserName(user)}
                         {user.isMystery && <span className="ml-1 text-[10px] text-muted-foreground">脱敏</span>}
@@ -2239,22 +2233,8 @@ export function DouyinMonitorPage() {
                           {user.hasStrongIdentity ? "已识别" : "等待补全"}
                         </div>
                       </div>
-                      <div className="text-[10px] font-semibold text-muted-foreground">
-                        {hasInternalIdentity(user) ? "内部字段已记录" : "-"}
-                      </div>
-                      <div className="tabular-nums">{levelText(user)}</div>
-                      <div className="min-w-0">
-                        <div className="truncate font-semibold text-muted-foreground" title={userSourceText(user)}>
-                          {userSourceText(user)}
-                        </div>
-                        {user.cacheHit && <div className="mt-0.5 text-[10px] text-muted-foreground">缓存命中</div>}
-                      </div>
-                      <div className="space-y-0.5 tabular-nums">
-                        <div>弹幕 {user.chats}</div>
-                        <div>礼物 {user.gifts}</div>
-                        <div>进/离 {user.members}</div>
-                      </div>
-                      <div className="space-y-0.5">
+	                      <div className="tabular-nums">{levelText(user)}</div>
+	                      <div className="space-y-0.5">
                         <div className="tabular-nums">本场 {compactNumber(user.fanTicket)}</div>
                         <div className="tabular-nums text-muted-foreground">累计 {compactNumber(user.fanTicketCount)}</div>
                         {giftTier(user) && (
@@ -2267,12 +2247,8 @@ export function DouyinMonitorPage() {
                           </Badge>
                         )}
                       </div>
-                      <div className="space-y-0.5 text-muted-foreground">
-                        <div className="tabular-nums">{user.lastAt || "-"}</div>
-                        <div>{user.hasStrongIdentity ? "真实ID" : "未确认"} · {user.lastType}</div>
-                      </div>
-                    </div>
-                  ))
+	                    </div>
+	                  ))
                 )
               ) : filteredLogs.length === 0 ? (
                 <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
@@ -2346,19 +2322,8 @@ export function DouyinMonitorPage() {
 
 function LiveStateStrip({
   liveState,
-  stats,
 }: {
   liveState: MonitorLiveState;
-  stats: {
-    total: number;
-    gifts: number;
-    chats: number;
-    members: number;
-    events: number;
-    users: number;
-    fanTicket: number;
-    online: string;
-  };
 }) {
   const [showRounds, setShowRounds] = useState(false);
   const latestRound = liveState.rounds[liveState.rounds.length - 1];
@@ -2370,11 +2335,10 @@ function LiveStateStrip({
   const pkRounds = liveState.rounds
     .map((round) => ({ ...round, scores: round.scores.filter(hasEffectiveScore) }))
     .filter((round) => round.scores.length > 0);
-  const showHistory = !liveState.isPkActive;
   return (
     <>
-      <div className="grid shrink-0 gap-2 rounded-lg border border-border bg-card p-2 shadow-sm lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <div className="min-w-0 rounded-md bg-muted/25 px-3 py-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-card p-2 shadow-sm">
+        <div className="shrink-0 min-w-0 rounded-md bg-muted/25 px-3 py-2">
           <div className="flex items-center gap-2">
             <span className={cn("size-2 rounded-full", liveState.isPkActive ? "bg-primary" : liveState.isLinkmic ? "bg-chart-2" : "bg-muted-foreground/40")} />
             <span className="text-xs font-semibold text-muted-foreground">直播状态</span>
@@ -2384,7 +2348,9 @@ function LiveStateStrip({
           </div>
           <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-1 text-xs font-semibold">
             <span className="text-lg font-black leading-none">{liveState.modeLabel === "正常" ? "普通直播" : `${liveState.modeLabel}中`}</span>
-            <span className="pb-0.5 tabular-nums text-muted-foreground">{liveState.participantCount || 0} 人</span>
+            <span className="pb-0.5 tabular-nums text-muted-foreground">
+              {liveState.participantCount || 0} {liveState.isPkActive ? "方" : "人"}
+            </span>
             {liveState.countdown > 0 && <span>倒计时 {countdownText(liveState.countdown)}</span>}
           </div>
           <div className="mt-3 rounded-md border border-border/60 bg-background/60 px-3 py-2" title={currentScore}>
@@ -2424,30 +2390,54 @@ function LiveStateStrip({
           </div>
         </div>
 
-        {showHistory && (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md bg-muted/25">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+            <span className="text-xs font-semibold text-muted-foreground">PK 分数回合</span>
+            <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+              {pkRounds.length} 场
+            </Badge>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto p-2">
+            {pkRounds.length === 0 ? (
+              <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border px-3 text-center">
+                <Swords className="size-5 text-muted-foreground" />
+                <div className="text-xs font-semibold text-muted-foreground">暂无 PK 回合</div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {pkRounds.slice().reverse().slice(0, 8).map((round) => (
+                  <button
+                    key={`${round.round}-${round.battleId}`}
+                    type="button"
+                    onClick={() => setShowRounds(true)}
+                    className="w-full rounded-md border border-border/70 bg-background/60 px-2.5 py-2 text-left transition hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    title={scoreSummary(round.scores)}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-black">第 {round.round} 场</span>
+                      <span className="text-[10px] font-bold tabular-nums text-muted-foreground">{round.scores.length} 方</span>
+                    </div>
+                    <div className="mt-1 truncate text-[11px] font-semibold tabular-nums text-muted-foreground">
+                      {roundScoreSummary(round)}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => setShowRounds(true)}
-            className="min-w-0 rounded-md bg-muted/25 px-3 py-2 text-left transition hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            disabled={pkRounds.length === 0}
+            className="shrink-0 border-t border-border/60 px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground transition hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+            title={pkRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-muted-foreground">历史轮次</span>
-              <span className="text-xs font-black tabular-nums">{pkRounds.length} 场 PK</span>
-            </div>
-            <div
-              className="mt-2 truncate text-sm font-black tabular-nums"
-              title={pkRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
-            >
-              {latestRound ? `第${latestRound.round}轮 · ${roundScoreSummary(latestRound)}` : "暂无"}
-            </div>
-            <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
-              礼物 {stats.gifts} · 弹幕 {stats.chats} · 用户 {stats.users} · 音浪 {compactNumber(stats.fanTicket)}
-            </div>
+            {latestRound ? `最新 第${latestRound.round}场 · ${roundScoreSummary(latestRound)}` : "开始监控后自动汇总 PK 分数"}
           </button>
-        )}
+        </div>
       </div>
       <PkRoundsDialog
-        open={showRounds && showHistory}
+        open={showRounds}
         onClose={() => setShowRounds(false)}
         rounds={pkRounds}
       />

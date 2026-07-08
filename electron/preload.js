@@ -112,6 +112,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),
   getRewardReport: (period, config) => ipcRenderer.invoke("data:getRewardReport", period, config),
 
+  // ── 应用密码锁 ──
+  verifyAppPassword: (password) => ipcRenderer.invoke("auth:verifyPassword", password),
+  hasAppPassword: () => ipcRenderer.invoke("auth:hasPassword"),
+
   // ── 自动更新 ──
   checkForUpdates: () => ipcRenderer.invoke("updater:check"),
   downloadUpdate: () => ipcRenderer.invoke("updater:download"),
