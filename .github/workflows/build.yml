@@ -37,7 +37,7 @@ jobs:
           ELECTRON: "true"
 
       - name: Build Electron apps (mac + win)
-        run: npx electron-builder --mac --win --x64
+        run: npx electron-builder --mac --win --x64 --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
