@@ -1,0 +1,71 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Temporarily remove API routes (incompatible with static export)
+        run: |
+          if [ -d "src/app/api" ]; then
+            mv src/app/api .api-backup
+          fi
+
+      - name: Build Next.js (static export)
+        run: npm run electron:build
+        env:
+          ELECTRON: "true"
+
+      - name: Build Electron apps (mac + win)
+        run: npx electron-builder --mac --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore API routes
+        if: always()
+        run: |
+          if [ -d ".api-backup" ]; then
+            rm -rf src/app/api
+            mv .api-backup src/app/api
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-builds
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
