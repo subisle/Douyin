@@ -1,16 +1,22 @@
 "use client";
 
 import { getDataApi } from "@/client/http-electron-api";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Download, Loader2, Waves, Clock, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { downloadCsv } from "./csv";
 import { BrowserModeState } from "./states";
 
 type ExportKind = "wave" | "duration" | "anchors";
+
+function todayIsoDate() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
 
 const OPTIONS: {
   kind: ExportKind;
@@ -20,7 +26,13 @@ const OPTIONS: {
   file: string;
 }[] = [
   { kind: "wave", label: "音浪数据", desc: "全部音浪快照（含日期、排名）", icon: Waves, file: "音浪数据" },
-  { kind: "duration", label: "时长数据", desc: "全部直播时长快照", icon: Clock, file: "时长数据" },
+  {
+    kind: "duration",
+    label: "时长数据",
+    desc: "按截止日导出累计直播时长（取最近一次快照）",
+    icon: Clock,
+    file: "时长数据",
+  },
   { kind: "anchors", label: "主播档案", desc: "主播 + 性别 + 代数 + 账号", icon: Users, file: "主播档案" },
 ];
 
@@ -28,8 +40,14 @@ export function ExportPage() {
   const [busy, setBusy] = useState<ExportKind | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [asOfDate, setAsOfDate] = useState(todayIsoDate);
 
   const unavailable = typeof window !== "undefined" && !getDataApi();
+  const durationHint = useMemo(
+    () => `导出截至 ${asOfDate || "最新"} 的累计时长`,
+    [asOfDate]
+  );
+
   if (unavailable) {
     return (
       <Card>
@@ -50,17 +68,20 @@ export function ExportPage() {
         opt.kind === "wave"
           ? await api.exportWave()
           : opt.kind === "duration"
-            ? await api.exportDuration()
+            ? await api.exportDuration(asOfDate || undefined)
             : await api.exportAnchors();
       if (!res.success) throw new Error(res.error);
       if (res.data.length === 0) {
         setMsg(`${opt.label}暂无数据可导出`);
         return;
       }
-      const now = new Date();
-      const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-      downloadCsv(res.data, `${opt.file}_${date}.csv`);
-      setMsg(`已导出 ${res.data.length} 条${opt.label}`);
+      const stamp = asOfDate || todayIsoDate();
+      downloadCsv(res.data, `${opt.file}_${stamp}.csv`);
+      setMsg(
+        opt.kind === "duration"
+          ? `已导出 ${res.data.length} 条累计时长（截止 ${stamp}）`
+          : `已导出 ${res.data.length} 条${opt.label}`
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -74,6 +95,33 @@ export function ExportPage() {
         <h3 className="text-lg font-semibold">数据导出</h3>
         <Badge variant="outline" className="font-mono text-[11px]">CSV</Badge>
       </div>
+
+      <Card>
+        <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">时长截止日</p>
+            <p className="text-xs text-muted-foreground">
+              导入的时长是累计值；导出时取该日及之前最近一次快照作为累计时长。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="date"
+              value={asOfDate}
+              onChange={(e) => setAsOfDate(e.target.value)}
+              className="w-[160px]"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setAsOfDate(todayIsoDate())}
+            >
+              今天
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="space-y-3">
         {OPTIONS.map((opt) => {
@@ -92,7 +140,9 @@ export function ExportPage() {
               </div>
               <div className="min-w-0 flex-1 text-left">
                 <p className="font-semibold text-foreground">{opt.label}</p>
-                <p className="mt-0.5 truncate text-xs text-muted-foreground">{opt.desc}</p>
+                <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {opt.kind === "duration" ? durationHint : opt.desc}
+                </p>
               </div>
               <Button
                 variant="outline"

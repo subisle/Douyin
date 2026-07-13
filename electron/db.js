@@ -264,8 +264,10 @@ async function getDashboardSummary() {
     "SELECT COUNT(*) AS rows_count, COALESCE(SUM(wave_value),0) AS total FROM wave_snapshots"
   );
   const [[durationAgg]] = await db.query(
-    "SELECT COUNT(*) AS rows_count, COALESCE(SUM(total_minutes),0) AS total FROM duration_snapshots"
+    "SELECT COUNT(*) AS rows_count FROM duration_snapshots"
   );
+  const latestDurationMap = await getLatestDurationMap(db);
+  const latestDurationTotal = Array.from(latestDurationMap.values()).reduce((s, v) => s + v, 0);
   const [[latestDataDateRow]] = await db.query(
     `SELECT MAX(import_date) AS latest_date FROM (
        SELECT import_date FROM wave_snapshots
@@ -276,7 +278,7 @@ async function getDashboardSummary() {
 
   const totalAnchors = Number(personCount.c) || 0;
   const totalWave = Number(waveAgg.total) || 0;
-  const totalDuration = Number(durationAgg.total) || 0;
+  const totalDuration = latestDurationTotal;
   const waveRows = Number(waveAgg.rows_count) || 0;
   const durationRows = Number(durationAgg.rows_count) || 0;
   const normalizeDate = (value) =>
@@ -579,11 +581,8 @@ async function getWaveRanking(limit = 10) {
   );
   if (rows.length === 0) return [];
 
-  // 累计时长（按 anchor 聚合）
-  const [durRows] = await db.query(
-    "SELECT anchor_id, COALESCE(SUM(total_minutes),0) AS mins FROM duration_snapshots GROUP BY anchor_id"
-  );
-  const durMap = new Map(durRows.map((r) => [r.anchor_id, Number(r.mins) || 0]));
+  // 累计时长：取每个账号最新一次时长快照（导入值本身已是累计）
+  const durMap = await getLatestDurationMap(db);
 
   // 趋势：最近两个音浪导入日的当日音浪对比
   const [dates] = await db.query(
@@ -828,27 +827,39 @@ async function exportWaveSnapshots(importDate) {
 
 /**
  * 导出时长快照（关联主播名）。
+ * 时长导入值是累计分钟；传 date 时导出“截至该日”的累计时长（取 <= date 最近一次快照）。
+ * 不传 date 时导出每个账号最新累计时长。
  */
 async function exportDurationSnapshots(importDate) {
   const db = getPool();
-  const where = importDate ? "WHERE d.import_date = ?" : "";
-  const params = importDate ? [importDate] : [];
+  const asOfDate = normalizeSnapshotDate(importDate);
+  const where = asOfDate ? "WHERE import_date <= ?" : "";
+  const params = asOfDate ? [asOfDate] : [];
   const [rows] = await db.query(
-    `SELECT d.anchor_id, COALESCE(a.anchor_name, p.name) AS name,
-            d.import_date, d.total_minutes
+    `SELECT d.anchor_id,
+            COALESCE(a.anchor_name, p.name) AS name,
+            d.import_date,
+            d.total_minutes
        FROM duration_snapshots d
+       INNER JOIN (
+         SELECT anchor_id, MAX(import_date) AS latest_date
+           FROM duration_snapshots
+           ${where}
+          GROUP BY anchor_id
+       ) latest
+         ON latest.anchor_id = d.anchor_id
+        AND latest.latest_date = d.import_date
        LEFT JOIN accounts a ON a.anchor_id = d.anchor_id
        LEFT JOIN persons p ON p.id = a.person_id
-       ${where}
-      ORDER BY d.import_date DESC, d.total_minutes DESC`,
+      ORDER BY d.total_minutes DESC, d.anchor_id ASC`,
     params
   );
-  const fmt = (d) =>
-    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  const exportDate = asOfDate || null;
   return rows.map((r) => ({
     抖音号: r.anchor_id,
     昵称: r.name || "",
-    日期: fmt(r.import_date),
+    日期: exportDate || normalizeSnapshotDate(r.import_date) || "",
+    快照日期: normalizeSnapshotDate(r.import_date) || "",
     时长分钟: Number(r.total_minutes) || 0,
   }));
 }
@@ -1055,6 +1066,58 @@ function maxDurationAmongAnchors(anchorIds, durationMap) {
     if (value > max) max = value;
   }
   return max;
+}
+
+function normalizeSnapshotDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const text = String(value).trim();
+  return text ? text.slice(0, 10) : null;
+}
+
+/**
+ * 时长快照语义：导入值是“截至 import_date 的累计分钟”，不是日增量。
+ * 因此任意区间/截止日的累计时长，都取该账号在范围内/截止日前最近一次快照。
+ */
+async function getLatestDurationMap(db, options = {}) {
+  const { anchorIds = null, asOfDate = null, fromDate = null } = options;
+  const where = [];
+  const params = [];
+
+  if (Array.isArray(anchorIds)) {
+    if (anchorIds.length === 0) return new Map();
+    where.push(`anchor_id IN (${anchorIds.map(() => "?").join(",")})`);
+    params.push(...anchorIds);
+  }
+  if (fromDate) {
+    where.push("import_date >= ?");
+    params.push(fromDate);
+  }
+  if (asOfDate) {
+    where.push("import_date <= ?");
+    params.push(asOfDate);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const [rows] = await db.query(
+    `SELECT d.anchor_id, d.import_date, d.total_minutes
+       FROM duration_snapshots d
+       INNER JOIN (
+         SELECT anchor_id, MAX(import_date) AS latest_date
+           FROM duration_snapshots
+           ${whereSql}
+          GROUP BY anchor_id
+       ) latest
+         ON latest.anchor_id = d.anchor_id
+        AND latest.latest_date = d.import_date`,
+    params
+  );
+
+  const map = new Map();
+  for (const row of rows) {
+    map.set(row.anchor_id, Number(row.total_minutes) || 0);
+  }
+  return map;
 }
 
 /**
@@ -1706,12 +1769,12 @@ async function settleFlagScores(period) {
             [...allAnchorIds, monthStart, monthEnd]
           );
           for (const r of waveRows) waveSumMap.set(r.anchor_id, Number(r.w) || 0);
-          const [durRows] = await conn.query(
-            "SELECT anchor_id, COALESCE(SUM(total_minutes),0) AS d FROM duration_snapshots" +
-            " WHERE anchor_id IN (" + awPh + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
-            [...allAnchorIds, monthStart, monthEnd]
-          );
-          for (const r of durRows) durSumMap.set(r.anchor_id, Number(r.d) || 0);
+          const latestDurMap = await getLatestDurationMap(conn, {
+            anchorIds: allAnchorIds,
+            fromDate: monthStart,
+            asOfDate: monthEnd,
+          });
+          for (const [anchorId, minutes] of latestDurMap) durSumMap.set(anchorId, minutes);
         }
       }
     }
@@ -1959,22 +2022,18 @@ async function getDailyWaveReport(date, gender) {
   const totalWaveMap = new Map();
   for (const r of totalWaves) totalWaveMap.set(r.anchor_id, Number(r.total) || 0);
 
-  // 5. 当日时长
-  const [dailyDurs] = await db.query(
-    "SELECT anchor_id, total_minutes FROM duration_snapshots WHERE anchor_id IN (" + ph + ") AND import_date = ?",
-    [...anchorIds, date]
-  );
-  const dailyDurMap = new Map();
-  for (const r of dailyDurs) dailyDurMap.set(r.anchor_id, Number(r.total_minutes) || 0);
+  // 5. 当日时长：取 <= date 最近一次累计快照
+  const dailyDurMap = await getLatestDurationMap(db, {
+    anchorIds,
+    asOfDate: date,
+  });
 
-  // 6. 月累计时长
-  const [totalDurs] = await db.query(
-    "SELECT anchor_id, COALESCE(SUM(total_minutes), 0) AS total FROM duration_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
-    [...anchorIds, monthStart, date]
-  );
-  const totalDurMap = new Map();
-  for (const r of totalDurs) totalDurMap.set(r.anchor_id, Number(r.total) || 0);
+  // 6. 月累计时长：取当月范围内最近一次累计快照（导入值本身已是累计）
+  const totalDurMap = await getLatestDurationMap(db, {
+    anchorIds,
+    fromDate: monthStart,
+    asOfDate: date,
+  });
 
   const [monthlyWaveDates] = await db.query(
     "SELECT anchor_id, import_date, wave_value FROM wave_snapshots " +
@@ -2200,17 +2259,16 @@ async function getPkRoster(period, groupSize) {
     waveByPerson.set(pid, Array.from(dm.values()).filter((value) => value >= LIVE_WAVE_THRESHOLD));
   }
 
-  // 3. 获取当月总时长（按人汇总其名下所有 anchor）
-  const [durRows] = await db.query(
-    "SELECT anchor_id, COALESCE(SUM(total_minutes), 0) AS total_dur FROM duration_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
-    [...anchorIds, monthStart, monthEnd]
-  );
+  // 3. 获取当月总时长：取当月范围内最近一次累计快照，再按人取最长账号
+  const latestDurMap = await getLatestDurationMap(db, {
+    anchorIds,
+    fromDate: monthStart,
+    asOfDate: monthEnd,
+  });
   const durMap = new Map(); // personId -> max account minutes
-  for (const r of durRows) {
-    const pid = anchorToPerson.get(r.anchor_id);
+  for (const [anchorId, minutes] of latestDurMap) {
+    const pid = anchorToPerson.get(anchorId);
     if (pid == null) continue;
-    const minutes = Number(r.total_dur) || 0;
     durMap.set(pid, Math.max(durMap.get(pid) || 0, minutes));
   }
 
@@ -2458,16 +2516,15 @@ async function getRewardReport(period, config) {
     waveByPerson.set(pid, (waveByPerson.get(pid) || 0) + (Number(r.total_wave) || 0));
   }
 
-  const [durationRows] = await db.query(
-    "SELECT anchor_id, COALESCE(SUM(total_minutes), 0) AS total_duration FROM duration_snapshots " +
-    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
-    [...anchorIds, monthStart, monthEnd]
-  );
+  const latestRewardDurMap = await getLatestDurationMap(db, {
+    anchorIds,
+    fromDate: monthStart,
+    asOfDate: monthEnd,
+  });
   const durationByPerson = new Map();
-  for (const r of durationRows) {
-    const pid = anchorToPerson.get(r.anchor_id);
+  for (const [anchorId, minutes] of latestRewardDurMap) {
+    const pid = anchorToPerson.get(anchorId);
     if (pid == null) continue;
-    const minutes = Number(r.total_duration) || 0;
     durationByPerson.set(pid, Math.max(durationByPerson.get(pid) || 0, minutes));
   }
 
