@@ -443,7 +443,20 @@ async function openEmbeddedLiveMonitor(payload) {
   };
 }
 
+const SPLASH_MIN_MS = 2300;
+const SPLASH_FALLBACK_MS = 12000;
+const APP_BACKGROUND = "#f5f3ee";
+
+function splashHtmlPath() {
+  return path.join(__dirname, "splash.html");
+}
+
 function createWindow() {
+  const splashStartedAt = Date.now();
+  let appContentLoading = false;
+  let appContentReady = false;
+  let splashFinished = false;
+
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -455,7 +468,7 @@ function createWindow() {
     maxWidth: 1440,
     maxHeight: 900,
     frame: false,
-    backgroundColor: "#f5f3ee",
+    backgroundColor: APP_BACKGROUND,
     icon: APP_ICON_PNG,
     show: false,
     webPreferences: {
@@ -465,9 +478,62 @@ function createWindow() {
     },
   });
 
+  const loadAppContent = () => {
+    if (appContentLoading || !mainWindow || mainWindow.isDestroyed()) return;
+    appContentLoading = true;
+    if (isDev) {
+      mainWindow.loadURL(DEV_URL);
+    } else {
+      mainWindow.loadFile(path.join(__dirname, "..", "out", "index.html"));
+    }
+  };
+
+  const maybeEnterApp = () => {
+    if (splashFinished || !mainWindow || mainWindow.isDestroyed()) return;
+    const elapsed = Date.now() - splashStartedAt;
+    if (elapsed < SPLASH_MIN_MS) {
+      setTimeout(maybeEnterApp, SPLASH_MIN_MS - elapsed);
+      return;
+    }
+    if (!appContentReady && Date.now() - splashStartedAt < SPLASH_FALLBACK_MS) {
+      return;
+    }
+    splashFinished = true;
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  };
+
   mainWindow.once("ready-to-show", () => {
+    // 先展示启动 UI，再切到业务页面。
     mainWindow?.show();
   });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    const url = mainWindow?.webContents.getURL() || "";
+    if (url.includes("splash.html")) {
+      const waitMs = Math.max(0, SPLASH_MIN_MS - (Date.now() - splashStartedAt));
+      setTimeout(loadAppContent, waitMs);
+      return;
+    }
+    appContentReady = true;
+    maybeEnterApp();
+  });
+
+  // 启动页加载失败时，直接进入业务页。
+  mainWindow.webContents.once("did-fail-load", (_event, _code, _desc, validatedURL) => {
+    if (String(validatedURL || "").includes("splash.html")) {
+      loadAppContent();
+    }
+  });
+
+  // 兜底：超时后强制进入业务页。
+  setTimeout(() => {
+    if (!appContentLoading) loadAppContent();
+    appContentReady = true;
+    maybeEnterApp();
+  }, SPLASH_FALLBACK_MS);
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -507,11 +573,9 @@ function createWindow() {
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
-  if (isDev) {
-    mainWindow.loadURL(DEV_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "out", "index.html"));
-  }
+  mainWindow.loadFile(splashHtmlPath()).catch(() => {
+    loadAppContent();
+  });
 }
 
 app.whenReady().then(() => {

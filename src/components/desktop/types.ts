@@ -10,6 +10,7 @@ import {
   Swords,
   Settings,
   Trophy,
+  Image,
 } from "lucide-react";
 
 export type PageId =
@@ -22,6 +23,7 @@ export type PageId =
   | "douyin-monitor"
   | "star-battle"
   | "reward"
+  | "poster-board"
   | "settings";
 
 export type AppRole = "admin" | "guest";
@@ -96,6 +98,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "族谱",
     icon: Network,
     description: "主播归属关系",
+    adminOnly: true,
+  },
+  {
+    id: "poster-board",
+    label: "海报导出",
+    icon: Image,
+    description: "男团模板海报导出",
     adminOnly: true,
   },
   {

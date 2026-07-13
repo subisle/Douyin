@@ -1,6 +1,32 @@
 @charset "UTF-8";
 @import "tailwindcss";
 
+/* 海报内置字体：PSD 原字体（canvas 用独立 family PosterPuHuiTi105Heavy） */
+@font-face {
+  font-family: "PosterPuHuiTi105Heavy";
+  src: url("/fonts/AlibabaPuHuiTi-3-105-Heavy.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Alibaba PuHuiTi 3.0";
+  src: url("/fonts/AlibabaPuHuiTi-3-105-Heavy.ttf") format("truetype");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "AlibabaPuHuiTi_3_105_Heavy";
+  src: url("/fonts/AlibabaPuHuiTi-3-105-Heavy.ttf") format("truetype");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: block;
+}
+
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

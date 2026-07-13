@@ -14,7 +14,9 @@
     "electron:build": "cross-env ELECTRON=true next build",
     "dist": "npm run electron:build && electron-builder --mac --win --x64",
     "dist:mac": "npm run electron:build && electron-builder --mac",
-    "dist:win": "npm run electron:build && electron-builder --win --x64"
+    "dist:win": "npm run electron:build && electron-builder --win --x64",
+    "poster:sync": "node scripts/sync-poster-from-psd.mjs",
+    "poster:sync:meta": "node scripts/sync-poster-from-psd.mjs --skip-images"
   },
   "build": {
     "appId": "com.subisle.douyin",

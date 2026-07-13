@@ -16,6 +16,7 @@ import { DouyinMonitorPage } from "./douyin-monitor-page";
 import { RewardPage } from "./reward-page";
 import { StarBattlePage } from "./star-battle-page";
 import { SettingsPage } from "./settings-page";
+import { PosterBoardPage } from "./poster-board-page";
 import { LockScreen } from "./lock-screen";
 import { type PageId, type AppRole } from "./types";
 import type { DroppedImportFile } from "./import-page";
@@ -53,6 +54,11 @@ export function DesktopShell() {
 
     const run = async () => {
       void runStartupChecks(updateCheck);
+      // Electron 主进程已有原生启动页，避免二次动画。
+      if (window.electronAPI) {
+        if (!cancelled) setShowStartup(false);
+        return;
+      }
       await wait(STARTUP_ANIMATION_MS);
       await wait(STARTUP_SETTLE_MS);
       if (!cancelled) setShowStartup(false);
@@ -179,6 +185,8 @@ export function DesktopShell() {
                 <StarBattlePage />
               ) : currentPage === "reward" ? (
                 <RewardPage />
+              ) : currentPage === "poster-board" ? (
+                <PosterBoardPage />
               ) : currentPage === "settings" ? (
                 <SettingsPage />
               ) : null}

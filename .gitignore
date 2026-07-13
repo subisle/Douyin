@@ -53,6 +53,13 @@ backups/
 .codex-temp/
 /live-room-watcher/
 
+# Poster PSD sources and generated diagnostics
+assets/fonts/
+assets/posters/
+public/fonts/Alibaba-PuHuiTi-Bold.ttf
+public/fonts/Alibaba-PuHuiTi-Heavy.ttf
+public/fonts/NotoSansSC-Bold.woff
+
 # Temp files
 tmp-query.js
 tsc_out.txt

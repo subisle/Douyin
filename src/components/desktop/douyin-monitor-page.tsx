@@ -226,15 +226,99 @@ function userLevelSummary(user: Pick<MonitorUserRow, "wealthLevel" | "consumeLev
   return levels.length ? levels.join(" / ") : "-";
 }
 
-function giftLabelFromPayload(payload: Record<string, unknown>) {
-  const giftName = safeText(payload.giftName) || safeText(payload.giftId);
-  if (!giftName) return "";
-  const count = giftCountFromPayload(payload);
-  return `${giftName} x${count}`;
+function giftNameFromPayload(payload: Record<string, unknown>) {
+  return safeText(payload.giftName) || safeText(payload.giftId) || "礼物";
 }
 
 function giftCountFromPayload(payload: Record<string, unknown>) {
-  return Math.max(1, safeNumber(payload.count));
+  return Math.max(1, safeNumber(payload.count) || safeNumber(payload.totalCount) || safeNumber(payload.repeatCount) || safeNumber(payload.comboCount));
+}
+
+function giftFanTicketFromPayload(payload: Record<string, unknown>) {
+  return Math.max(0, safeNumber(payload.fanTicket));
+}
+
+function giftLabelFromPayload(payload: Record<string, unknown>, count = giftCountFromPayload(payload)) {
+  const giftName = giftNameFromPayload(payload);
+  return `${giftName} x${Math.max(1, count)}`;
+}
+
+function giftStreakKey(payload: Record<string, unknown>) {
+  const owner =
+    safeText(payload.userId) ||
+    safeText(payload.secUid) ||
+    safeText(payload.uniqueId) ||
+    safeText(payload.webcastUid) ||
+    safeText(payload.realName) ||
+    safeText(payload.nickname) ||
+    safeText(payload.displayName);
+  const giftId = safeText(payload.giftId) || giftNameFromPayload(payload);
+  // 仅在有连击/批次标识时做增量去重；免费礼物等无标识消息按整帧计入。
+  const streak =
+    safeText(payload.groupId) ||
+    safeText(payload.logId) ||
+    safeText(payload.traceId);
+  if (!owner || !giftId || !streak) return "";
+  return `${owner}|${giftId}|${streak}`;
+}
+
+function giftIncrementalFromPayload(
+  payload: Record<string, unknown>,
+  previous?: { count: number; fanTicket: number }
+) {
+  const count = giftCountFromPayload(payload);
+  const fanTicket = giftFanTicketFromPayload(payload);
+  if (!previous) {
+    return {
+      count,
+      fanTicket,
+      totalCount: count,
+      totalFanTicket: fanTicket,
+    };
+  }
+  // 新一轮连击（计数回落）时重新起算。
+  if (count < previous.count || fanTicket < previous.fanTicket) {
+    return {
+      count,
+      fanTicket,
+      totalCount: count,
+      totalFanTicket: fanTicket,
+    };
+  }
+  return {
+    count: Math.max(0, count - previous.count),
+    fanTicket: Math.max(0, fanTicket - previous.fanTicket),
+    totalCount: count,
+    totalFanTicket: fanTicket,
+  };
+}
+
+function summarizeGiftMetrics(logs: MonitorLogRow[]) {
+  const streakState = new Map<string, { count: number; fanTicket: number }>();
+  let gifts = 0;
+  let fanTicket = 0;
+  let roomFanTicket = 0;
+  for (const row of logs.slice().reverse()) {
+    if (row.type !== "gift") continue;
+    const payload = row.payload as Record<string, unknown>;
+    roomFanTicket = Math.max(roomFanTicket, safeNumber(payload.roomFanTicketCount));
+    const key = giftStreakKey(payload);
+    const previous = key ? streakState.get(key) : undefined;
+    const incremental = giftIncrementalFromPayload(payload, previous);
+    if (key) {
+      streakState.set(key, {
+        count: incremental.totalCount,
+        fanTicket: incremental.totalFanTicket,
+      });
+    }
+    gifts += incremental.count;
+    fanTicket += incremental.fanTicket;
+  }
+  return {
+    gifts,
+    fanTicket: roomFanTicket > 0 ? roomFanTicket : fanTicket,
+    roomFanTicket,
+  };
 }
 
 function mergeGiftNames(...lists: string[][]) {
@@ -245,11 +329,14 @@ function mergeGiftNames(...lists: string[][]) {
       if (!text) continue;
       const match = text.match(/^(.*?)\s*x(\d+)$/i);
       const name = (match?.[1] || text).trim();
-      const count = match?.[2] ? Number(match[2]) || 1 : 1;
-      totals.set(name, (totals.get(name) || 0) + count);
+      const count = match ? Number(match[2] || 0) : 1;
+      if (!name) continue;
+      totals.set(name, (totals.get(name) || 0) + (Number.isFinite(count) && count > 0 ? count : 1));
     }
   }
-  return Array.from(totals.entries()).map(([name, count]) => `${name} x${count}`);
+  return Array.from(totals.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"))
+    .map(([name, count]) => `${name} x${count}`);
 }
 
 function mergeRoomAppearances(...lists: MonitorRoomAppearance[][]) {
@@ -664,10 +751,14 @@ function userFromPayload(
     lastAt: at,
     lastType: type,
     chats: type === "chat" ? 1 : 0,
-    gifts: type === "gift" ? giftCountFromPayload(payload) : 0,
-    giftNames: type === "gift" ? [giftLabelFromPayload(payload)].filter(Boolean) : [],
+    gifts: type === "gift" ? Math.max(0, safeNumber(payload.__giftDeltaCount) || giftCountFromPayload(payload)) : 0,
+    giftNames: type === "gift"
+      ? [giftLabelFromPayload(payload, Math.max(0, safeNumber(payload.__giftDeltaCount) || giftCountFromPayload(payload)))].filter(Boolean)
+      : [],
     members: type === "member" ? 1 : 0,
-    fanTicket,
+    fanTicket: type === "gift"
+      ? Math.max(0, safeNumber(payload.__giftDeltaFanTicket) || fanTicket)
+      : fanTicket,
     roomAppearances: [],
   };
 }
@@ -833,11 +924,13 @@ function mergeUserCollection(users: MonitorUserRow[]) {
 
 function sortMonitorUsers(users: MonitorUserRow[]) {
   return [...users].sort((a, b) => {
+    if (b.fanTicket !== a.fanTicket) return b.fanTicket - a.fanTicket;
+    if (b.gifts !== a.gifts) return b.gifts - a.gifts;
     if (Boolean(a.douyinId) !== Boolean(b.douyinId)) return a.douyinId ? -1 : 1;
     if (a.hasStrongIdentity !== b.hasStrongIdentity) return a.hasStrongIdentity ? -1 : 1;
     const timeDelta = new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
     if (timeDelta) return timeDelta;
-    return b.fanTicket - a.fanTicket;
+    return b.chats - a.chats;
   });
 }
 
@@ -845,7 +938,10 @@ function sameCachedUsers(left: MonitorUserRow[], right: MonitorUserRow[]) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function collectUsersFromLog(row: MonitorLogRow) {
+function collectUsersFromLog(
+  row: MonitorLogRow,
+  giftStreakState?: Map<string, { count: number; fanTicket: number }>
+) {
   const payload = row.payload as Record<string, unknown>;
   const users: MonitorUserRow[] = [];
   const push = (item: unknown, type = row.type) => {
@@ -855,7 +951,24 @@ function collectUsersFromLog(row: MonitorLogRow) {
   };
 
   if (row.type === "gift") {
-    push(payload, "gift");
+    const key = giftStreakKey(payload);
+    const previous = giftStreakState && key ? giftStreakState.get(key) : undefined;
+    const incremental = giftIncrementalFromPayload(payload, previous);
+    if (giftStreakState && key) {
+      giftStreakState.set(key, {
+        count: incremental.totalCount,
+        fanTicket: incremental.totalFanTicket,
+      });
+    }
+    // 连击帧只累计增量，避免 totalCount/repeatCount 重复叠加。
+    if (incremental.count <= 0 && incremental.fanTicket <= 0) return users;
+    push({
+      ...payload,
+      __giftDeltaCount: incremental.count,
+      __giftDeltaFanTicket: incremental.fanTicket,
+      fanTicket: incremental.fanTicket,
+      count: incremental.count,
+    }, "gift");
     return users;
   }
 
@@ -896,21 +1009,13 @@ function identityDetail(payload: {
   cacheHit?: boolean;
 }) {
   const parts: string[] = [];
-  if (payload.cacheHit) parts.push("缓存命中");
   if (payload.isMystery) parts.push(`神秘人${payload.mysteryMan ? `L${payload.mysteryMan}` : ""}`);
-  if (payload.displayName && payload.realName && payload.displayName !== payload.realName) {
-    parts.push(`${payload.displayName} -> ${payload.realName}`);
-  }
-  if (payload.uniqueId) parts.push(`抖音号:${payload.uniqueId}`);
+  if (payload.ipLocation) parts.push(payload.ipLocation);
   if (payload.wealthLevel || payload.consumeLevel) {
-    parts.push(`财富等级:${payload.wealthLevel || payload.consumeLevel}`);
+    parts.push(`财富${payload.wealthLevel || payload.consumeLevel}`);
   }
-  if (payload.payScore) parts.push(`付费分:${payload.payScore}`);
-  if (payload.totalRechargeDiamondCount) parts.push(`充值钻石:${payload.totalRechargeDiamondCount}`);
-  if (payload.fanTicketCount) parts.push(`粉丝票:${payload.fanTicketCount}`);
-  if (payload.ipLocation) parts.push(`IP:${payload.ipLocation}`);
-  if (payload.followerCount) parts.push(`粉丝:${payload.followerCount}`);
-  return parts.join(" / ");
+  if (payload.fansClubLevel) parts.push(`粉丝团${payload.fansClubLevel}`);
+  return parts.join(" · ");
 }
 
 function memberActionLabel(payload: Pick<LivePkMemberPayload, "memberAction" | "memberActionText" | "actionDescription">) {
@@ -1302,9 +1407,10 @@ function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
     : "";
   if (row.type === "gift") {
     const gift = payload as unknown as LivePkGiftPayload;
-    const rmb = safeNumber(gift.diamondCount) * safeNumber(gift.count) / 10;
+    const count = giftCountFromPayload(payload);
+    const rmb = safeNumber(gift.diamondCount) * count / 10;
     return [
-      `${row.name}${identity} 送出 ${gift.giftName || "礼物"} x${gift.count || 1}`,
+      `${row.name}${identity} 送出 ${gift.giftName || giftNameFromPayload(payload)} x${count}`,
       rmb ? moneyText(rmb) : "",
       gift.fanTicket ? `音浪 ${compactNumber(gift.fanTicket)}` : "",
     ].filter(Boolean).join(" · ");
@@ -1312,6 +1418,9 @@ function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
   if (row.type === "chat") {
     const chat = payload as unknown as LivePkChatPayload;
     return `${row.name}${identity}: ${chat.content || row.detail}`;
+  }
+  if (row.type === "member") {
+    return `${row.name}${identity} ${row.label}`;
   }
     if (row.type === "rank") {
       const rank = (payload.rank || payload) as Record<string, unknown>;
@@ -1489,26 +1598,23 @@ export function DouyinMonitorPage() {
       if (!payload.embedded) setPreviewOpen(false);
     }) ?? (() => undefined);
     const offGift = api.onLivePkGift?.((payload: LivePkGiftPayload) => {
+      const count = giftCountFromPayload(payload as unknown as Record<string, unknown>);
+      const diamond = safeNumber(payload.diamondCount);
+      const fanTicket = giftFanTicketFromPayload(payload as unknown as Record<string, unknown>);
+      const money = diamond > 0 ? moneyText((diamond * count) / 10) : "";
       const giftDetail = [
+        `${giftNameFromPayload(payload as unknown as Record<string, unknown>)} x${count}`,
+        money,
+        fanTicket ? `音浪 ${compactNumber(fanTicket)}` : "",
         identityDetail(payload),
-        `${payload.giftName || payload.giftId || "礼物"} x${payload.count}`,
-        payload.giftKind ? `类型 ${payload.giftKind}` : "",
-        payload.giftType ? `礼物类型 ${payload.giftType}` : "",
-        payload.giftScene ? `场景 ${payload.giftScene}` : "",
-        payload.diamondCount ? `单价 ${payload.diamondCount}` : "",
-        payload.baseScore ? `基础 ${payload.baseScore}` : "",
-        `实际 ${payload.fanTicket || 0}`,
-        payload.bonusScore ? `加成 +${payload.bonusScore}` : "",
-        payload.roomFanTicketCount ? `房间累计 ${payload.roomFanTicketCount}` : "",
-        payload.giftDescribe || "",
-      ].filter(Boolean).join(" / ");
+      ].filter(Boolean).join(" · ");
       appendRows([{
         at: formatTime(payload.at),
         type: "gift",
         label: "礼物",
         name: monitorName(payload),
         userId: payload.uniqueId || "",
-        value: String(payload.fanTicket || ""),
+        value: fanTicket ? String(fanTicket) : "",
         detail: giftDetail,
         payload,
       }]);
@@ -1521,7 +1627,7 @@ export function DouyinMonitorPage() {
         name: monitorName(payload),
         userId: payload.uniqueId || "",
         value: "",
-        detail: [identityDetail(payload), payload.content].filter(Boolean).join(" / "),
+        detail: safeText(payload.content),
         payload,
       }]);
     }) ?? (() => undefined);
@@ -1534,7 +1640,7 @@ export function DouyinMonitorPage() {
         name: monitorName(payload),
         userId: payload.uniqueId || "",
         value: payload.memberCount ? String(payload.memberCount) : "",
-        detail: [identityDetail(payload), actionLabel !== "进场" ? actionLabel : ""].filter(Boolean).join(" / "),
+        detail: [actionLabel, identityDetail(payload)].filter(Boolean).join(" · "),
         payload,
       }]);
     }) ?? (() => undefined);
@@ -1617,6 +1723,7 @@ export function DouyinMonitorPage() {
     const users: MonitorUserRow[] = [];
     const profileUsers: MonitorUserRow[] = [];
     const anchorIds = new Set<string>();
+    const giftStreakState = new Map<string, { count: number; fanTicket: number }>();
     let currentRoom: MonitorRoomAppearance | null = null;
     for (const row of logs.slice().reverse()) {
       const payload = row.payload as Record<string, unknown>;
@@ -1624,7 +1731,7 @@ export function DouyinMonitorPage() {
         currentRoom = roomAppearanceFromPayload(payload, liveRoomUrl);
         collectAnchorIdsFromRoomInfoPayload(payload).forEach((id) => anchorIds.add(id));
       }
-      for (const user of collectUsersFromLog(row)) {
+      for (const user of collectUsersFromLog(row, giftStreakState)) {
         const rowUser = userWithRoom(user, currentRoom);
         if (isProfileEnrichmentLog(row)) {
           profileUsers.push(rowUser);
@@ -1730,32 +1837,46 @@ export function DouyinMonitorPage() {
   }, [liveCountdownMs, liveScores, logs]);
 
   const stats = useMemo(() => {
-    const giftRows = logs.filter((row) => row.type === "gift");
     const eventRows = logs.filter((row) => row.type === "event");
     const online = eventRows.find((row) => {
       const payload = row.payload as LivePkEventPayload;
       return payload.eventType === "room-stats" || payload.eventType === "room-user-seq";
     });
-    const roomFanTicket = giftRows.reduce((max, row) => {
-      const payload = row.payload as LivePkGiftPayload;
-      return Math.max(max, Number(payload.roomFanTicketCount || 0));
-    }, 0);
+    const giftMetrics = summarizeGiftMetrics(logs);
     return {
       total: logs.length,
-      gifts: giftRows.reduce((total, row) => total + giftCountFromPayload(row.payload as Record<string, unknown>), 0),
+      gifts: giftMetrics.gifts,
       chats: logs.filter((row) => row.type === "chat").length,
       members: logs.filter((row) => row.type === "member").length,
       events: eventRows.length,
       users: userRows.length,
-      fanTicket: roomFanTicket,
+      fanTicket: giftMetrics.fanTicket || roomInfo.roomFanTicket,
       online: roomInfo.onlineText || online?.value || "",
     };
-  }, [logs, roomInfo.onlineText, userRows.length]);
+  }, [logs, roomInfo.onlineText, roomInfo.roomFanTicket, userRows.length]);
 
-  const filteredLogs = useMemo(
-    () => logs.filter((row) => filter === "all" || (filter !== "user" && row.type === filter)),
-    [filter, logs]
-  );
+  const filteredLogs = useMemo(() => {
+    const noisyEventTypes = new Set([
+      "gift-catalog",
+      "interaction-info",
+      "short-touch-area",
+      "in-room-banner",
+      "room-verify",
+      "ranklist-hour-entrance",
+      "rank-list-hour-enter",
+      "user-profile",
+    ]);
+    return logs.filter((row) => {
+      if (filter === "user") return false;
+      if (filter !== "all" && row.type !== filter) return false;
+      if (filter === "all" && row.type === "event") {
+        const eventType = safeText((row.payload as Record<string, unknown>).eventType);
+        if (noisyEventTypes.has(eventType)) return false;
+      }
+      if (filter === "all" && row.type === "status" && !row.detail) return false;
+      return true;
+    });
+  }, [filter, logs]);
 
   const startMonitor = async () => {
     const api = getDataApi();
@@ -1907,16 +2028,72 @@ export function DouyinMonitorPage() {
       row.name,
       logIdentityText(row),
       row.value,
-      row.detail,
+      compactLogDetail(row, liveState),
     ]);
     const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(",")).join("\n");
     downloadText(`抖音直播监控_${Date.now()}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
   };
 
   const exportJson = () => {
+    const rows = logs.slice().reverse().map((row) => {
+      const payload = (row.payload && typeof row.payload === "object")
+        ? row.payload as Record<string, unknown>
+        : {};
+      const base = {
+        at: row.at,
+        type: row.type,
+        label: row.label,
+        name: row.name,
+        douyinId: logIdentityText(row),
+        value: row.value,
+        detail: compactLogDetail(row, liveState),
+      };
+      if (row.type === "gift") {
+        return {
+          ...base,
+          giftName: safeText(payload.giftName) || safeText(payload.giftId),
+          count: giftCountFromPayload(payload),
+          diamondCount: safeNumber(payload.diamondCount),
+          fanTicket: giftFanTicketFromPayload(payload),
+          roomFanTicketCount: safeNumber(payload.roomFanTicketCount),
+          userId: safeText(payload.userId),
+          secUid: safeText(payload.secUid),
+          uniqueId: safeText(payload.uniqueId),
+        };
+      }
+      if (row.type === "chat") {
+        return {
+          ...base,
+          content: safeText(payload.content),
+          uniqueId: safeText(payload.uniqueId),
+          userId: safeText(payload.userId),
+        };
+      }
+      if (row.type === "member") {
+        return {
+          ...base,
+          action: safeText(payload.memberActionText) || row.label,
+          memberCount: safeNumber(payload.memberCount),
+          uniqueId: safeText(payload.uniqueId),
+          userId: safeText(payload.userId),
+        };
+      }
+      if (row.type === "event") {
+        return {
+          ...base,
+          eventType: safeText(payload.eventType),
+          liveMode: safeText(payload.liveMode),
+          isPkActive: payload.isPkActive,
+          participantCount: safeNumber(payload.participantCount),
+          battleId: safeText(payload.battleId),
+          scores: Array.isArray(payload.scores) ? payload.scores : undefined,
+        };
+      }
+      return base;
+    });
     downloadText(
       `抖音直播监控_${Date.now()}.json`,
-      JSON.stringify(logs.slice().reverse(), null, 2),
+      JSON.stringify(rows, null, 2),
       "application/json;charset=utf-8"
     );
   };
@@ -1928,6 +2105,12 @@ export function DouyinMonitorPage() {
       "抖音号",
       "等级",
       "IP",
+      "礼物次数",
+      "本场音浪",
+      "累计音浪",
+      "消费金额",
+      "弹幕",
+      "进/离",
       "送过的礼物",
       "出现在哪个直播间",
       "直播间主播ID",
@@ -1945,6 +2128,12 @@ export function DouyinMonitorPage() {
         user.douyinId,
         userLevelSummary(user),
         user.ipLocation,
+        user.gifts,
+        user.fanTicket,
+        user.fanTicketCount,
+        giftMoney(user).toFixed(2),
+        user.chats,
+        user.members,
         user.giftNames.length ? user.giftNames.join("；") : "-",
         exportRoomAppearanceText(rooms),
         roomAnchorIdsText(rooms),
@@ -1956,7 +2145,23 @@ export function DouyinMonitorPage() {
 
   const exportUsersJson = () => {
     const rows = exportableUserRows.map((user) => ({
-      ...user,
+      nickname: realUserName(user),
+      douyinId: user.douyinId,
+      userId: user.userId,
+      secUid: user.secUid,
+      level: userLevelSummary(user),
+      wealthLevel: user.wealthLevel || user.consumeLevel,
+      fansClubLevel: user.fansClubLevel,
+      ipLocation: user.ipLocation,
+      gifts: user.gifts,
+      giftNames: user.giftNames,
+      fanTicket: user.fanTicket,
+      fanTicketCount: user.fanTicketCount,
+      spendYuan: Number(giftMoney(user).toFixed(2)),
+      chats: user.chats,
+      members: user.members,
+      lastAt: user.lastAt,
+      lastType: user.lastType,
       roomAppearances: user.roomAppearances.map((room) => ({
         roomLabel: exportRoomAppearanceText([room]),
         anchorId: room.anchorId,

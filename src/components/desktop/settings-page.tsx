@@ -261,7 +261,7 @@ export function SettingsPage() {
         <QuickAction
           icon={FileImage}
           title="导出图片"
-          desc="每日报告、PK名单、族谱海报统一从这里进入。"
+          desc="每日报告、PK名单、族谱海报、男团海报导出统一从这里进入。"
           page="data"
         />
         <QuickAction
