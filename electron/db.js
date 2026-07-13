@@ -616,7 +616,7 @@ async function getWaveRanking(limit = 10) {
     for (const aid of anchorIds) {
       if (latestMap.has(aid)) latest = (latest || 0) + latestMap.get(aid);
       if (prevMap.has(aid)) prev = (prev || 0) + prevMap.get(aid);
-      duration += durMap.get(aid) || 0;
+      duration = Math.max(duration, durMap.get(aid) || 0);
     }
     let trend = "flat";
     if (latest != null && prev != null) {
@@ -952,10 +952,14 @@ async function batchImportAnchors(rows) {
 
 /**
  * 合并账号：把 secondary 主播的所有账号迁移到 primary 主播名下，并删除 secondary 的 person 记录。
+ * 音浪始终随账号归属合并（按人汇总全部账号）。
+ * mergeDuration=true 时保留副号时长；false 时删除被合并方账号的时长快照。
+ * 展示时长默认取名下“时长最多”的那个账号，而不是多账号相加。
  */
-async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
+async function mergeAccounts({ primaryPersonId, secondaryPersonId, mergeDuration = false }) {
   if (!primaryPersonId || !secondaryPersonId) throw new Error("请选择要合并的两个主播");
   if (Number(primaryPersonId) === Number(secondaryPersonId)) throw new Error("不能合并同一个主播");
+  const shouldMergeDuration = Boolean(mergeDuration);
   const db = getPool();
   const conn = await db.getConnection();
   try {
@@ -979,10 +983,25 @@ async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
     const primaryAccountId = primaryAccounts[0].id;
 
     const [secAccounts] = await conn.query(
-      "SELECT id FROM accounts WHERE person_id = ?",
+      "SELECT id, anchor_id FROM accounts WHERE person_id = ?",
       [secondaryPersonId]
     );
     if (secAccounts.length === 0) throw new Error("被合并的主播没有账号");
+
+    // 账号合并默认只合并音浪归属；时长可选。
+    if (!shouldMergeDuration) {
+      const secAnchorIds = secAccounts
+        .map((acc) => String(acc.anchor_id || "").trim())
+        .filter(Boolean);
+      if (secAnchorIds.length > 0) {
+        const ph = secAnchorIds.map(() => "?").join(",");
+        await conn.query(
+          `DELETE FROM duration_snapshots WHERE anchor_id IN (${ph})`,
+          secAnchorIds
+        );
+      }
+    }
+
     for (const acc of secAccounts) {
       await conn.query(
         "UPDATE accounts SET person_id = ?, is_primary = 0 WHERE id = ?",
@@ -1016,13 +1035,26 @@ async function mergeAccounts({ primaryPersonId, secondaryPersonId }) {
 
     await conn.query("DELETE FROM persons WHERE id = ?", [secondaryPersonId]);
     await conn.commit();
-    return { moved: secAccounts.length };
+    return {
+      moved: secAccounts.length,
+      mergeDuration: shouldMergeDuration,
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
   } finally {
     conn.release();
   }
+}
+
+/** 一人多号时，时长默认取“时长最多”的账号，而不是相加。 */
+function maxDurationAmongAnchors(anchorIds, durationMap) {
+  let max = 0;
+  for (const aid of anchorIds) {
+    const value = Number(durationMap.get(aid) || 0) || 0;
+    if (value > max) max = value;
+  }
+  return max;
 }
 
 /**
@@ -1561,15 +1593,16 @@ async function getFlowingFlag(personId) {
     }
   }
 
-  // 4. 组装成员数据（每人音浪/时长 = 其名下所有 anchor 之和）
+  // 4. 组装成员数据（音浪按账号求和；时长取名下最多的账号）
   const members = persons.map((p) => {
     const ids = anchorsByPerson.get(p.id) || [];
     let wave = 0;
     let duration = 0;
     for (const aid of ids) {
       wave += waveMap.get(aid) ?? 0;
-      duration += durationMap.get(aid) ?? 0;
     }
+    // 时长默认展示名下最多的那个账号
+    duration = maxDurationAmongAnchors(ids, durationMap);
     return {
       id: p.id,
       name: p.name,
@@ -1691,10 +1724,14 @@ async function settleFlagScores(period) {
       if (denom === 0) continue;
       let waveSum = 0, durSum = 0;
       for (const pid of memberIds) {
-        for (const aid of (personAnchorMap.get(pid) || [])) {
-          waveSum += waveSumMap.get(aid) ?? 0;
-          durSum  += durSumMap.get(aid)  ?? 0;
+        const aids = personAnchorMap.get(pid) || [];
+        let personWave = 0;
+        for (const aid of aids) {
+          personWave += waveSumMap.get(aid) ?? 0;
         }
+        // 时长按人取“时长最多”的账号，避免副号把组均时长抬高
+        waveSum += personWave;
+        durSum += maxDurationAmongAnchors(aids, durSumMap);
       }
       const avgWave     = waveSum / denom;
       const avgDuration = durSum  / denom;
@@ -2020,9 +2057,10 @@ async function getDailyWaveReport(date, gender) {
     for (const aid of p.anchorIds) {
       dw += dailyWaveMap.get(aid) || 0;
       tw += totalWaveMap.get(aid) || 0;
-      dd += dailyDurMap.get(aid) || 0;
-      td += totalDurMap.get(aid) || 0;
     }
+    // 时长默认展示名下最多的那个账号
+    dd = maxDurationAmongAnchors(p.anchorIds, dailyDurMap);
+    td = maxDurationAmongAnchors(p.anchorIds, totalDurMap);
     const isLive = dw >= LIVE_WAVE_THRESHOLD;
     const personLiveDates = liveDatesByPerson.get(p.person_id) ?? new Set();
     const personNotLiveDays = reportDates.filter((key) => !personLiveDates.has(key)).length;
@@ -2168,11 +2206,12 @@ async function getPkRoster(period, groupSize) {
     "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
     [...anchorIds, monthStart, monthEnd]
   );
-  const durMap = new Map(); // personId -> total minutes
+  const durMap = new Map(); // personId -> max account minutes
   for (const r of durRows) {
     const pid = anchorToPerson.get(r.anchor_id);
     if (pid == null) continue;
-    durMap.set(pid, (durMap.get(pid) || 0) + (Number(r.total_dur) || 0));
+    const minutes = Number(r.total_dur) || 0;
+    durMap.set(pid, Math.max(durMap.get(pid) || 0, minutes));
   }
 
   // 4. 计算每位主播的统计数据
@@ -2428,7 +2467,8 @@ async function getRewardReport(period, config) {
   for (const r of durationRows) {
     const pid = anchorToPerson.get(r.anchor_id);
     if (pid == null) continue;
-    durationByPerson.set(pid, (durationByPerson.get(pid) || 0) + (Number(r.total_duration) || 0));
+    const minutes = Number(r.total_duration) || 0;
+    durationByPerson.set(pid, Math.max(durationByPerson.get(pid) || 0, minutes));
   }
 
   const waveRules = rewardConfig.waveRules;

@@ -17,13 +17,14 @@ interface ModalProps {
   children: React.ReactNode;
   error?: string | null;
   success?: string | null;
+  contentClassName?: string;
 }
 
-function Modal({ open, onClose, title, children, error, success }: ModalProps) {
+function Modal({ open, onClose, title, children, error, success, contentClassName }: ModalProps) {
   if (!open) return null;
   return (
     <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <div className={cn("w-full max-w-md", contentClassName)} onClick={(e) => e.stopPropagation()}>
         <Card className="border border-border shadow-2xl">
           <CardHeader className="pb-4">
             <CardTitle className="text-base">{title}</CardTitle>
@@ -187,17 +188,131 @@ interface MergeAccountsDialogProps {
   prefillSecondary?: number;
 }
 
+function matchAnchorQuery(anchor: AnchorRow, query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    anchor.name,
+    anchor.anchorId,
+    anchor.anchorName,
+    anchor.douyinNo,
+    ...(anchor.aliasIds || []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
+function formatAnchorOption(anchor: AnchorRow) {
+  const ids = [anchor.anchorId, ...(anchor.aliasIds || [])].filter(Boolean);
+  const uniqueIds = Array.from(new Set(ids));
+  const idText = uniqueIds.length > 0 ? uniqueIds.join(" / ") : "无ID";
+  const countText = anchor.accountCount > 1 ? ` · ${anchor.accountCount}账号` : "";
+  return {
+    title: `${anchor.name}${countText}`,
+    subtitle: idText + (anchor.douyinNo ? ` · 抖音号 ${anchor.douyinNo}` : ""),
+  };
+}
+
+function AnchorSearchPicker({
+  label,
+  value,
+  onChange,
+  anchors,
+  excludeId,
+  disabled,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  anchors: AnchorRow[];
+  excludeId?: string;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const selected = useMemo(
+    () => anchors.find((a) => String(a.id) === value) || null,
+    [anchors, value]
+  );
+  const options = useMemo(() => {
+    return anchors
+      .filter((a) => String(a.id) !== excludeId)
+      .filter((a) => matchAnchorQuery(a, query))
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+      .slice(0, 80);
+  }, [anchors, excludeId, query]);
+
+  useEffect(() => {
+    if (!value) setQuery("");
+  }, [value]);
+
+  return (
+    <div className="space-y-2">
+      <label className="block text-sm font-medium">{label}</label>
+      {selected ? (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{formatAnchorOption(selected).title}</div>
+            <div className="truncate text-xs text-muted-foreground">{formatAnchorOption(selected).subtitle}</div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={disabled}
+            onClick={() => {
+              onChange("");
+              setQuery("");
+            }}
+          >
+            重选
+          </Button>
+        </div>
+      ) : (
+        <>
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={placeholder || "搜索姓名 / 抖音ID / 抖音号"}
+            disabled={disabled}
+          />
+          <div className="max-h-44 overflow-y-auto rounded-md border border-border">
+            {options.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs text-muted-foreground">无匹配主播</div>
+            ) : (
+              options.map((anchor) => {
+                const meta = formatAnchorOption(anchor);
+                return (
+                  <button
+                    key={anchor.id}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onChange(String(anchor.id))}
+                    className="flex w-full flex-col items-start gap-0.5 border-b border-border/60 px-3 py-2 text-left last:border-b-0 hover:bg-accent"
+                  >
+                    <span className="text-sm font-medium">{meta.title}</span>
+                    <span className="text-xs text-muted-foreground">{meta.subtitle}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefillSecondary }: MergeAccountsDialogProps) {
   const [primary, setPrimary] = useState<string>("");
   const [secondary, setSecondary] = useState<string>("");
+  const [mergeDuration, setMergeDuration] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
-  const sorted = useMemo(
-    () => [...anchors].sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
-    [anchors]
-  );
 
   // 打开时重置状态；若有 prefillSecondary 则额外预填
   useEffect(() => {
@@ -212,6 +327,7 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
   const reset = () => {
     setPrimary("");
     setSecondary("");
+    setMergeDuration(false);
     setError(null);
     setSuccess(null);
   };
@@ -239,9 +355,11 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
       const res = await api.mergeAccounts({
         primaryPersonId: Number(primary),
         secondaryPersonId: Number(secondary),
+        mergeDuration,
       });
       if (res.success) {
-        setSuccess(`已合并，迁移 ${res.data.moved} 个账号`);
+        const durationTip = res.data.mergeDuration ? "，已合并时长" : "，未合并时长";
+        setSuccess(`已合并，迁移 ${res.data.moved} 个账号${durationTip}`);
         onSuccess();
       } else {
         setError(res.error || "合并失败");
@@ -253,43 +371,58 @@ export function MergeAccountsDialog({ open, onClose, onSuccess, anchors, prefill
     }
   };
 
-  const renderOptions = () =>
-    sorted.map((a) => (
-      <option key={a.id} value={a.id}>
-        {a.name} {a.anchorId ? `(${a.anchorId})` : ""}
-      </option>
-    ));
-
   return (
-    <Modal open={open} onClose={handleClose} title="合并账号" error={error} success={success}>
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block text-sm font-medium">保留的主播（主账号）</label>
-          <select
+    <Modal
+      open={open}
+      onClose={handleClose}
+      title="合并账号"
+      error={error}
+      success={success}
+      contentClassName="max-w-xl"
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <AnchorSearchPicker
+            label="保留的主播（主账号）"
             value={primary}
-            onChange={(e) => setPrimary(e.target.value)}
-            disabled={loading}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="">请选择</option>
-            {renderOptions()}
-          </select>
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium">合并进来的主播（将被删除）</label>
-          <select
+            onChange={setPrimary}
+            anchors={anchors}
+            excludeId={secondary}
+            disabled={loading || !!success}
+            placeholder="搜索要保留的主播"
+          />
+          <AnchorSearchPicker
+            label="合并进来的主播（将被删除）"
             value={secondary}
-            onChange={(e) => setSecondary(e.target.value)}
-            disabled={loading}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-          >
-            <option value="">请选择</option>
-            {renderOptions()}
-          </select>
+            onChange={setSecondary}
+            anchors={anchors}
+            excludeId={primary}
+            disabled={loading || !!success}
+            placeholder="搜索要并入的主播"
+          />
         </div>
-        <p className="text-xs text-muted-foreground">
-          被合并的主播账号会迁移到主账号名下，原主播记录将被删除。
-        </p>
+
+        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-border px-3 py-2">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={mergeDuration}
+            disabled={loading || !!success}
+            onChange={(e) => setMergeDuration(e.target.checked)}
+          />
+          <span className="space-y-0.5">
+            <span className="block text-sm font-medium">同时合并时长</span>
+            <span className="block text-xs text-muted-foreground">
+              默认只合并音浪归属。勾选后会保留被合并主播的时长数据。
+            </span>
+          </span>
+        </label>
+
+        <div className="space-y-1 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          <p>音浪始终合并：副号会迁到主账号名下，音浪按人名下全部账号汇总。</p>
+          <p>时长默认不合并：未勾选时会删除被合并主播的时长快照。</p>
+          <p>展示时长取名下“时长最多”的账号，不会把多账号时长相加。</p>
+        </div>
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="outline" onClick={handleClose} disabled={loading}>

@@ -680,7 +680,8 @@ declare global {
     mergeAccounts: (payload: {
       primaryPersonId: number;
       secondaryPersonId: number;
-    }) => Promise<IpcResult<{ moved: number }>>;
+      mergeDuration?: boolean;
+    }) => Promise<IpcResult<{ moved: number; mergeDuration: boolean }>>;
     deleteAnchors: (
       personIds: number[]
     ) => Promise<IpcResult<{ deleted: number }>>;
