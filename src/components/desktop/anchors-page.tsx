@@ -2,7 +2,7 @@
 
 import { getDataApi } from "@/client/http-electron-api";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, GitMerge, Trash2, Copy, Users, UserCog } from "lucide-react";
+import { Search, GitMerge, Trash2, Copy, Users, UserCog, Network } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,7 @@ export function AnchorsPage() {
     anchor: AnchorRow;
   } | null>(null);
   const [editInfoTarget, setEditInfoTarget] = useState<AnchorRow | null>(null);
+  const [masterTarget, setMasterTarget] = useState<AnchorRow | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -403,6 +404,16 @@ export function AnchorsPage() {
             编辑信息
           </button>
           <button
+            onClick={() => {
+              setMasterTarget(contextMenu.anchor);
+              setContextMenu(null);
+            }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
+          >
+            <Network className="size-4 text-muted-foreground" />
+            设置师傅
+          </button>
+          <button
             onClick={handleMergeFromContext}
             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm hover:bg-accent"
           >
@@ -438,6 +449,10 @@ export function AnchorsPage() {
           anchors={data || []}
           onClose={() => setEditInfoTarget(null)}
           onSuccess={() => reload()}
+          onSetMaster={(anchor) => {
+            setEditInfoTarget(null);
+            setMasterTarget(anchor);
+          }}
           onMerge={(personId) => {
             setEditInfoTarget(null);
             setMergePrefillId(personId);
@@ -447,6 +462,15 @@ export function AnchorsPage() {
             setEditInfoTarget(null);
             setDeleteTarget({ ids: [anchor.id], names: [anchor.name] });
           }}
+        />
+      )}
+
+      {masterTarget && (
+        <SetMasterDialog
+          anchor={masterTarget}
+          anchors={data || []}
+          onClose={() => setMasterTarget(null)}
+          onSuccess={() => reload()}
         />
       )}
 
@@ -496,12 +520,13 @@ export function AnchorsPage() {
   );
 }
 
-/** 编辑完整信息对话框：合并右键相关能力 */
+/** 编辑完整信息对话框：基础信息 + 跳转到师傅/合并/删除等操作 */
 function EditInfoDialog({
   anchor,
   anchors,
   onClose,
   onSuccess,
+  onSetMaster,
   onMerge,
   onDelete,
 }: {
@@ -509,6 +534,7 @@ function EditInfoDialog({
   anchors: AnchorRow[];
   onClose: () => void;
   onSuccess: () => void;
+  onSetMaster: (anchor: AnchorRow) => void;
   onMerge: (personId: number) => void;
   onDelete: (anchor: AnchorRow) => void;
 }) {
@@ -517,8 +543,6 @@ function EditInfoDialog({
   const [anchorId, setAnchorId] = useState(anchor.anchorId);
   const [douyinNo, setDouyinNo] = useState(anchor.douyinNo);
   const [hideInDailyReport, setHideInDailyReport] = useState(anchor.hideInDailyReport ?? false);
-  const [masterId, setMasterId] = useState(anchor.masterId ? String(anchor.masterId) : "");
-  const [masterQuery, setMasterQuery] = useState("");
   const [date, setDate] = useState(todayStr());
   const [waveValue, setWaveValue] = useState("");
   const [rank, setRank] = useState("");
@@ -529,25 +553,9 @@ function EditInfoDialog({
   const [error, setError] = useState<string | null>(null);
   const [snapshotMsg, setSnapshotMsg] = useState<string | null>(null);
 
-  const masterOptions = useMemo(() => {
-    const q = masterQuery.trim().toLowerCase();
-    return anchors
-      .filter((a) => a.id !== anchor.id)
-      .filter((a) => {
-        if (!q) return true;
-        const hay = [a.name, a.anchorId, a.douyinNo, ...(a.aliasIds || [])]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
-      .slice(0, 80);
-  }, [anchor.id, anchors, masterQuery]);
-
-  const selectedMaster = useMemo(
-    () => anchors.find((a) => String(a.id) === masterId) || null,
-    [anchors, masterId]
+  const currentMaster = useMemo(
+    () => anchors.find((a) => a.id === anchor.masterId) || null,
+    [anchors, anchor.masterId]
   );
 
   useEffect(() => {
@@ -603,18 +611,6 @@ function EditInfoDialog({
         setError(infoRes.error || "保存主播信息失败");
         return;
       }
-      const nextMasterId = masterId ? Number(masterId) : null;
-      const currentMasterId = anchor.masterId ?? null;
-      if (nextMasterId !== currentMasterId) {
-        const masterRes = await api.updateAnchorMaster({
-          personId: anchor.id,
-          masterId: nextMasterId,
-        });
-        if (!masterRes.success) {
-          setError(masterRes.error || "保存师傅失败");
-          return;
-        }
-      }
       onSuccess();
       onClose();
     } catch (e) {
@@ -664,7 +660,7 @@ function EditInfoDialog({
           <CardHeader className="pb-3">
             <CardTitle className="text-base">编辑主播信息</CardTitle>
             <p className="text-xs text-muted-foreground">
-              基础信息、师傅、音浪时长、合并与删除都在这里处理
+              基础信息与音浪时长在此修改；师傅请通过单独弹窗搜索设置
             </p>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -719,69 +715,30 @@ function EditInfoDialog({
               </div>
             </section>
 
-            <section className="space-y-3">
-              <div className="text-sm font-medium">设置师傅</div>
-              {selectedMaster ? (
-                <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{selectedMaster.name}</div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {selectedMaster.anchorId || "无ID"}
-                      {selectedMaster.douyinNo ? ` · 抖音号 ${selectedMaster.douyinNo}` : ""}
-                    </div>
+            <section className="space-y-2">
+              <div className="text-sm font-medium">师傅</div>
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">
+                    {currentMaster?.name || anchor.masterName || "未设置师傅"}
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => {
-                      setMasterId("");
-                      setMasterQuery("");
-                    }}
-                  >
-                    清除
-                  </Button>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {currentMaster
+                      ? `${currentMaster.anchorId || "无ID"}${currentMaster.douyinNo ? ` · 抖音号 ${currentMaster.douyinNo}` : ""}`
+                      : "点击右侧按钮搜索设置"}
+                  </div>
                 </div>
-              ) : (
-                <>
-                  <Input
-                    value={masterQuery}
-                    onChange={(e) => setMasterQuery(e.target.value)}
-                    placeholder="搜索师傅姓名 / 抖音ID / 抖音号"
-                    disabled={busy}
-                  />
-                  <div className="max-h-36 overflow-y-auto rounded-md border border-border">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => setMasterId("")}
-                      className="flex w-full items-center justify-between border-b border-border/60 px-3 py-2 text-left text-sm hover:bg-accent"
-                    >
-                      <span>无师傅</span>
-                    </button>
-                    {masterOptions.length === 0 ? (
-                      <div className="px-3 py-4 text-center text-xs text-muted-foreground">无匹配主播</div>
-                    ) : (
-                      masterOptions.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setMasterId(String(item.id))}
-                          className="flex w-full flex-col items-start gap-0.5 border-b border-border/60 px-3 py-2 text-left last:border-b-0 hover:bg-accent"
-                        >
-                          <span className="text-sm font-medium">{item.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {item.anchorId || "无ID"}
-                            {item.douyinNo ? ` · 抖音号 ${item.douyinNo}` : ""}
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </>
-              )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => onSetMaster(anchor)}
+                >
+                  <Network className="size-4" />
+                  设置师傅
+                </Button>
+              </div>
             </section>
 
             <section className="space-y-3">
@@ -886,6 +843,157 @@ function EditInfoDialog({
               </Button>
               <Button onClick={submitInfo} disabled={busy}>
                 {loading ? "保存中…" : "保存基础信息"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/** 单独弹窗：搜索并设置师傅 */
+function SetMasterDialog({
+  anchor,
+  anchors,
+  onClose,
+  onSuccess,
+}: {
+  anchor: AnchorRow;
+  anchors: AnchorRow[];
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [masterId, setMasterId] = useState(anchor.masterId ? String(anchor.masterId) : "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const options = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return anchors
+      .filter((a) => a.id !== anchor.id)
+      .filter((a) => {
+        if (!q) return true;
+        const hay = [a.name, a.anchorId, a.anchorName, a.douyinNo, ...(a.aliasIds || [])]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-CN"))
+      .slice(0, 100);
+  }, [anchor.id, anchors, query]);
+
+  const selected = useMemo(
+    () => anchors.find((a) => String(a.id) === masterId) || null,
+    [anchors, masterId]
+  );
+
+  const submit = async () => {
+    const api = getDataApi();
+    if (!api) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.updateAnchorMaster({
+        personId: anchor.id,
+        masterId: masterId ? Number(masterId) : null,
+      });
+      if (res.success) {
+        onSuccess();
+        onClose();
+      } else {
+        setError(res.error || "设置失败");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <Card className="border border-border shadow-2xl">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">设置师傅</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              为主播「{anchor.name}」搜索并选择师傅
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-md bg-muted/50 px-3 py-2 text-sm">
+              当前师傅：
+              <span className="ml-1 font-medium">
+                {selected?.name || anchor.masterName || "无"}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">搜索师傅</label>
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="姓名 / 抖音ID / 抖音号"
+                disabled={loading}
+                autoFocus
+              />
+              <div className="max-h-64 overflow-y-auto rounded-md border border-border">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => setMasterId("")}
+                  className={cn(
+                    "flex w-full items-center justify-between border-b border-border/60 px-3 py-2 text-left text-sm hover:bg-accent",
+                    !masterId && "bg-primary/10 text-primary"
+                  )}
+                >
+                  <span>无师傅</span>
+                  {!masterId && <span className="text-xs">已选</span>}
+                </button>
+                {options.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-xs text-muted-foreground">无匹配主播</div>
+                ) : (
+                  options.map((item) => {
+                    const active = masterId === String(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={loading}
+                        onClick={() => setMasterId(String(item.id))}
+                        className={cn(
+                          "flex w-full flex-col items-start gap-0.5 border-b border-border/60 px-3 py-2 text-left last:border-b-0 hover:bg-accent",
+                          active && "bg-primary/10"
+                        )}
+                      >
+                        <span className={cn("text-sm font-medium", active && "text-primary")}>
+                          {item.name}
+                          {active ? " · 已选" : ""}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {item.anchorId || "无ID"}
+                          {item.douyinNo ? ` · 抖音号 ${item.douyinNo}` : ""}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {error && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={onClose} disabled={loading}>
+                取消
+              </Button>
+              <Button onClick={submit} disabled={loading}>
+                {loading ? "保存中…" : "确认设置"}
               </Button>
             </div>
           </CardContent>
