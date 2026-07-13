@@ -51,6 +51,8 @@ interface BattleGroup {
 
 const MIN_GROUP_SIZE = 5;
 const MAX_GROUP_SIZE = 8;
+const PREFERRED_TOP_GROUP_SIZE = 8;
+const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 2;
 const BATTLE_ROUNDS = [
   { key: "group", label: "小组赛", time: "中午" },
@@ -102,6 +104,34 @@ function normalizeScoreText(value: string) {
 
 function buildGroupSizes(total: number): number[] | null {
   if (total === 0) return [];
+  if (total < MIN_GROUP_SIZE) return null;
+
+  // 前两组优先 8 人；剩余组每组不低于 5 人，且仍限制在 5-8。
+  // 若硬塞两个 8 会让尾组不足 5，则逐步减少“前排 8 人组”数量后再分配。
+  const maxTopGroups = Math.min(
+    PREFERRED_TOP_GROUP_COUNT,
+    Math.floor(total / PREFERRED_TOP_GROUP_SIZE)
+  );
+  for (let topCount = maxTopGroups; topCount >= 0; topCount--) {
+    const remaining = total - topCount * PREFERRED_TOP_GROUP_SIZE;
+    if (remaining === 0) {
+      return Array.from({ length: topCount }, () => PREFERRED_TOP_GROUP_SIZE);
+    }
+    const tail = packEvenGroupSizes(remaining);
+    if (!tail) continue;
+    return [
+      ...Array.from({ length: topCount }, () => PREFERRED_TOP_GROUP_SIZE),
+      ...tail,
+    ];
+  }
+  return null;
+}
+
+/** 将人数均匀拆成每组 [MIN_GROUP_SIZE, MAX_GROUP_SIZE] 的组合；无法拆分返回 null。 */
+function packEvenGroupSizes(total: number): number[] | null {
+  if (total === 0) return [];
+  if (total < MIN_GROUP_SIZE) return null;
+
   const minGroups = Math.ceil(total / MAX_GROUP_SIZE);
   const maxGroups = Math.floor(total / MIN_GROUP_SIZE);
   for (let count = minGroups; count <= maxGroups; count++) {
@@ -1222,7 +1252,7 @@ export function StarBattlePage() {
         {invalidGrouping && (
           <Card className="border-red-200 bg-red-50 text-red-800">
             <CardContent className="py-4 text-sm font-medium">
-              当前参赛人数 {activeMembers.length} 人，无法满足每组 5-8 人且不剩人的规则。
+              当前参赛人数 {activeMembers.length} 人，无法满足“前两组优先 8 人、其余每组不少于 5 人”的规则。
             </CardContent>
           </Card>
         )}
