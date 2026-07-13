@@ -54,6 +54,104 @@ const MAX_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 2;
+const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v1";
+
+type GroupSizeMode = "auto" | "manual";
+type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
+
+interface ManualGroupCount {
+  size: number;
+  count: number;
+}
+
+interface GroupPlanConfig {
+  sizeMode: GroupSizeMode;
+  sortMode: GroupSortMode;
+  /** 手动：按组人数配置数量，例如 8人组2个、7人组5个 */
+  manualCounts: ManualGroupCount[];
+  /** 兼容自由文本，如 8x2,7x5 */
+  manualText: string;
+}
+
+function defaultGroupPlan(): GroupPlanConfig {
+  return {
+    sizeMode: "auto",
+    sortMode: "wave_desc",
+    manualCounts: [
+      { size: 8, count: 2 },
+      { size: 7, count: 0 },
+      { size: 6, count: 0 },
+      { size: 5, count: 0 },
+    ],
+    manualText: "8x2",
+  };
+}
+
+function loadGroupPlan(): GroupPlanConfig {
+  if (typeof window === "undefined") return defaultGroupPlan();
+  try {
+    const raw = window.localStorage.getItem(GROUP_PLAN_STORAGE_KEY);
+    if (!raw) return defaultGroupPlan();
+    const parsed = JSON.parse(raw) as Partial<GroupPlanConfig>;
+    const defaults = defaultGroupPlan();
+    const manualCounts = Array.isArray(parsed.manualCounts)
+      ? defaults.manualCounts.map((item) => {
+          const hit = parsed.manualCounts?.find((row) => Number(row?.size) === item.size);
+          return {
+            size: item.size,
+            count: Math.max(0, Math.floor(Number(hit?.count) || 0)),
+          };
+        })
+      : defaults.manualCounts;
+    return {
+      sizeMode: parsed.sizeMode === "manual" ? "manual" : "auto",
+      sortMode:
+        parsed.sortMode === "top_wave_rest_volatility"
+          ? "top_wave_rest_volatility"
+          : "wave_desc",
+      manualCounts,
+      manualText: String(parsed.manualText ?? countsToText(manualCounts)),
+    };
+  } catch {
+    return defaultGroupPlan();
+  }
+}
+
+function countsToText(counts: ManualGroupCount[]) {
+  return counts
+    .filter((row) => row.count > 0)
+    .map((row) => `${row.size}x${row.count}`)
+    .join(",");
+}
+
+function parseManualGroupText(text: string): ManualGroupCount[] | null {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const parts = trimmed.split(/[,，\s]+/).map((part) => part.trim()).filter(Boolean);
+  const map = new Map<number, number>();
+  for (const part of parts) {
+    // 支持 8x2 / 8*2 / 8人组x2 / 8:2
+    const match = part.match(/^(\d+)\s*(?:人组)?\s*[xX*×:：]\s*(\d+)$/);
+    if (!match) return null;
+    const size = Number(match[1]);
+    const count = Number(match[2]);
+    if (!Number.isInteger(size) || !Number.isInteger(count)) return null;
+    if (size < MIN_GROUP_SIZE || size > MAX_GROUP_SIZE || count < 0) return null;
+    map.set(size, (map.get(size) || 0) + count);
+  }
+  return [...map.entries()]
+    .sort((a, b) => b[0] - a[0])
+    .map(([size, count]) => ({ size, count }));
+}
+
+function expandManualSizes(counts: ManualGroupCount[]): number[] {
+  const sizes: number[] = [];
+  for (const row of [...counts].sort((a, b) => b.size - a.size)) {
+    for (let i = 0; i < row.count; i++) sizes.push(row.size);
+  }
+  return sizes;
+}
+
 const BATTLE_ROUNDS = [
   { key: "group", label: "小组赛", time: "中午" },
   { key: "revival", label: "复活赛", time: "中午" },
@@ -102,7 +200,7 @@ function normalizeScoreText(value: string) {
   return String(Math.round(num * 100) / 100);
 }
 
-function buildGroupSizes(total: number): number[] | null {
+function buildAutoGroupSizes(total: number): number[] | null {
   if (total === 0) return [];
   if (total < MIN_GROUP_SIZE) return null;
 
@@ -144,15 +242,104 @@ function packEvenGroupSizes(total: number): number[] | null {
   return null;
 }
 
-function buildBattleGroups(members: PkMember[]): BattleGroup[] {
-  const eligible = members
-    .sort((a, b) => b.wave - a.wave || b.trimmedAvg - a.trimmedAvg || a.personId - b.personId);
-  const sizes = buildGroupSizes(eligible.length);
-  if (!sizes) return [];
+function compareByWave(a: PkMember, b: PkMember) {
+  return b.wave - a.wave || b.trimmedAvg - a.trimmedAvg || a.personId - b.personId;
+}
 
+/** 音浪波动：日振幅 / 去峰日均，波动大的优先同组。 */
+function waveVolatility(member: PkMember) {
+  if (!member.waveDays || member.waveDays <= 1) return 0;
+  const range = Math.max(0, (member.maxWave || 0) - (member.minWave || 0));
+  const base = Math.max(member.trimmedAvg || 0, 1);
+  return range / base;
+}
+
+function compareByVolatility(a: PkMember, b: PkMember) {
+  const volDiff = waveVolatility(b) - waveVolatility(a);
+  if (volDiff !== 0) return volDiff;
+  return compareByWave(a, b);
+}
+
+function resolveGroupSizes(
+  total: number,
+  plan: GroupPlanConfig
+): { sizes: number[] | null; detail: string } {
+  if (total === 0) return { sizes: [], detail: "无人参赛" };
+  if (plan.sizeMode === "manual") {
+    const parsed = parseManualGroupText(plan.manualText);
+    const counts = parsed ?? plan.manualCounts;
+    if (parsed === null) {
+      return { sizes: null, detail: "手动分组格式无效，请用 8x2,7x5" };
+    }
+    const sizes = expandManualSizes(counts);
+    const sum = sizes.reduce((acc, n) => acc + n, 0);
+    if (sizes.length === 0) {
+      return { sizes: null, detail: "请至少配置一组" };
+    }
+    if (sum !== total) {
+      return {
+        sizes: null,
+        detail: `手动分组合计 ${sum} 人，当前名单 ${total} 人`,
+      };
+    }
+    if (sizes.some((size) => size < MIN_GROUP_SIZE || size > MAX_GROUP_SIZE)) {
+      return {
+        sizes: null,
+        detail: `每组人数需在 ${MIN_GROUP_SIZE}-${MAX_GROUP_SIZE} 之间`,
+      };
+    }
+    return {
+      sizes,
+      detail: `手动 ${sizes.map((size) => `${size}人`).join(" + ")}`,
+    };
+  }
+
+  const sizes = buildAutoGroupSizes(total);
+  if (!sizes) {
+    return {
+      sizes: null,
+      detail: `无法满足前两组优先8人、其余每组不少于${MIN_GROUP_SIZE}人`,
+    };
+  }
+  return {
+    sizes,
+    detail: `自动 ${sizes.map((size) => `${size}人`).join(" + ")}`,
+  };
+}
+
+function orderMembersForGroups(
+  members: PkMember[],
+  sizes: number[],
+  sortMode: GroupSortMode
+): PkMember[] {
+  if (members.length === 0) return [];
+  if (sortMode === "wave_desc") {
+    return [...members].sort(compareByWave);
+  }
+
+  // 前两组按音浪从高到低；剩余按波动从高到低，波动大的跟波动大的一组。
+  const ranked = [...members].sort(compareByWave);
+  const topSlots = sizes
+    .slice(0, Math.min(PREFERRED_TOP_GROUP_COUNT, sizes.length))
+    .reduce((sum, size) => sum + size, 0);
+  const topMembers = ranked.slice(0, topSlots);
+  const restMembers = ranked.slice(topSlots).sort(compareByVolatility);
+  return [...topMembers, ...restMembers];
+}
+
+function buildBattleGroups(
+  members: PkMember[],
+  plan: GroupPlanConfig = defaultGroupPlan()
+): { groups: BattleGroup[]; detail: string; invalid: boolean } {
+  const { sizes, detail } = resolveGroupSizes(members.length, plan);
+  if (!sizes) {
+    return { groups: [], detail, invalid: members.length > 0 };
+  }
+
+  const ordered = orderMembersForGroups(members, sizes, plan.sortMode);
   let cursor = 0;
-  return sizes.map((size, index) => {
-    const groupMembers = eligible.slice(cursor, cursor + size);
+  const groups = sizes.map((size, index) => {
+    const groupMembers = ordered.slice(cursor, cursor + size);
     cursor += size;
     const averageWave =
       groupMembers.length > 0
@@ -163,17 +350,28 @@ function buildBattleGroups(members: PkMember[]): BattleGroup[] {
       label: `第${index + 1}组`,
       members: groupMembers,
       averageWave,
+      source:
+        plan.sortMode === "top_wave_rest_volatility" && index >= PREFERRED_TOP_GROUP_COUNT
+          ? "按音浪波动聚类"
+          : "按音浪从高到低",
     };
   });
+  return { groups, detail, invalid: false };
 }
 
-function buildStageGroups(members: PkMember[], labelPrefix = "第"): BattleGroup[] {
-  const groups = buildBattleGroups(members);
-  if (groups.length > 0) return groups.map((group, index) => ({
-    ...group,
-    key: `group-${index + 1}`,
-    label: `${labelPrefix}${index + 1}组`,
-  }));
+function buildStageGroups(
+  members: PkMember[],
+  labelPrefix = "第",
+  plan: GroupPlanConfig = defaultGroupPlan()
+): BattleGroup[] {
+  const { groups } = buildBattleGroups(members, plan);
+  if (groups.length > 0) {
+    return groups.map((group, index) => ({
+      ...group,
+      key: `group-${index + 1}`,
+      label: `${labelPrefix}${index + 1}组`,
+    }));
+  }
   if (members.length === 0) return [];
   const averageWave = members.reduce((sum, item) => sum + item.wave, 0) / members.length;
   return [
@@ -483,6 +681,7 @@ export function StarBattlePage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState("");
   const [roundKey, setRoundKey] = useState<BattleRoundKey>("group");
+  const [groupPlan, setGroupPlan] = useState<GroupPlanConfig>(loadGroupPlan);
   const [groupPage, setGroupPage] = useState(0);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -560,6 +759,10 @@ export function StarBattlePage() {
     };
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem(GROUP_PLAN_STORAGE_KEY, JSON.stringify(groupPlan));
+  }, [groupPlan]);
+
   const rawBattleMembers = useMemo(() => {
     const rows = data?.males ?? [];
     const seen = new Set<number>();
@@ -601,9 +804,30 @@ export function StarBattlePage() {
     ]
   );
 
-  const initialGroups = useMemo(() => buildStageGroups(allMembers), [allMembers]);
+  const groupStageResult = useMemo(
+    () => buildBattleGroups(allMembers, groupPlan),
+    [allMembers, groupPlan]
+  );
+  const initialGroups = useMemo(
+    () =>
+      groupStageResult.groups.map((group, index) => ({
+        ...group,
+        key: `group-${index + 1}`,
+        label: `第${index + 1}组`,
+      })),
+    [groupStageResult.groups]
+  );
   const activeMembers = allMembers;
-  const invalidGrouping = activeMembers.length > 0 && buildGroupSizes(activeMembers.length) === null;
+  const invalidGrouping = groupStageResult.invalid;
+  const groupPlanDetail = groupStageResult.detail;
+  const laterStagePlan = useMemo<GroupPlanConfig>(
+    () => ({
+      ...defaultGroupPlan(),
+      sizeMode: "auto",
+      sortMode: "wave_desc",
+    }),
+    []
+  );
   const scoreMap = useMemo(() => {
     const map = new Map<string, number>();
     for (const row of scores) {
@@ -625,7 +849,10 @@ export function StarBattlePage() {
         .filter(isPkMember),
     [initialGroups, scoreDrafts, scoreMap]
   );
-  const revivalGroups = useMemo(() => buildStageGroups(groupSeconds, "复活"), [groupSeconds]);
+  const revivalGroups = useMemo(
+    () => buildStageGroups(groupSeconds, "复活", laterStagePlan),
+    [groupSeconds, laterStagePlan]
+  );
   const revivalWinners = useMemo(
     () =>
       revivalGroups
@@ -634,8 +861,8 @@ export function StarBattlePage() {
     [revivalGroups, scoreDrafts, scoreMap]
   );
   const promotionGroups = useMemo(
-    () => buildStageGroups([...groupWinners, ...revivalWinners], "晋级"),
-    [groupWinners, revivalWinners]
+    () => buildStageGroups([...groupWinners, ...revivalWinners], "晋级", laterStagePlan),
+    [groupWinners, laterStagePlan, revivalWinners]
   );
   const promotionWinners = useMemo(
     () =>
@@ -644,7 +871,10 @@ export function StarBattlePage() {
         .filter(isPkMember),
     [promotionGroups, scoreDrafts, scoreMap]
   );
-  const finalGroups = useMemo(() => buildStageGroups(promotionWinners, "决赛"), [promotionWinners]);
+  const finalGroups = useMemo(
+    () => buildStageGroups(promotionWinners, "决赛", laterStagePlan),
+    [laterStagePlan, promotionWinners]
+  );
   const currentGroups = useMemo(() => {
     if (roundKey === "revival") return revivalGroups;
     if (roundKey === "promotion") return promotionGroups;
@@ -659,7 +889,63 @@ export function StarBattlePage() {
         ? "小组赛第一名 + 复活赛第一名进入晋级赛"
         : roundKey === "final"
           ? "晋级赛每组第一名进入决赛"
-          : "按 PK 名单页的 15号分组名单分组";
+          : groupPlan.sortMode === "top_wave_rest_volatility"
+            ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
+            : "按音浪从高到低分组；沿用 PK 15号名单";
+
+  const updateManualCount = useCallback((size: number, count: number) => {
+    setGroupPlan((current) => {
+      const manualCounts = current.manualCounts.map((row) =>
+        row.size === size
+          ? { ...row, count: Math.max(0, Math.floor(count) || 0) }
+          : row
+      );
+      return {
+        ...current,
+        sizeMode: "manual",
+        manualCounts,
+        manualText: countsToText(manualCounts),
+      };
+    });
+  }, []);
+
+  const applyManualText = useCallback((manualText: string) => {
+    const parsed = parseManualGroupText(manualText);
+    setGroupPlan((current) => {
+      if (parsed === null) {
+        return { ...current, sizeMode: "manual", manualText };
+      }
+      const manualCounts = defaultGroupPlan().manualCounts.map((row) => ({
+        size: row.size,
+        count: parsed.find((item) => item.size === row.size)?.count || 0,
+      }));
+      return {
+        ...current,
+        sizeMode: "manual",
+        manualText,
+        manualCounts,
+      };
+    });
+  }, []);
+
+  const fillManualToTotal = useCallback(() => {
+    const total = allMembers.length;
+    if (total <= 0) return;
+    const auto = buildAutoGroupSizes(total);
+    if (!auto) return;
+    const countMap = new Map<number, number>();
+    for (const size of auto) countMap.set(size, (countMap.get(size) || 0) + 1);
+    const manualCounts = defaultGroupPlan().manualCounts.map((row) => ({
+      size: row.size,
+      count: countMap.get(row.size) || 0,
+    }));
+    setGroupPlan((current) => ({
+      ...current,
+      sizeMode: "manual",
+      manualCounts,
+      manualText: countsToText(manualCounts),
+    }));
+  }, [allMembers.length]);
   const totalPages = Math.max(1, Math.ceil(currentGroups.length / GROUPS_PER_PAGE));
   const visibleGroups = currentGroups.slice(
     groupPage * GROUPS_PER_PAGE,
@@ -668,7 +954,7 @@ export function StarBattlePage() {
 
   useEffect(() => {
     setGroupPage(0);
-  }, [period, roundKey]);
+  }, [period, roundKey, groupPlan]);
 
   useEffect(() => {
     setGroupPage((page) => Math.min(page, totalPages - 1));
@@ -1101,6 +1387,110 @@ export function StarBattlePage() {
             </Button>
           </div>
         </div>
+
+        {roundKey === "group" && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Users className="size-4" />
+                小组赛分组设置
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">人数方案</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={groupPlan.sizeMode === "auto" ? "default" : "outline"}
+                      onClick={() => setGroupPlan((current) => ({ ...current, sizeMode: "auto" }))}
+                    >
+                      自动
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={groupPlan.sizeMode === "manual" ? "default" : "outline"}
+                      onClick={() => setGroupPlan((current) => ({ ...current, sizeMode: "manual" }))}
+                    >
+                      手动
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={fillManualToTotal}>
+                      按当前人数生成
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {groupPlan.manualCounts.map((row) => (
+                      <label key={row.size} className="rounded-lg border border-border bg-background px-3 py-2">
+                        <div className="mb-1 text-xs text-muted-foreground">{row.size}人组 x</div>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={row.count}
+                          disabled={groupPlan.sizeMode !== "manual"}
+                          onChange={(event) => updateManualCount(row.size, Number(event.target.value))}
+                          className="h-8"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">或直接输入：8x2,7x5</div>
+                    <Input
+                      value={groupPlan.manualText}
+                      disabled={groupPlan.sizeMode !== "manual"}
+                      onChange={(event) => applyManualText(event.target.value)}
+                      placeholder="8x2,7x5"
+                      className="h-9"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">排序方式</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant={groupPlan.sortMode === "wave_desc" ? "default" : "outline"}
+                      onClick={() =>
+                        setGroupPlan((current) => ({ ...current, sortMode: "wave_desc" }))
+                      }
+                    >
+                      全量音浪从高到低
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={
+                        groupPlan.sortMode === "top_wave_rest_volatility" ? "default" : "outline"
+                      }
+                      onClick={() =>
+                        setGroupPlan((current) => ({
+                          ...current,
+                          sortMode: "top_wave_rest_volatility",
+                        }))
+                      }
+                    >
+                      前两组音浪，剩余按波动
+                    </Button>
+                  </div>
+                  <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    <div>当前名单 {allMembers.length} 人</div>
+                    <div className={invalidGrouping ? "text-destructive" : ""}>
+                      {groupPlanDetail}
+                    </div>
+                    <div>
+                      {groupPlan.sortMode === "top_wave_rest_volatility"
+                        ? "前两组按总音浪排名截取；其余按日振幅/去峰日均排序，波动大的优先同组。"
+                        : "所有组都按总音浪从高到低连续切分。"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {bulkOpen && (
           <Card>
             <CardContent className="space-y-3 py-4">
@@ -1252,7 +1642,7 @@ export function StarBattlePage() {
         {invalidGrouping && (
           <Card className="border-red-200 bg-red-50 text-red-800">
             <CardContent className="py-4 text-sm font-medium">
-              当前参赛人数 {activeMembers.length} 人，无法满足“前两组优先 8 人、其余每组不少于 5 人”的规则。
+              {groupPlanDetail || `当前参赛人数 ${activeMembers.length} 人，无法完成分组。`}
             </CardContent>
           </Card>
         )}
