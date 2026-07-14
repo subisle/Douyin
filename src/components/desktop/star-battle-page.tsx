@@ -1766,6 +1766,30 @@ export function StarBattlePage() {
   );
 }
 
+function parseExportSchedule(notes: string) {
+  const lines = String(notes || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const scheduleByGroup = new Map<number, string>();
+  const generalLines: string[] = [];
+
+  for (const line of lines) {
+    // 第1组 12:15-12:25 / 第1组：12:15～12:25
+    const match = line.match(
+      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})\s*[-~～—到至]\s*(\d{1,2}:\d{2})\s*$/
+    );
+    if (match) {
+      scheduleByGroup.set(Number(match[1]), `${match[2]}-${match[3]}`);
+      continue;
+    }
+    generalLines.push(line);
+  }
+
+  return { scheduleByGroup, generalLines };
+}
+
 const BattleExportBoard = React.forwardRef<
   HTMLDivElement,
   {
@@ -1781,50 +1805,308 @@ const BattleExportBoard = React.forwardRef<
   { period, roundLabel, groups, roundKey, scoreDrafts, scoreMap, notes = "" },
   ref
 ) {
-  const noteLines = String(notes || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const { scheduleByGroup, generalLines } = parseExportSchedule(notes);
+  const totalPeople = groups.reduce((sum, group) => sum + group.members.length, 0);
+  const showScores = groups.some((group) => groupHasScore(group, scoreMap, scoreDrafts, roundKey));
+  const columns = groups.length <= 3 ? groups.length || 1 : groups.length <= 6 ? 3 : 4;
+  const boardWidth = Math.max(1280, columns * 320 + 96);
+  const periodDisplay = (() => {
+    const [y, m] = period.split("-");
+    if (!y || !m) return period;
+    return `${y}年${Number(m)}月`;
+  })();
+
+  // 内联样式：html-to-image 对 Tailwind 任意值/部分 utility 不稳定
+  const COLORS = {
+    bg: "#F8FAFC",
+    card: "#FFFFFF",
+    border: "#E2E8F0",
+    text: "#0F172A",
+    muted: "#64748B",
+    soft: "#F1F5F9",
+    ink: "#0B1220",
+    accent: "#4F46E5",
+    accentSoft: "#EEF2FF",
+    amberBg: "#FFFBEB",
+    amberBorder: "#FDE68A",
+    amberText: "#92400E",
+  };
 
   return (
-    <div ref={ref} className="bg-slate-50 p-8" style={{ width: 1280 }}>
-      <div className="mb-6 flex items-end justify-between border-b border-slate-200 pb-4">
+    <div
+      ref={ref}
+      style={{
+        width: boardWidth,
+        boxSizing: "border-box",
+        background: COLORS.bg,
+        padding: 36,
+        fontFamily:
+          '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
+        color: COLORS.text,
+      }}
+    >
+      {/* 页眉 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 24,
+          marginBottom: 22,
+          paddingBottom: 18,
+          borderBottom: `1px solid ${COLORS.border}`,
+        }}
+      >
         <div>
-          <div className="text-3xl font-black text-slate-950">星嗨争霸赛</div>
-          <div className="mt-2 text-sm font-semibold text-slate-500">
-            {period} · {roundLabel}
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 10,
+              padding: "5px 12px",
+              borderRadius: 999,
+              background: COLORS.accentSoft,
+              color: COLORS.accent,
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: 1,
+            }}
+          >
+            PENGZAI · STAR BATTLE
+          </div>
+          <div style={{ fontSize: 34, fontWeight: 900, letterSpacing: 0.5, color: COLORS.ink }}>
+            星嗨争霸赛
+          </div>
+          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700, color: COLORS.muted }}>
+            {periodDisplay} · {roundLabel} · 共 {totalPeople} 人
           </div>
         </div>
-        <div className="rounded-full bg-slate-950 px-4 py-2 text-sm font-bold text-white">
-          {groups.length} 组
+        <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
+          <div
+            style={{
+              minWidth: 88,
+              padding: "12px 16px",
+              borderRadius: 16,
+              background: COLORS.ink,
+              color: "#fff",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1 }}>{groups.length}</div>
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, opacity: 0.85 }}>组</div>
+          </div>
+          <div
+            style={{
+              minWidth: 88,
+              padding: "12px 16px",
+              borderRadius: 16,
+              background: COLORS.card,
+              border: `1px solid ${COLORS.border}`,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: COLORS.ink }}>
+              {totalPeople}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: COLORS.muted }}>人</div>
+          </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        {groups.map((group) => {
+
+      {/* 赛程摘要条 */}
+      {generalLines.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            marginBottom: 20,
+            padding: "14px 16px",
+            borderRadius: 16,
+            background: COLORS.card,
+            border: `1px solid ${COLORS.border}`,
+          }}
+        >
+          {generalLines.map((line, index) => (
+            <div
+              key={`${index}-${line}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                borderRadius: 999,
+                background: index === 0 ? COLORS.accentSoft : COLORS.soft,
+                color: index === 0 ? COLORS.accent : COLORS.text,
+                fontSize: 13,
+                fontWeight: 800,
+              }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 999,
+                  background: index === 0 ? COLORS.accent : "#94A3B8",
+                  flexShrink: 0,
+                }}
+              />
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 分组卡片 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          gap: 14,
+        }}
+      >
+        {groups.map((group, groupIndex) => {
           const displayMembers = groupHasScore(group, scoreMap, scoreDrafts, roundKey)
             ? rankGroupMembers(group, scoreMap, scoreDrafts, roundKey)
             : group.members;
+          const timeLabel = scheduleByGroup.get(groupIndex + 1) || "";
+          const groupNo = groupIndex + 1;
+
           return (
-            <div key={group.key} className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-lg font-black text-slate-950">{group.label}</div>
-                <div className="text-xs font-bold text-slate-500">{group.members.length}人</div>
+            <div
+              key={group.key}
+              style={{
+                background: COLORS.card,
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 18,
+                overflow: "hidden",
+                boxShadow: "0 1px 0 rgba(15,23,42,0.03)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  padding: "12px 14px",
+                  background: "linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)",
+                  borderBottom: `1px solid ${COLORS.border}`,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  <div
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 12,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: COLORS.ink,
+                      color: "#fff",
+                      fontSize: 15,
+                      fontWeight: 900,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {groupNo}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 17, fontWeight: 900, color: COLORS.ink, lineHeight: 1.2 }}>
+                      {group.label}
+                    </div>
+                    <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: COLORS.muted }}>
+                      {group.members.length} 人
+                    </div>
+                  </div>
+                </div>
+                {timeLabel && (
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      background: COLORS.accentSoft,
+                      color: COLORS.accent,
+                      fontSize: 12,
+                      fontWeight: 900,
+                      letterSpacing: 0.2,
+                    }}
+                  >
+                    {timeLabel}
+                  </div>
+                )}
               </div>
-              <div className="space-y-2">
+
+              <div style={{ padding: 12, display: "grid", gap: 7 }}>
                 {displayMembers.map((member, index) => {
-                  const score = getScoreValue(scoreMap, scoreDrafts, roundKey, group.key, member.personId);
+                  const score = getScoreValue(
+                    scoreMap,
+                    scoreDrafts,
+                    roundKey,
+                    group.key,
+                    member.personId
+                  );
                   return (
                     <div
                       key={member.personId}
-                      className="grid grid-cols-[42px_minmax(0,1fr)_90px] items-center gap-3 rounded-xl bg-slate-50 px-3 py-2"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: showScores
+                          ? "28px minmax(0,1fr) 56px"
+                          : "28px minmax(0,1fr)",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 10px",
+                        borderRadius: 12,
+                        background: index % 2 === 0 ? COLORS.soft : "#FFFFFF",
+                        border: `1px solid ${index % 2 === 0 ? "transparent" : COLORS.border}`,
+                      }}
                     >
-                      <div className="flex size-7 items-center justify-center rounded-lg bg-slate-900 text-xs font-black text-white">
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 8,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: showScores && score > 0 ? COLORS.ink : "#CBD5E1",
+                          color: "#fff",
+                          fontSize: 12,
+                          fontWeight: 900,
+                        }}
+                      >
                         {index + 1}
                       </div>
-                      <div className="truncate text-base font-bold text-slate-900">{member.name}</div>
-                      <div className="text-right text-base font-black text-slate-950">
-                        {score > 0 ? score : "-"}
+                      <div
+                        style={{
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          fontSize: 15,
+                          fontWeight: 800,
+                          color: COLORS.text,
+                        }}
+                      >
+                        {member.name}
                       </div>
+                      {showScores && (
+                        <div
+                          style={{
+                            textAlign: "right",
+                            fontSize: 15,
+                            fontWeight: 900,
+                            color: score > 0 ? COLORS.ink : "#94A3B8",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          {score > 0 ? score : "—"}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1833,12 +2115,92 @@ const BattleExportBoard = React.forwardRef<
           );
         })}
       </div>
-      {noteLines.length > 0 && (
-        <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
-          <div className="mb-2 text-sm font-black tracking-wide text-amber-900">备注</div>
-          <div className="space-y-1.5 text-sm font-semibold leading-6 text-amber-950">
-            {noteLines.map((line, index) => (
-              <div key={`${index}-${line}`}>{line}</div>
+
+      {/* 底部完整时间表（有分组时刻时） */}
+      {scheduleByGroup.size > 0 && (
+        <div
+          style={{
+            marginTop: 20,
+            padding: 16,
+            borderRadius: 16,
+            background: COLORS.card,
+            border: `1px solid ${COLORS.border}`,
+          }}
+        >
+          <div
+            style={{
+              marginBottom: 12,
+              fontSize: 13,
+              fontWeight: 900,
+              color: COLORS.muted,
+              letterSpacing: 0.6,
+            }}
+          >
+            开赛时间表
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${Math.min(groups.length, 7)}, minmax(0, 1fr))`,
+              gap: 8,
+            }}
+          >
+            {groups.map((group, index) => {
+              const time = scheduleByGroup.get(index + 1);
+              if (!time) return null;
+              return (
+                <div
+                  key={`schedule-${group.key}`}
+                  style={{
+                    padding: "10px 8px",
+                    borderRadius: 12,
+                    background: COLORS.soft,
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 800, color: COLORS.muted }}>
+                    第{index + 1}组
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 13,
+                      fontWeight: 900,
+                      color: COLORS.ink,
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {time}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 若备注只有普通行、没有解析出时间表，保留底部备注区 */}
+      {generalLines.length > 0 && scheduleByGroup.size === 0 && (
+        <div
+          style={{
+            marginTop: 20,
+            padding: "14px 16px",
+            borderRadius: 16,
+            background: COLORS.amberBg,
+            border: `1px solid ${COLORS.amberBorder}`,
+          }}
+        >
+          <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 900, color: COLORS.amberText }}>
+            备注
+          </div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {generalLines.map((line, index) => (
+              <div
+                key={`${index}-${line}`}
+                style={{ fontSize: 14, fontWeight: 700, color: COLORS.amberText, lineHeight: 1.55 }}
+              >
+                {line}
+              </div>
             ))}
           </div>
         </div>
