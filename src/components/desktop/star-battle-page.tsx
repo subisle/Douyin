@@ -82,12 +82,12 @@ function defaultGroupPlan(): GroupPlanConfig {
     sizeMode: "preset",
     sortMode: "wave_desc",
     manualCounts: [
-      { size: 8, count: 4 },
-      { size: 7, count: 3 },
+      { size: 8, count: 5 },
+      { size: 7, count: 2 },
       { size: 6, count: 0 },
       { size: 5, count: 0 },
     ],
-    manualText: "8x4,7x3",
+    manualText: "8x5,7x2",
   };
 }
 
