@@ -59,8 +59,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-// v3：仅开始时间 + 组间间隔 5 分钟
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v3";
+// v4：时间文案改为「开始连麦」
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v4";
 // 小组赛分组拖动顺序（按稳定 group.key 保存）
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v1";
 
@@ -135,14 +135,14 @@ function defaultExportNotes() {
   // 每组 10 分钟，结束后间隔 5 分钟再开下一组 → 开赛时刻相隔 15 分钟
   return [
     "中午 12:10 开播",
-    "12:15 第1组开赛，每组 10 分钟，组间间隔 5 分钟，依次类推",
-    "第1组 12:15",
-    "第2组 12:30",
-    "第3组 12:45",
-    "第4组 13:00",
-    "第5组 13:15",
-    "第6组 13:30",
-    "第7组 13:45",
+    "12:15 第1组开始连麦，每组 10 分钟，组间间隔 5 分钟，依次类推",
+    "第1组 12:15 开始连麦",
+    "第2组 12:30 开始连麦",
+    "第3组 12:45 开始连麦",
+    "第4组 13:00 开始连麦",
+    "第5组 13:15 开始连麦",
+    "第6组 13:30 开始连麦",
+    "第7组 13:45 开始连麦",
   ].join("\n");
 }
 
@@ -1939,13 +1939,15 @@ function parseExportSchedule(notes: string) {
   const generalLines: string[] = [];
 
   for (const line of lines) {
-    // 仅开始时间：第1组 12:15 / 第1组：12:15
-    // 兼容旧区间：第1组 12:15-12:25 → 只取开始时间
+    // 第1组 12:15
+    // 第1组 12:15 开始连麦
+    // 兼容旧区间：第1组 12:15-12:25
     const match = line.match(
-      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?\s*$/
+      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?(?:\s*开始连麦)?\s*$/
     );
     if (match) {
-      scheduleByGroup.set(Number(match[1]), match[2]);
+      // 统一展示为「时间 开始连麦」
+      scheduleByGroup.set(Number(match[1]), `${match[2]} 开始连麦`);
       continue;
     }
     generalLines.push(line);
@@ -2300,7 +2302,7 @@ const BattleExportBoard = React.forwardRef<
               letterSpacing: 0.6,
             }}
           >
-            开赛时间表
+            连麦时间表
           </div>
           <div
             style={{
@@ -2328,10 +2330,11 @@ const BattleExportBoard = React.forwardRef<
                   <div
                     style={{
                       marginTop: 4,
-                      fontSize: 13,
+                      fontSize: 12,
                       fontWeight: 900,
                       color: COLORS.ink,
                       fontVariantNumeric: "tabular-nums",
+                      lineHeight: 1.35,
                     }}
                   >
                     {time}
@@ -2502,10 +2505,10 @@ function GroupCard({
                 variant="secondary"
                 className={
                   compact
-                    ? "h-5 px-1.5 font-mono text-[10px] tabular-nums"
+                    ? "h-5 max-w-[9.5rem] truncate px-1.5 text-[10px] tabular-nums"
                     : "font-mono text-xs tabular-nums"
                 }
-                title="开赛时间"
+                title={scheduleTime}
               >
                 {scheduleTime}
               </Badge>
@@ -2518,7 +2521,7 @@ function GroupCard({
         <div className={compact ? "flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground" : "flex flex-wrap gap-2 text-xs text-muted-foreground"}>
           <span>均浪 {formatWave(group.averageWave)}</span>
           <span>均分 {avgScore.toFixed(1)}</span>
-          {!compact && scheduleTime && <span>时间 {scheduleTime}</span>}
+          {!compact && scheduleTime && <span>{scheduleTime}</span>}
           {!compact && <span>裁判：待定</span>}
           {!compact && group.source && <span>{group.source}</span>}
         </div>
