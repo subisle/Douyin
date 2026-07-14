@@ -19,18 +19,6 @@ require("dotenv").config({
   quiet: true,
 });
 
-// 内置数据库配置（打包后 .env 可能丢失时的 fallback）
-const BUILT_IN_DB = {
-  DB_HOST: "mysql7.sqlpub.com",
-  DB_PORT: "3312",
-  DB_USER: "douyinxs",
-  DB_PASSWORD: "WABZfpfGGlPSxlrs",
-  DB_NAME: "douyinxs",
-};
-for (const [key, value] of Object.entries(BUILT_IN_DB)) {
-  if (!process.env[key]) process.env[key] = value;
-}
-
 /** @type {import('mysql2/promise').Pool | null} */
 let pool = null;
 let dailyReportVisibilityColumnReady = false;
@@ -48,7 +36,7 @@ function getPool() {
     }
     pool = mysql.createPool({
       host,
-      port: Number(process.env.DB_PORT) || 3312,
+      port: Number(process.env.DB_PORT) || 3306,
       user,
       password,
       database,
@@ -1120,6 +1108,37 @@ async function getLatestDurationMap(db, options = {}) {
   return map;
 }
 
+function shiftIsoDate(dateStr, dayDelta) {
+  const raw = normalizeSnapshotDate(dateStr);
+  if (!raw) return null;
+  const [y, m, d] = raw.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const utc = Date.UTC(y, m - 1, d) + dayDelta * 24 * 60 * 60 * 1000;
+  return new Date(utc).toISOString().slice(0, 10);
+}
+
+/**
+ * 由累计快照推导“当日新增时长”：
+ * asOf(date) - asOf(date-1)，结果下限为 0。
+ * 无新导入时差值为 0；跨多日才导入时，增量会记在导入日。
+ */
+async function getDurationDeltaMap(db, options = {}) {
+  const { anchorIds = null, asOfDate } = options;
+  const date = normalizeSnapshotDate(asOfDate);
+  if (!date) return new Map();
+  const prevDate = shiftIsoDate(date, -1);
+  const currentMap = await getLatestDurationMap(db, { anchorIds, asOfDate: date });
+  const previousMap = prevDate
+    ? await getLatestDurationMap(db, { anchorIds, asOfDate: prevDate })
+    : new Map();
+  const deltaMap = new Map();
+  for (const [anchorId, current] of currentMap) {
+    const previous = Number(previousMap.get(anchorId) || 0) || 0;
+    deltaMap.set(anchorId, Math.max(0, (Number(current) || 0) - previous));
+  }
+  return deltaMap;
+}
+
 /**
  * 批量删除主播：删除 persons + 关联 accounts + wave/duration 快照。
  * personIds: number[]
@@ -2022,8 +2041,8 @@ async function getDailyWaveReport(date, gender) {
   const totalWaveMap = new Map();
   for (const r of totalWaves) totalWaveMap.set(r.anchor_id, Number(r.total) || 0);
 
-  // 5. 当日时长：取 <= date 最近一次累计快照
-  const dailyDurMap = await getLatestDurationMap(db, {
+  // 5. 当日时长：累计快照差值 asOf(date) - asOf(date-1)
+  const dailyDurMap = await getDurationDeltaMap(db, {
     anchorIds,
     asOfDate: date,
   });

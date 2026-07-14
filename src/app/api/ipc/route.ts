@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireApiAccess } from "@/server/api/auth";
 import { callLegacyDb } from "@/server/db/legacy-db";
 
 export const runtime = "nodejs";
@@ -46,6 +47,9 @@ const ALLOWED_METHODS = new Set([
 
 export async function POST(request: Request) {
   try {
+    const auth = requireApiAccess(request);
+    if (auth) return auth;
+
     const body = await request.json();
     const method = typeof body?.method === "string" ? body.method : "";
     const args = Array.isArray(body?.args) ? body.args : [];

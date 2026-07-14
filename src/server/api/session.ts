@@ -4,7 +4,13 @@ const SESSION_COOKIE = "douyin_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
 function secret() {
-  return process.env.SESSION_SECRET || process.env.JWT_SECRET || "douyin-dev-session-secret";
+  const value = (process.env.SESSION_SECRET || process.env.JWT_SECRET || "").trim();
+  if (value) return value;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("缺少 SESSION_SECRET/JWT_SECRET，生产环境拒绝签发会话");
+  }
+  // 仅开发环境允许临时密钥，避免本地阻塞；生产必须显式配置。
+  return "douyin-dev-session-secret";
 }
 
 function sha256(input: string) {
