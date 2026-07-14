@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ClipboardPaste,
   Download,
+  GripVertical,
   RefreshCw,
   Sparkles,
   Users,
@@ -59,6 +60,8 @@ const GROUPS_PER_PAGE = 2;
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
 // v2：刷新内置赛程备注默认文案
 const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v2";
+// 小组赛分组拖动顺序（按稳定 group.key 保存）
+const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v1";
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
@@ -150,6 +153,61 @@ function loadExportNotes(): string {
   } catch {
     return defaultExportNotes();
   }
+}
+
+function loadGroupOrder(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(GROUP_ORDER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item) => String(item || "").trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** 按保存的 key 顺序重排；缺的追加末尾。标签按当前顺序重编为第N组。 */
+function applyGroupOrder(groups: BattleGroup[], orderKeys: string[]): BattleGroup[] {
+  if (groups.length === 0) return [];
+  if (!orderKeys.length) {
+    return groups.map((group, index) => ({
+      ...group,
+      label: `第${index + 1}组`,
+    }));
+  }
+  const map = new Map(groups.map((group) => [group.key, group]));
+  const ordered: BattleGroup[] = [];
+  const used = new Set<string>();
+  for (const key of orderKeys) {
+    const hit = map.get(key);
+    if (!hit || used.has(key)) continue;
+    ordered.push(hit);
+    used.add(key);
+  }
+  for (const group of groups) {
+    if (used.has(group.key)) continue;
+    ordered.push(group);
+  }
+  return ordered.map((group, index) => ({
+    ...group,
+    label: `第${index + 1}组`,
+  }));
+}
+
+function moveGroupByKey(groups: BattleGroup[], fromKey: string, toKey: string): BattleGroup[] {
+  if (fromKey === toKey) return groups;
+  const fromIndex = groups.findIndex((group) => group.key === fromKey);
+  const toIndex = groups.findIndex((group) => group.key === toKey);
+  if (fromIndex < 0 || toIndex < 0) return groups;
+  const next = [...groups];
+  const [item] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, item);
+  return next.map((group, index) => ({
+    ...group,
+    label: `第${index + 1}组`,
+  }));
 }
 
 function countsToText(counts: ManualGroupCount[]) {
@@ -735,6 +793,9 @@ export function StarBattlePage() {
   const [saveMessage, setSaveMessage] = useState("");
   const [roundKey, setRoundKey] = useState<BattleRoundKey>("group");
   const [groupPlan, setGroupPlan] = useState<GroupPlanConfig>(loadGroupPlan);
+  const [groupOrderKeys, setGroupOrderKeys] = useState<string[]>(loadGroupOrder);
+  const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null);
+  const [draggingGroupKey, setDraggingGroupKey] = useState<string | null>(null);
   const [groupPage, setGroupPage] = useState(0);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
@@ -822,6 +883,10 @@ export function StarBattlePage() {
     window.localStorage.setItem(EXPORT_NOTES_STORAGE_KEY, exportNotes);
   }, [exportNotes]);
 
+  useEffect(() => {
+    window.localStorage.setItem(GROUP_ORDER_STORAGE_KEY, JSON.stringify(groupOrderKeys));
+  }, [groupOrderKeys]);
+
   const rawBattleMembers = useMemo(() => {
     const rows = data?.males ?? [];
     const seen = new Set<number>();
@@ -867,15 +932,48 @@ export function StarBattlePage() {
     () => buildBattleGroups(allMembers, groupPlan),
     [allMembers, groupPlan]
   );
-  const initialGroups = useMemo(
+  // 稳定 key：按成员 personId 集合生成，拖动顺序不改 key，分数不丢
+  const baseGroupStageGroups = useMemo(
     () =>
-      groupStageResult.groups.map((group, index) => ({
-        ...group,
-        key: `group-${index + 1}`,
-        label: `第${index + 1}组`,
-      })),
+      groupStageResult.groups.map((group, index) => {
+        const memberSig = group.members
+          .map((member) => member.personId)
+          .slice()
+          .sort((a, b) => a - b)
+          .join("-");
+        return {
+          ...group,
+          key: memberSig ? `g-${memberSig}` : `g-empty-${index}`,
+          label: `第${index + 1}组`,
+        };
+      }),
     [groupStageResult.groups]
   );
+
+  // 名单变化时，清理已不存在的顺序 key，并补上新增组
+  useEffect(() => {
+    const available = new Set(baseGroupStageGroups.map((group) => group.key));
+    setGroupOrderKeys((current) => {
+      const kept = current.filter((key) => available.has(key));
+      const missing = baseGroupStageGroups
+        .map((group) => group.key)
+        .filter((key) => !kept.includes(key));
+      const next = [...kept, ...missing];
+      if (
+        next.length === current.length &&
+        next.every((key, index) => key === current[index])
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, [baseGroupStageGroups]);
+
+  const orderedGroupStageGroups = useMemo(
+    () => applyGroupOrder(baseGroupStageGroups, groupOrderKeys),
+    [baseGroupStageGroups, groupOrderKeys]
+  );
+  const initialGroups = orderedGroupStageGroups;
   const activeMembers = allMembers;
   const invalidGrouping = groupStageResult.invalid;
   const groupPlanDetail = groupStageResult.detail;
@@ -950,10 +1048,24 @@ export function StarBattlePage() {
         : roundKey === "final"
           ? "晋级赛每组第一名进入决赛"
           : groupPlan.sizeMode === "preset"
-            ? "小组赛使用内置固定分组；沿用 PK 15号名单"
+            ? "小组赛使用内置固定分组；可拖动调整组顺序；沿用 PK 15号名单"
             : groupPlan.sortMode === "top_wave_rest_volatility"
               ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
               : "按音浪从高到低分组；沿用 PK 15号名单";
+
+  const reorderGroupStage = useCallback((fromKey: string, toKey: string) => {
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    setGroupOrderKeys((current) => {
+      const ordered = applyGroupOrder(baseGroupStageGroups, current);
+      const next = moveGroupByKey(ordered, fromKey, toKey);
+      return next.map((group) => group.key);
+    });
+  }, [baseGroupStageGroups]);
+
+  const resetGroupOrder = useCallback(() => {
+    setGroupOrderKeys(baseGroupStageGroups.map((group) => group.key));
+    setSaveMessage("已恢复默认分组顺序");
+  }, [baseGroupStageGroups]);
 
   const updateManualCount = useCallback((size: number, count: number) => {
     setGroupPlan((current) => {
@@ -1455,6 +1567,21 @@ export function StarBattlePage() {
             ))}
           </div>
           <div className="flex items-center gap-2">
+            {roundKey === "group" && (
+              <>
+                <span className="hidden text-xs text-muted-foreground sm:inline">
+                  拖动卡片可调整组顺序
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={resetGroupOrder}
+                  disabled={baseGroupStageGroups.length === 0}
+                >
+                  恢复默认顺序
+                </Button>
+              </>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -1730,6 +1857,24 @@ export function StarBattlePage() {
                 onDraftChange={updateDraft}
                 onSave={saveScore}
                 onQuickAdd={quickAddScore}
+                draggable={roundKey === "group"}
+                dragging={draggingGroupKey === group.key}
+                dragOver={dragOverGroupKey === group.key}
+                onDragStart={() => setDraggingGroupKey(group.key)}
+                onDragEnd={() => {
+                  setDraggingGroupKey(null);
+                  setDragOverGroupKey(null);
+                }}
+                onDragOver={() => {
+                  if (roundKey !== "group") return;
+                  setDragOverGroupKey(group.key);
+                }}
+                onDrop={() => {
+                  if (roundKey !== "group" || !draggingGroupKey) return;
+                  reorderGroupStage(draggingGroupKey, group.key);
+                  setDraggingGroupKey(null);
+                  setDragOverGroupKey(null);
+                }}
               />
             ))}
           </div>
@@ -2226,6 +2371,13 @@ function GroupCard({
   onDraftChange,
   onSave,
   onQuickAdd,
+  draggable = false,
+  dragging = false,
+  dragOver = false,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
 }: {
   group: BattleGroup;
   roundKey: string;
@@ -2235,6 +2387,13 @@ function GroupCard({
   onDraftChange: (groupKey: string, personId: number, value: string) => void;
   onSave: (groupKey: string, personId: number, value: string) => void;
   onQuickAdd: (groupKey: string, personId: number, delta: number) => void;
+  draggable?: boolean;
+  dragging?: boolean;
+  dragOver?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragOver?: () => void;
+  onDrop?: () => void;
 }) {
   const groupScore = group.members.reduce((sum, member) => {
     const key = scoreKey(roundKey, group.key, member.personId);
@@ -2260,12 +2419,54 @@ function GroupCard({
   };
 
   return (
-    <Card className="overflow-hidden">
+    <Card
+      className={[
+        "overflow-hidden transition-all",
+        dragging ? "opacity-55 scale-[0.99]" : "",
+        dragOver ? "ring-2 ring-primary/60 border-primary/40" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      onDragOver={
+        draggable
+          ? (event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              onDragOver?.();
+            }
+          : undefined
+      }
+      onDrop={
+        draggable
+          ? (event) => {
+              event.preventDefault();
+              onDrop?.();
+            }
+          : undefined
+      }
+    >
       <CardHeader className="border-b border-border/60 bg-muted/30 pb-3">
         <div className="flex items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Users className="size-4 text-primary" />
-            {group.label}
+          <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+            {draggable && (
+              <button
+                type="button"
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", group.key);
+                  onDragStart?.();
+                }}
+                onDragEnd={() => onDragEnd?.()}
+                className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-md border border-border bg-background text-muted-foreground active:cursor-grabbing"
+                title="拖动调整组顺序"
+                aria-label={`拖动${group.label}`}
+              >
+                <GripVertical className="size-4" />
+              </button>
+            )}
+            <Users className="size-4 shrink-0 text-primary" />
+            <span className="truncate">{group.label}</span>
           </CardTitle>
           <Badge variant="outline">
             {group.members.length}人 + 裁判
@@ -2276,6 +2477,7 @@ function GroupCard({
           <span>本轮均分 {avgScore.toFixed(1)}</span>
           <span>裁判：待定</span>
           {group.source && <span>{group.source}</span>}
+          {draggable && <span>可拖动排序</span>}
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
