@@ -1,6 +1,33 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage } = require("electron");
 const fs = require("fs");
 const path = require("path");
+
+// 先加载环境变量，再加载 db，避免缺 DB_* 时过早失败
+const isDev = !app.isPackaged;
+const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
+const APP_ICON_PNG = path.join(__dirname, "..", "assets", "icon.png");
+for (const envPath of [
+  path.join(__dirname, "..", ".env.local"),
+  path.join(__dirname, "..", ".env"),
+  process.resourcesPath ? path.join(process.resourcesPath, ".env") : null,
+].filter(Boolean)) {
+  if (fs.existsSync(envPath)) {
+    require("dotenv").config({ path: envPath, quiet: true });
+  }
+}
+
+// 桌面端内置数据库 fallback（与 electron/db.js 保持一致）
+const BUILT_IN_DB = {
+  DB_HOST: "mysql7.sqlpub.com",
+  DB_PORT: "3312",
+  DB_USER: "douyinxs",
+  DB_PASSWORD: "WABZfpfGGlPSxlrs",
+  DB_NAME: "douyinxs",
+};
+for (const [key, value] of Object.entries(BUILT_IN_DB)) {
+  if (!String(process.env[key] || "").trim()) process.env[key] = value;
+}
+
 const db = require("./db");
 const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
@@ -15,15 +42,6 @@ const {
   normalizeLiveRoomUrl,
   scanOpenWebSockets,
 } = require("./live-pk-capture");
-
-const isDev = !app.isPackaged;
-const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
-const APP_ICON_PNG = path.join(__dirname, "..", "assets", "icon.png");
-for (const envPath of [path.join(__dirname, "..", ".env.local"), path.join(__dirname, "..", ".env")]) {
-  if (fs.existsSync(envPath)) {
-    require("dotenv").config({ path: envPath, quiet: true });
-  }
-}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;

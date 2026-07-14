@@ -19,7 +19,8 @@ require("dotenv").config({
   quiet: true,
 });
 
-// 内置数据库配置：打包后若 .env 丢失，用此 fallback（仅桌面端私有分发）
+// 内置数据库配置：打包/开发都可无 .env 启动（仅桌面端私有分发）
+// 优先级：已有非空环境变量 > .env 文件 > 内置 fallback
 const BUILT_IN_DB = {
   DB_HOST: "mysql7.sqlpub.com",
   DB_PORT: "3312",
@@ -27,9 +28,16 @@ const BUILT_IN_DB = {
   DB_PASSWORD: "WABZfpfGGlPSxlrs",
   DB_NAME: "douyinxs",
 };
-for (const [key, value] of Object.entries(BUILT_IN_DB)) {
-  if (!process.env[key]) process.env[key] = value;
+
+function applyBuiltInDbEnv() {
+  for (const [key, value] of Object.entries(BUILT_IN_DB)) {
+    if (!String(process.env[key] || "").trim()) {
+      process.env[key] = value;
+    }
+  }
 }
+
+applyBuiltInDbEnv();
 
 /** @type {import('mysql2/promise').Pool | null} */
 let pool = null;
@@ -37,18 +45,26 @@ let dailyReportVisibilityColumnReady = false;
 
 const LIVE_WAVE_THRESHOLD = 2;
 
+function resolveDbConfig() {
+  // 每次建池前再兜底一次，避免启动后 env 被清空/未注入
+  applyBuiltInDbEnv();
+  const host = String(process.env.DB_HOST || "").trim();
+  const user = String(process.env.DB_USER || "").trim();
+  const password = String(process.env.DB_PASSWORD || "").trim();
+  const database = String(process.env.DB_NAME || "").trim();
+  const port = Number(process.env.DB_PORT) || Number(BUILT_IN_DB.DB_PORT) || 3312;
+  if (!host || !user || !password || !database) {
+    throw new Error("缺少数据库环境变量：DB_HOST, DB_USER, DB_PASSWORD, DB_NAME 必须全部设置");
+  }
+  return { host, user, password, database, port };
+}
+
 function getPool() {
   if (!pool) {
-    const host = process.env.DB_HOST;
-    const user = process.env.DB_USER;
-    const password = process.env.DB_PASSWORD;
-    const database = process.env.DB_NAME;
-    if (!host || !user || !password || !database) {
-      throw new Error("缺少数据库环境变量：DB_HOST, DB_USER, DB_PASSWORD, DB_NAME 必须全部设置");
-    }
+    const { host, user, password, database, port } = resolveDbConfig();
     pool = mysql.createPool({
       host,
-      port: Number(process.env.DB_PORT) || 3312,
+      port,
       user,
       password,
       database,
