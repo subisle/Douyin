@@ -57,6 +57,7 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 2;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v1";
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
@@ -122,6 +123,21 @@ function loadGroupPlan(): GroupPlanConfig {
     };
   } catch {
     return defaultGroupPlan();
+  }
+}
+
+function defaultExportNotes() {
+  return "";
+}
+
+function loadExportNotes(): string {
+  if (typeof window === "undefined") return defaultExportNotes();
+  try {
+    const raw = window.localStorage.getItem(EXPORT_NOTES_STORAGE_KEY);
+    if (raw == null) return defaultExportNotes();
+    return String(raw);
+  } catch {
+    return defaultExportNotes();
   }
 }
 
@@ -725,6 +741,8 @@ export function StarBattlePage() {
   const [monitorMessage, setMonitorMessage] = useState("");
   const [monitorLogs, setMonitorLogs] = useState<MonitorLogRow[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [exportNotes, setExportNotes] = useState(loadExportNotes);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -788,6 +806,10 @@ export function StarBattlePage() {
   useEffect(() => {
     window.localStorage.setItem(GROUP_PLAN_STORAGE_KEY, JSON.stringify(groupPlan));
   }, [groupPlan]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EXPORT_NOTES_STORAGE_KEY, exportNotes);
+  }, [exportNotes]);
 
   const rawBattleMembers = useMemo(() => {
     const rows = data?.males ?? [];
@@ -1369,6 +1391,13 @@ export function StarBattlePage() {
               <RefreshCw className={`size-4 ${monitorStatus.status === "running" ? "animate-spin" : ""}`} />
               直播监控
             </Button>
+            <Button
+              size="sm"
+              variant={notesOpen ? "default" : "outline"}
+              onClick={() => setNotesOpen((value) => !value)}
+            >
+              备注
+            </Button>
             <Button size="sm" onClick={exportCurrentGroups} disabled={exporting || currentGroups.length === 0}>
               <Download className="size-4" />
               {exporting ? "导出中" : "导出图片"}
@@ -1377,6 +1406,28 @@ export function StarBattlePage() {
           </div>
         </div>
       </section>
+
+      {notesOpen && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">导出备注</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <textarea
+              value={exportNotes}
+              onChange={(event) => setExportNotes(event.target.value)}
+              placeholder={"可写多行，例如：\n1. 中午 12:00 开赛\n2. 每组自备裁判\n3. 迟到 5 分钟视为弃权"}
+              className="min-h-28 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm leading-6 outline-none focus:border-primary"
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>备注会显示在导出图片底部，并自动保存在本机。</span>
+              <Button size="sm" variant="outline" onClick={() => setExportNotes("")}>
+                清空备注
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
@@ -1697,6 +1748,7 @@ export function StarBattlePage() {
           roundKey={roundKey}
           scoreDrafts={scoreDrafts}
           scoreMap={scoreMap}
+          notes={exportNotes}
         />
       </div>
     </div>
@@ -1712,11 +1764,17 @@ const BattleExportBoard = React.forwardRef<
     roundKey: string;
     scoreDrafts: Record<string, string>;
     scoreMap: Map<string, number>;
+    notes?: string;
   }
 >(function BattleExportBoard(
-  { period, roundLabel, groups, roundKey, scoreDrafts, scoreMap },
+  { period, roundLabel, groups, roundKey, scoreDrafts, scoreMap, notes = "" },
   ref
 ) {
+  const noteLines = String(notes || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
   return (
     <div ref={ref} className="bg-slate-50 p-8" style={{ width: 1280 }}>
       <div className="mb-6 flex items-end justify-between border-b border-slate-200 pb-4">
@@ -1764,6 +1822,16 @@ const BattleExportBoard = React.forwardRef<
           );
         })}
       </div>
+      {noteLines.length > 0 && (
+        <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+          <div className="mb-2 text-sm font-black tracking-wide text-amber-900">备注</div>
+          <div className="space-y-1.5 text-sm font-semibold leading-6 text-amber-950">
+            {noteLines.map((line, index) => (
+              <div key={`${index}-${line}`}>{line}</div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 });

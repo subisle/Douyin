@@ -19,6 +19,18 @@ require("dotenv").config({
   quiet: true,
 });
 
+// 内置数据库配置：打包后若 .env 丢失，用此 fallback（仅桌面端私有分发）
+const BUILT_IN_DB = {
+  DB_HOST: "mysql7.sqlpub.com",
+  DB_PORT: "3312",
+  DB_USER: "douyinxs",
+  DB_PASSWORD: "WABZfpfGGlPSxlrs",
+  DB_NAME: "douyinxs",
+};
+for (const [key, value] of Object.entries(BUILT_IN_DB)) {
+  if (!process.env[key]) process.env[key] = value;
+}
+
 /** @type {import('mysql2/promise').Pool | null} */
 let pool = null;
 let dailyReportVisibilityColumnReady = false;
@@ -36,7 +48,7 @@ function getPool() {
     }
     pool = mysql.createPool({
       host,
-      port: Number(process.env.DB_PORT) || 3306,
+      port: Number(process.env.DB_PORT) || 3312,
       user,
       password,
       database,
