@@ -10,8 +10,12 @@ export interface RosterConfig {
 }
 
 export const DEFAULT_PK_GROUP_SIZE = 8;
-export const ROSTER_CONFIG_STORAGE_KEY = "pk-roster-list-config-v1";
-/** 星嗨争霸赛 / PK 名单默认白名单（去重后写入） */
+/** v2：刷新 15 号内置名单默认值，避免沿用旧 localStorage */
+export const ROSTER_CONFIG_STORAGE_KEY = "pk-roster-list-config-v2";
+/**
+ * 15号 PK / 星嗨争霸赛默认白名单。
+ * 来源名单含重复（浩泽/浩辰/狼途/啸恒），入库前按出现顺序去重，共 54 人。
+ */
 export const PRESET_ROSTER_TEXT = `浩雨
 南方楠
 狼赫
@@ -62,10 +66,10 @@ export const PRESET_ROSTER_TEXT = `浩雨
 狼辉
 啸帆
 狼哲
+玖雪
 浩哲
 啸强
-浩启
-玖雪`;
+浩启`;
 
 const ROSTER_NAME_ALIASES: Record<string, string> = {
   辰辰: "浩辰",
