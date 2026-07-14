@@ -59,8 +59,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-// v4：时间文案改为「开始连麦」
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v4";
+// v5：时间按出场场次顺序固定，拖组只换人
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v5";
 // 小组赛分组拖动顺序（按稳定 group.key 保存）
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v1";
 
@@ -131,19 +131,65 @@ function loadGroupPlan(): GroupPlanConfig {
   }
 }
 
+/** 连麦时间表：按出场场次顺序固定，与具体人员无关。 */
+const SCHEDULE_FIRST_START = "12:15"; // 第1场
+const SCHEDULE_MATCH_MINUTES = 10;
+const SCHEDULE_GAP_MINUTES = 5; // 组间间隔
+const SCHEDULE_SLOT_STEP = SCHEDULE_MATCH_MINUTES + SCHEDULE_GAP_MINUTES; // 15
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function parseHm(value: string) {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function formatHm(totalMinutes: number) {
+  const normalized = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hour = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  return `${pad2(hour)}:${pad2(minute)}`;
+}
+
+function formatLinkmicLabel(hm: string) {
+  return `${hm} 开始连麦`;
+}
+
+/** 按场次 1..count 生成固定时间（拖组不改时间轴）。 */
+function buildSequentialSchedule(
+  count: number,
+  firstStart = SCHEDULE_FIRST_START,
+  stepMinutes = SCHEDULE_SLOT_STEP
+) {
+  const map = new Map<number, string>();
+  const start = parseHm(firstStart);
+  if (start == null || count <= 0) return map;
+  for (let i = 0; i < count; i++) {
+    const hm = formatHm(start + i * stepMinutes);
+    map.set(i + 1, formatLinkmicLabel(hm));
+  }
+  return map;
+}
+
 function defaultExportNotes() {
-  // 每组 10 分钟，结束后间隔 5 分钟再开下一组 → 开赛时刻相隔 15 分钟
-  return [
+  // 时间按出场顺序固定：第1场 12:15，之后每场 +15 分钟（10分钟+间隔5分钟）
+  const schedule = buildSequentialSchedule(7);
+  const lines = [
     "中午 12:10 开播",
-    "12:15 第1组开始连麦，每组 10 分钟，组间间隔 5 分钟，依次类推",
-    "第1组 12:15 开始连麦",
-    "第2组 12:30 开始连麦",
-    "第3组 12:45 开始连麦",
-    "第4组 13:00 开始连麦",
-    "第5组 13:15 开始连麦",
-    "第6组 13:30 开始连麦",
-    "第7组 13:45 开始连麦",
-  ].join("\n");
+    "连麦时间按出场顺序固定：每组 10 分钟，组间间隔 5 分钟",
+    "拖动只调整哪一组打第几场，时间表本身不变",
+  ];
+  for (let i = 1; i <= 7; i++) {
+    lines.push(`第${i}场 ${schedule.get(i)}`);
+  }
+  return lines.join("\n");
 }
 
 function loadExportNotes(): string {
@@ -1128,8 +1174,9 @@ export function StarBattlePage() {
     groupPage * GROUPS_PER_PAGE + GROUPS_PER_PAGE
   );
   const scheduleByGroupNo = useMemo(
-    () => parseExportSchedule(exportNotes).scheduleByGroup,
-    [exportNotes]
+    // 时间只看“当前第几场”，拖组换人后场次时间轴不变
+    () => parseExportSchedule(exportNotes, currentGroups.length).scheduleByGroup,
+    [currentGroups.length, exportNotes]
   );
 
   useEffect(() => {
@@ -1576,7 +1623,7 @@ export function StarBattlePage() {
             {roundKey === "group" && (
               <>
                 <span className="hidden text-xs text-muted-foreground sm:inline">
-                  拖动手柄调整组顺序
+                  拖动调整出场顺序；时间按第1/2/3…场次固定
                 </span>
                 <Button
                   size="sm"
@@ -1929,25 +1976,24 @@ export function StarBattlePage() {
   );
 }
 
-function parseExportSchedule(notes: string) {
+function parseExportSchedule(notes: string, groupCount = 0) {
   const lines = String(notes || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const scheduleByGroup = new Map<number, string>();
+  // 默认：按出场顺序自动生成（第1场 12:15，之后 +15 分钟）
+  const scheduleByGroup = buildSequentialSchedule(Math.max(groupCount, 7));
   const generalLines: string[] = [];
 
   for (const line of lines) {
-    // 第1组 12:15
-    // 第1组 12:15 开始连麦
-    // 兼容旧区间：第1组 12:15-12:25
+    // 第1组/第1场 12:15[ 开始连麦]；兼容旧区间写法
     const match = line.match(
-      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?(?:\s*开始连麦)?\s*$/
+      /^第\s*(\d+)\s*(?:组|场)\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?(?:\s*开始连麦)?\s*$/
     );
     if (match) {
-      // 统一展示为「时间 开始连麦」
-      scheduleByGroup.set(Number(match[1]), `${match[2]} 开始连麦`);
+      // 仍按“场次序号”覆盖，不绑定具体人员
+      scheduleByGroup.set(Number(match[1]), formatLinkmicLabel(match[2]));
       continue;
     }
     generalLines.push(line);
@@ -1971,7 +2017,7 @@ const BattleExportBoard = React.forwardRef<
   { period, roundLabel, groups, roundKey, scoreDrafts, scoreMap, notes = "" },
   ref
 ) {
-  const { scheduleByGroup, generalLines } = parseExportSchedule(notes);
+  const { scheduleByGroup, generalLines } = parseExportSchedule(notes, groups.length);
   const totalPeople = groups.reduce((sum, group) => sum + group.members.length, 0);
   const showScores = groups.some((group) => groupHasScore(group, scoreMap, scoreDrafts, roundKey));
   const columns = groups.length <= 3 ? groups.length || 1 : groups.length <= 6 ? 3 : 4;
@@ -2302,7 +2348,7 @@ const BattleExportBoard = React.forwardRef<
               letterSpacing: 0.6,
             }}
           >
-            连麦时间表
+            连麦时间表（按出场顺序，拖组不改时间）
           </div>
           <div
             style={{
