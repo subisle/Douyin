@@ -59,8 +59,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-// v2：刷新内置赛程备注默认文案
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v2";
+// v3：仅开始时间 + 组间间隔 5 分钟
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v3";
 // 小组赛分组拖动顺序（按稳定 group.key 保存）
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v1";
 
@@ -132,16 +132,17 @@ function loadGroupPlan(): GroupPlanConfig {
 }
 
 function defaultExportNotes() {
+  // 每组 10 分钟，结束后间隔 5 分钟再开下一组 → 开赛时刻相隔 15 分钟
   return [
     "中午 12:10 开播",
-    "12:15 第1组开赛，每组 10 分钟，组间间隔 10 分钟，依次类推",
-    "第1组 12:15-12:25",
-    "第2组 12:35-12:45",
-    "第3组 12:55-13:05",
-    "第4组 13:15-13:25",
-    "第5组 13:35-13:45",
-    "第6组 13:55-14:05",
-    "第7组 14:15-14:25",
+    "12:15 第1组开赛，每组 10 分钟，组间间隔 5 分钟，依次类推",
+    "第1组 12:15",
+    "第2组 12:30",
+    "第3组 12:45",
+    "第4组 13:00",
+    "第5组 13:15",
+    "第6组 13:30",
+    "第7组 13:45",
   ].join("\n");
 }
 
@@ -1938,12 +1939,13 @@ function parseExportSchedule(notes: string) {
   const generalLines: string[] = [];
 
   for (const line of lines) {
-    // 第1组 12:15-12:25 / 第1组：12:15～12:25
+    // 仅开始时间：第1组 12:15 / 第1组：12:15
+    // 兼容旧区间：第1组 12:15-12:25 → 只取开始时间
     const match = line.match(
-      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})\s*[-~～—到至]\s*(\d{1,2}:\d{2})\s*$/
+      /^第\s*(\d+)\s*组\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?\s*$/
     );
     if (match) {
-      scheduleByGroup.set(Number(match[1]), `${match[2]}-${match[3]}`);
+      scheduleByGroup.set(Number(match[1]), match[2]);
       continue;
     }
     generalLines.push(line);
