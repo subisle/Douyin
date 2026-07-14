@@ -55,7 +55,8 @@ const MIN_GROUP_SIZE = 5;
 const MAX_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_COUNT = 2;
-const GROUPS_PER_PAGE = 2;
+// 一页展示全部小组（当前最多 7 组），紧凑布局不再分页
+const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
 // v2：刷新内置赛程备注默认文案
@@ -1570,7 +1571,7 @@ export function StarBattlePage() {
             {roundKey === "group" && (
               <>
                 <span className="hidden text-xs text-muted-foreground sm:inline">
-                  拖动卡片可调整组顺序
+                  拖动手柄调整组顺序
                 </span>
                 <Button
                   size="sm"
@@ -1582,27 +1583,31 @@ export function StarBattlePage() {
                 </Button>
               </>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={groupPage <= 0}
-              onClick={() => setGroupPage((page) => Math.max(0, page - 1))}
-            >
-              <ChevronLeft className="size-4" />
-              上一页
-            </Button>
-            <span className="min-w-16 text-center text-xs font-semibold text-muted-foreground">
-              {groupPage + 1} / {totalPages}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={groupPage >= totalPages - 1}
-              onClick={() => setGroupPage((page) => Math.min(totalPages - 1, page + 1))}
-            >
-              下一页
-              <ChevronRight className="size-4" />
-            </Button>
+            {totalPages > 1 && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={groupPage <= 0}
+                  onClick={() => setGroupPage((page) => Math.max(0, page - 1))}
+                >
+                  <ChevronLeft className="size-4" />
+                  上一页
+                </Button>
+                <span className="min-w-16 text-center text-xs font-semibold text-muted-foreground">
+                  {groupPage + 1} / {totalPages}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={groupPage >= totalPages - 1}
+                  onClick={() => setGroupPage((page) => Math.min(totalPages - 1, page + 1))}
+                >
+                  下一页
+                  <ChevronRight className="size-4" />
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1845,7 +1850,7 @@ export function StarBattlePage() {
           </Card>
         )}
         {currentGroups.length > 0 ? (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {visibleGroups.map((group) => (
               <GroupCard
                 key={group.key}
@@ -1857,6 +1862,7 @@ export function StarBattlePage() {
                 onDraftChange={updateDraft}
                 onSave={saveScore}
                 onQuickAdd={quickAddScore}
+                compact
                 draggable={roundKey === "group"}
                 dragging={draggingGroupKey === group.key}
                 dragOver={dragOverGroupKey === group.key}
@@ -2371,6 +2377,7 @@ function GroupCard({
   onDraftChange,
   onSave,
   onQuickAdd,
+  compact = false,
   draggable = false,
   dragging = false,
   dragOver = false,
@@ -2387,6 +2394,7 @@ function GroupCard({
   onDraftChange: (groupKey: string, personId: number, value: string) => void;
   onSave: (groupKey: string, personId: number, value: string) => void;
   onQuickAdd: (groupKey: string, personId: number, delta: number) => void;
+  compact?: boolean;
   draggable?: boolean;
   dragging?: boolean;
   dragOver?: boolean;
@@ -2422,6 +2430,7 @@ function GroupCard({
     <Card
       className={[
         "overflow-hidden transition-all",
+        compact ? "shadow-none" : "",
         dragging ? "opacity-55 scale-[0.99]" : "",
         dragOver ? "ring-2 ring-primary/60 border-primary/40" : "",
       ]
@@ -2445,9 +2454,9 @@ function GroupCard({
           : undefined
       }
     >
-      <CardHeader className="border-b border-border/60 bg-muted/30 pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+      <CardHeader className={compact ? "space-y-1 border-b border-border/60 bg-muted/30 px-3 py-2" : "border-b border-border/60 bg-muted/30 pb-3"}>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className={compact ? "flex min-w-0 items-center gap-1.5 text-sm" : "flex min-w-0 items-center gap-2 text-base"}>
             {draggable && (
               <button
                 type="button"
@@ -2458,34 +2467,84 @@ function GroupCard({
                   onDragStart?.();
                 }}
                 onDragEnd={() => onDragEnd?.()}
-                className="inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-md border border-border bg-background text-muted-foreground active:cursor-grabbing"
+                className={
+                  compact
+                    ? "inline-flex size-6 shrink-0 cursor-grab items-center justify-center rounded-md border border-border bg-background text-muted-foreground active:cursor-grabbing"
+                    : "inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-md border border-border bg-background text-muted-foreground active:cursor-grabbing"
+                }
                 title="拖动调整组顺序"
                 aria-label={`拖动${group.label}`}
               >
-                <GripVertical className="size-4" />
+                <GripVertical className={compact ? "size-3.5" : "size-4"} />
               </button>
             )}
-            <Users className="size-4 shrink-0 text-primary" />
+            <Users className={compact ? "size-3.5 shrink-0 text-primary" : "size-4 shrink-0 text-primary"} />
             <span className="truncate">{group.label}</span>
           </CardTitle>
-          <Badge variant="outline">
-            {group.members.length}人 + 裁判
+          <Badge variant="outline" className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
+            {group.members.length}人
           </Badge>
         </div>
-        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <span>平均 {formatWave(group.averageWave)}</span>
-          <span>本轮均分 {avgScore.toFixed(1)}</span>
-          <span>裁判：待定</span>
-          {group.source && <span>{group.source}</span>}
-          {draggable && <span>可拖动排序</span>}
+        <div className={compact ? "flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground" : "flex flex-wrap gap-2 text-xs text-muted-foreground"}>
+          <span>均浪 {formatWave(group.averageWave)}</span>
+          <span>均分 {avgScore.toFixed(1)}</span>
+          {!compact && <span>裁判：待定</span>}
+          {!compact && group.source && <span>{group.source}</span>}
         </div>
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className={compact ? "space-y-1 p-2" : "space-y-2"}>
         {displayMembers.map((member, index) => {
           const key = scoreKey(roundKey, group.key, member.personId);
           const draft = scoreDrafts[key] ?? "";
           const saving = savingKey === key;
           const label = rankLabel(rankByPerson.get(member.personId) || index + 1);
+          if (compact) {
+            return (
+              <div
+                key={member.personId}
+                className="grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-1.5 rounded-md border border-border/70 bg-background px-1.5 py-1"
+              >
+                <span className="text-center text-[11px] font-bold text-muted-foreground">
+                  {index + 1}
+                </span>
+                <div className="flex min-w-0 items-center gap-1">
+                  <div className="truncate text-xs font-semibold">{member.name}</div>
+                  {label && (
+                    <Badge variant={label === "冠军" ? "default" : "secondary"} className="h-4 shrink-0 px-1 text-[9px]">
+                      {label}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-0.5">
+                  <Input
+                    type="number"
+                    min="0"
+                    inputMode="decimal"
+                    value={draft}
+                    placeholder="分"
+                    onChange={(event) => onDraftChange(group.key, member.personId, event.target.value)}
+                    onBlur={(event) => onSave(group.key, member.personId, event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    className="h-6 w-12 px-1 text-right text-xs"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-1.5 text-[10px]"
+                    disabled={saving}
+                    onClick={() => onQuickAdd(group.key, member.personId, 10)}
+                  >
+                    +10
+                  </Button>
+                </div>
+              </div>
+            );
+          }
           return (
             <div
               key={member.personId}
