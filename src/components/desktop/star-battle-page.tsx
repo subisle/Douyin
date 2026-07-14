@@ -59,8 +59,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-// v5：时间按出场场次顺序固定，拖组只换人
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v5";
+// v6：分轮次时间表（小组/复活/晋级/决赛）
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v6";
 // 小组赛分组拖动顺序（按稳定 group.key 保存）；v4：前半交错热场 + 最强不压轴
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v4";
 
@@ -132,10 +132,20 @@ function loadGroupPlan(): GroupPlanConfig {
 }
 
 /** 连麦时间表：按出场场次顺序固定，与具体人员无关。 */
-const SCHEDULE_FIRST_START = "12:15"; // 第1场
 const SCHEDULE_MATCH_MINUTES = 10;
 const SCHEDULE_GAP_MINUTES = 5; // 组间间隔
 const SCHEDULE_SLOT_STEP = SCHEDULE_MATCH_MINUTES + SCHEDULE_GAP_MINUTES; // 15
+
+/** 各轮次首场开始时间（上一轮打完 + 休息后） */
+const ROUND_FIRST_START: Record<string, string> = {
+  group: "12:15",
+  // 小组末场 13:45 开打 10 分钟 → 13:55 结束，隔 5 分钟
+  revival: "14:00",
+  // 复活约 14:00-14:10，隔 10 分钟整备
+  promotion: "14:20",
+  // 晋级约 14:20-14:30，隔 15 分钟整备进决赛
+  final: "14:45",
+};
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -162,10 +172,14 @@ function formatLinkmicLabel(hm: string) {
   return `${hm} 开始连麦`;
 }
 
+function roundFirstStart(roundKey: string) {
+  return ROUND_FIRST_START[roundKey] || ROUND_FIRST_START.group;
+}
+
 /** 按场次 1..count 生成固定时间（拖组不改时间轴）。 */
 function buildSequentialSchedule(
   count: number,
-  firstStart = SCHEDULE_FIRST_START,
+  firstStart = ROUND_FIRST_START.group,
   stepMinutes = SCHEDULE_SLOT_STEP
 ) {
   const map = new Map<number, string>();
@@ -179,16 +193,23 @@ function buildSequentialSchedule(
 }
 
 function defaultExportNotes() {
-  // 时间按出场顺序固定：第1场 12:15，之后每场 +15 分钟（10分钟+间隔5分钟）
-  const schedule = buildSequentialSchedule(7);
+  const groupSchedule = buildSequentialSchedule(7, ROUND_FIRST_START.group);
   const lines = [
     "中午 12:10 开播",
-    "连麦时间按出场顺序固定：每组 10 分钟，组间间隔 5 分钟",
-    "拖动只调整哪一组打第几场，时间表本身不变",
+    "【小组赛】每组 10 分钟，组间间隔 5 分钟；拖动只换出场顺序，时间按场次固定",
   ];
   for (let i = 1; i <= 7; i++) {
-    lines.push(`第${i}场 ${schedule.get(i)}`);
+    lines.push(`小组第${i}场 ${groupSchedule.get(i)}`);
   }
+  lines.push(
+    "【复活赛】小组赛每组第2名晋级复活（共7人，自动1组）",
+    `复活赛 ${formatLinkmicLabel(ROUND_FIRST_START.revival)}`,
+    "复活赛每组第1名出线",
+    "【晋级赛】小组赛每组第1名 + 复活赛出线（约8人）",
+    `晋级赛 ${formatLinkmicLabel(ROUND_FIRST_START.promotion)}`,
+    "【决赛】晋级赛每组第1名",
+    `决赛 ${formatLinkmicLabel(ROUND_FIRST_START.final)}`
+  );
   return lines.join("\n");
 }
 
@@ -1090,13 +1111,13 @@ export function StarBattlePage() {
   const roundMeta = BATTLE_ROUNDS.find((round) => round.key === roundKey) || BATTLE_ROUNDS[0];
   const roundHint =
     roundKey === "revival"
-      ? "小组赛每组第二名进入复活赛"
+      ? `小组赛每组第2名进入复活（约${groupSeconds.length}人）；自动分组，默认 ${ROUND_FIRST_START.revival} 开始连麦`
       : roundKey === "promotion"
-        ? "小组赛第一名 + 复活赛第一名进入晋级赛"
+        ? `小组赛第1名 + 复活赛出线进入晋级；默认 ${ROUND_FIRST_START.promotion} 开始连麦`
         : roundKey === "final"
-          ? "晋级赛每组第一名进入决赛"
+          ? `晋级赛每组第1名进入决赛；默认 ${ROUND_FIRST_START.final} 开始连麦`
           : groupPlan.sizeMode === "preset"
-            ? "小组赛使用内置固定分组；可拖动调整组顺序；沿用 PK 15号名单"
+            ? "小组赛使用内置固定分组；可拖动调整出场顺序；时间按场次固定"
             : groupPlan.sortMode === "top_wave_rest_volatility"
               ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
               : "按音浪从高到低分组；沿用 PK 15号名单";
@@ -1174,9 +1195,9 @@ export function StarBattlePage() {
     groupPage * GROUPS_PER_PAGE + GROUPS_PER_PAGE
   );
   const scheduleByGroupNo = useMemo(
-    // 时间只看“当前第几场”，拖组换人后场次时间轴不变
-    () => parseExportSchedule(exportNotes, currentGroups.length).scheduleByGroup,
-    [currentGroups.length, exportNotes]
+    // 时间只看“当前轮次第几场”，拖组换人后场次时间轴不变
+    () => parseExportSchedule(exportNotes, currentGroups.length, roundKey).scheduleByGroup,
+    [currentGroups.length, exportNotes, roundKey]
   );
 
   useEffect(() => {
@@ -1976,25 +1997,48 @@ export function StarBattlePage() {
   );
 }
 
-function parseExportSchedule(notes: string, groupCount = 0) {
+function parseExportSchedule(notes: string, groupCount = 0, roundKey: string = "group") {
   const lines = String(notes || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  // 默认：按出场顺序自动生成（第1场 12:15，之后 +15 分钟）
-  const scheduleByGroup = buildSequentialSchedule(Math.max(groupCount, 7));
+  // 默认：按当前轮次首场时间 + 出场顺序自动生成
+  const firstStart = roundFirstStart(roundKey);
+  const scheduleByGroup = buildSequentialSchedule(Math.max(groupCount, 1), firstStart);
   const generalLines: string[] = [];
 
+  // 备注里可覆盖：小组第1场 / 复活第1场 / 第1场 12:15
+  const roundPrefix =
+    roundKey === "revival"
+      ? "(?:复活|复活赛)"
+      : roundKey === "promotion"
+        ? "(?:晋级|晋级赛)"
+        : roundKey === "final"
+          ? "(?:决赛)"
+          : "(?:小组|小组赛)?";
+
   for (const line of lines) {
-    // 第1组/第1场 12:15[ 开始连麦]；兼容旧区间写法
     const match = line.match(
-      /^第\s*(\d+)\s*(?:组|场)\s*[:：]?\s*(\d{1,2}:\d{2})(?:\s*[-~～—到至]\s*\d{1,2}:\d{2})?(?:\s*开始连麦)?\s*$/
+      new RegExp(
+        `^(?:${roundPrefix})?\\s*第\\s*(\\d+)\\s*(?:组|场)\\s*[:：]?\\s*(\\d{1,2}:\\d{2})(?:\\s*[-~～—到至]\\s*\\d{1,2}:\\d{2})?(?:\\s*开始连麦)?\\s*$`
+      )
     );
     if (match) {
-      // 仍按“场次序号”覆盖，不绑定具体人员
       scheduleByGroup.set(Number(match[1]), formatLinkmicLabel(match[2]));
       continue;
+    }
+    // 单场轮次简写：复活赛 14:00 开始连麦
+    if (groupCount <= 1) {
+      const single = line.match(
+        new RegExp(
+          `^${roundPrefix}\\s*[:：]?\\s*(\\d{1,2}:\\d{2})(?:\\s*开始连麦)?\\s*$`
+        )
+      );
+      if (single) {
+        scheduleByGroup.set(1, formatLinkmicLabel(single[1]));
+        continue;
+      }
     }
     generalLines.push(line);
   }
@@ -2017,7 +2061,7 @@ const BattleExportBoard = React.forwardRef<
   { period, roundLabel, groups, roundKey, scoreDrafts, scoreMap, notes = "" },
   ref
 ) {
-  const { scheduleByGroup, generalLines } = parseExportSchedule(notes, groups.length);
+  const { scheduleByGroup, generalLines } = parseExportSchedule(notes, groups.length, roundKey);
   const totalPeople = groups.reduce((sum, group) => sum + group.members.length, 0);
   const showScores = groups.some((group) => groupHasScore(group, scoreMap, scoreDrafts, roundKey));
   const columns = groups.length <= 3 ? groups.length || 1 : groups.length <= 6 ? 3 : 4;
