@@ -1297,7 +1297,7 @@ export function StarBattlePage() {
       await exportElementAsImage(
         exportRef.current,
         `星嗨争霸赛_${period}_${roundMeta.label}_${currentGroups.length}组.png`,
-        { backgroundColor: "#f8fafc", pixelRatio: 3 }
+        { backgroundColor: "#FFF0F8", pixelRatio: 3 }
       );
       setSaveMessage("分组图片已导出");
     } catch (e) {
@@ -2028,20 +2028,22 @@ const BattleExportBoard = React.forwardRef<
     return `${y}年${Number(m)}月`;
   })();
 
-  // 内联样式：html-to-image 对 Tailwind 任意值/部分 utility 不稳定
+  // 艳丽赛博糖果色：html-to-image 仅用内联 style 更稳
+  const ACCENTS = [
+    { main: "#FF2D95", soft: "#FFE4F3", deep: "#C4006C", glow: "rgba(255,45,149,0.28)" },
+    { main: "#7C3AED", soft: "#EDE9FE", deep: "#5B21B6", glow: "rgba(124,58,237,0.28)" },
+    { main: "#06B6D4", soft: "#CFFAFE", deep: "#0E7490", glow: "rgba(6,182,212,0.28)" },
+    { main: "#F59E0B", soft: "#FEF3C7", deep: "#B45309", glow: "rgba(245,158,11,0.30)" },
+    { main: "#22C55E", soft: "#DCFCE7", deep: "#15803D", glow: "rgba(34,197,94,0.28)" },
+    { main: "#F43F5E", soft: "#FFE4E6", deep: "#BE123C", glow: "rgba(244,63,94,0.28)" },
+    { main: "#3B82F6", soft: "#DBEAFE", deep: "#1D4ED8", glow: "rgba(59,130,246,0.28)" },
+    { main: "#A855F7", soft: "#F3E8FF", deep: "#7E22CE", glow: "rgba(168,85,247,0.28)" },
+  ];
   const COLORS = {
-    bg: "#F8FAFC",
+    text: "#1A1033",
+    muted: "#6B5B95",
     card: "#FFFFFF",
-    border: "#E2E8F0",
-    text: "#0F172A",
-    muted: "#64748B",
-    soft: "#F1F5F9",
-    ink: "#0B1220",
-    accent: "#4F46E5",
-    accentSoft: "#EEF2FF",
-    amberBg: "#FFFBEB",
-    amberBorder: "#FDE68A",
-    amberText: "#92400E",
+    ink: "#1A1033",
   };
 
   return (
@@ -2050,23 +2052,69 @@ const BattleExportBoard = React.forwardRef<
       style={{
         width: boardWidth,
         boxSizing: "border-box",
-        background: COLORS.bg,
+        background:
+          "linear-gradient(145deg, #FFF0F8 0%, #F3E8FF 28%, #E0F2FE 62%, #FEF3C7 100%)",
         padding: 36,
         fontFamily:
           '-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif',
         color: COLORS.text,
+        position: "relative",
+        overflow: "hidden",
       }}
     >
+      {/* 装饰光斑 */}
+      <div
+        style={{
+          position: "absolute",
+          top: -80,
+          right: -40,
+          width: 280,
+          height: 280,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(255,45,149,0.35) 0%, transparent 70%)",
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          bottom: -60,
+          left: -30,
+          width: 240,
+          height: 240,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(124,58,237,0.30) 0%, transparent 70%)",
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          top: 180,
+          left: "40%",
+          width: 200,
+          height: 200,
+          borderRadius: "50%",
+          background: "radial-gradient(circle, rgba(6,182,212,0.22) 0%, transparent 70%)",
+          pointerEvents: "none",
+        }}
+      />
+
       {/* 页眉 */}
       <div
         style={{
+          position: "relative",
           display: "flex",
           alignItems: "flex-end",
           justifyContent: "space-between",
           gap: 24,
           marginBottom: 22,
-          paddingBottom: 18,
-          borderBottom: `1px solid ${COLORS.border}`,
+          padding: "18px 20px",
+          borderRadius: 22,
+          background:
+            "linear-gradient(120deg, #FF2D95 0%, #7C3AED 45%, #06B6D4 100%)",
+          boxShadow: "0 12px 32px rgba(124,58,237,0.28)",
+          color: "#fff",
         }}
       >
         <div>
@@ -2078,50 +2126,60 @@ const BattleExportBoard = React.forwardRef<
               marginBottom: 10,
               padding: "5px 12px",
               borderRadius: 999,
-              background: COLORS.accentSoft,
-              color: COLORS.accent,
+              background: "rgba(255,255,255,0.22)",
+              color: "#fff",
               fontSize: 12,
               fontWeight: 800,
-              letterSpacing: 1,
+              letterSpacing: 1.2,
+              border: "1px solid rgba(255,255,255,0.35)",
             }}
           >
-            PENGZAI · STAR BATTLE
+            ★ PENGZAI · STAR BATTLE
           </div>
-          <div style={{ fontSize: 34, fontWeight: 900, letterSpacing: 0.5, color: COLORS.ink }}>
+          <div
+            style={{
+              fontSize: 36,
+              fontWeight: 900,
+              letterSpacing: 1,
+              color: "#fff",
+              textShadow: "0 2px 12px rgba(0,0,0,0.18)",
+            }}
+          >
             星嗨争霸赛
           </div>
-          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700, color: COLORS.muted }}>
+          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700, color: "rgba(255,255,255,0.92)" }}>
             {periodDisplay} · {roundLabel} · 共 {totalPeople} 人
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
           <div
             style={{
-              minWidth: 88,
+              minWidth: 92,
               padding: "12px 16px",
               borderRadius: 16,
-              background: COLORS.ink,
+              background: "rgba(255,255,255,0.2)",
+              border: "1px solid rgba(255,255,255,0.4)",
               color: "#fff",
               textAlign: "center",
+              backdropFilter: "blur(6px)",
             }}
           >
-            <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1 }}>{groups.length}</div>
-            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, opacity: 0.85 }}>组</div>
+            <div style={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>{groups.length}</div>
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, opacity: 0.92 }}>组</div>
           </div>
           <div
             style={{
-              minWidth: 88,
+              minWidth: 92,
               padding: "12px 16px",
               borderRadius: 16,
-              background: COLORS.card,
-              border: `1px solid ${COLORS.border}`,
+              background: "rgba(255,255,255,0.92)",
+              color: "#7C3AED",
               textAlign: "center",
+              boxShadow: "0 6px 16px rgba(0,0,0,0.12)",
             }}
           >
-            <div style={{ fontSize: 22, fontWeight: 900, lineHeight: 1.1, color: COLORS.ink }}>
-              {totalPeople}
-            </div>
-            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: COLORS.muted }}>人</div>
+            <div style={{ fontSize: 24, fontWeight: 900, lineHeight: 1.1 }}>{totalPeople}</div>
+            <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#A855F7" }}>人</div>
           </div>
         </div>
       </div>
@@ -2130,49 +2188,58 @@ const BattleExportBoard = React.forwardRef<
       {generalLines.length > 0 && (
         <div
           style={{
+            position: "relative",
             display: "flex",
             flexWrap: "wrap",
             gap: 10,
             marginBottom: 20,
             padding: "14px 16px",
-            borderRadius: 16,
-            background: COLORS.card,
-            border: `1px solid ${COLORS.border}`,
+            borderRadius: 18,
+            background: "rgba(255,255,255,0.82)",
+            border: "1px solid rgba(255,255,255,0.95)",
+            boxShadow: "0 8px 24px rgba(124,58,237,0.10)",
           }}
         >
-          {generalLines.map((line, index) => (
-            <div
-              key={`${index}-${line}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 12px",
-                borderRadius: 999,
-                background: index === 0 ? COLORS.accentSoft : COLORS.soft,
-                color: index === 0 ? COLORS.accent : COLORS.text,
-                fontSize: 13,
-                fontWeight: 800,
-              }}
-            >
-              <span
+          {generalLines.map((line, index) => {
+            const accent = ACCENTS[index % ACCENTS.length];
+            return (
+              <div
+                key={`${index}-${line}`}
                 style={{
-                  width: 8,
-                  height: 8,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 14px",
                   borderRadius: 999,
-                  background: index === 0 ? COLORS.accent : "#94A3B8",
-                  flexShrink: 0,
+                  background: accent.soft,
+                  color: accent.deep,
+                  fontSize: 13,
+                  fontWeight: 800,
+                  border: `1px solid ${accent.main}33`,
+                  boxShadow: `0 4px 12px ${accent.glow}`,
                 }}
-              />
-              {line}
-            </div>
-          ))}
+              >
+                <span
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: 999,
+                    background: `linear-gradient(135deg, ${accent.main}, ${accent.deep})`,
+                    flexShrink: 0,
+                    boxShadow: `0 0 0 3px ${accent.soft}`,
+                  }}
+                />
+                {line}
+              </div>
+            );
+          })}
         </div>
       )}
 
       {/* 分组卡片 */}
       <div
         style={{
+          position: "relative",
           display: "grid",
           gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
           gap: 14,
@@ -2184,16 +2251,17 @@ const BattleExportBoard = React.forwardRef<
             : group.members;
           const timeLabel = scheduleByGroup.get(groupIndex + 1) || "";
           const groupNo = groupIndex + 1;
+          const accent = ACCENTS[groupIndex % ACCENTS.length];
 
           return (
             <div
               key={group.key}
               style={{
                 background: COLORS.card,
-                border: `1px solid ${COLORS.border}`,
-                borderRadius: 18,
+                border: `2px solid ${accent.main}55`,
+                borderRadius: 20,
                 overflow: "hidden",
-                boxShadow: "0 1px 0 rgba(15,23,42,0.03)",
+                boxShadow: `0 10px 28px ${accent.glow}`,
               }}
             >
               <div
@@ -2203,33 +2271,43 @@ const BattleExportBoard = React.forwardRef<
                   justifyContent: "space-between",
                   gap: 10,
                   padding: "12px 14px",
-                  background: "linear-gradient(180deg, #FFFFFF 0%, #F8FAFC 100%)",
-                  borderBottom: `1px solid ${COLORS.border}`,
+                  background: `linear-gradient(120deg, ${accent.main} 0%, ${accent.deep} 100%)`,
+                  color: "#fff",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                   <div
                     style={{
-                      width: 34,
-                      height: 34,
+                      width: 36,
+                      height: 36,
                       borderRadius: 12,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      background: COLORS.ink,
+                      background: "rgba(255,255,255,0.24)",
+                      border: "1px solid rgba(255,255,255,0.45)",
                       color: "#fff",
-                      fontSize: 15,
+                      fontSize: 16,
                       fontWeight: 900,
                       flexShrink: 0,
+                      boxShadow: "0 4px 10px rgba(0,0,0,0.12)",
                     }}
                   >
                     {groupNo}
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 17, fontWeight: 900, color: COLORS.ink, lineHeight: 1.2 }}>
+                    <div
+                      style={{
+                        fontSize: 17,
+                        fontWeight: 900,
+                        color: "#fff",
+                        lineHeight: 1.2,
+                        textShadow: "0 1px 4px rgba(0,0,0,0.15)",
+                      }}
+                    >
                       {group.label}
                     </div>
-                    <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: COLORS.muted }}>
+                    <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.9)" }}>
                       {group.members.length} 人
                     </div>
                   </div>
@@ -2238,13 +2316,14 @@ const BattleExportBoard = React.forwardRef<
                   <div
                     style={{
                       flexShrink: 0,
-                      padding: "6px 10px",
+                      padding: "6px 11px",
                       borderRadius: 999,
-                      background: COLORS.accentSoft,
-                      color: COLORS.accent,
+                      background: "rgba(255,255,255,0.95)",
+                      color: accent.deep,
                       fontSize: 12,
                       fontWeight: 900,
-                      letterSpacing: 0.2,
+                      letterSpacing: 0.1,
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
                     }}
                   >
                     {timeLabel}
@@ -2252,7 +2331,14 @@ const BattleExportBoard = React.forwardRef<
                 )}
               </div>
 
-              <div style={{ padding: 12, display: "grid", gap: 7 }}>
+              <div
+                style={{
+                  padding: 12,
+                  display: "grid",
+                  gap: 7,
+                  background: `linear-gradient(180deg, ${accent.soft} 0%, #FFFFFF 55%)`,
+                }}
+              >
                 {displayMembers.map((member, index) => {
                   const score = getScoreValue(
                     scoreMap,
@@ -2273,8 +2359,9 @@ const BattleExportBoard = React.forwardRef<
                         gap: 10,
                         padding: "8px 10px",
                         borderRadius: 12,
-                        background: index % 2 === 0 ? COLORS.soft : "#FFFFFF",
-                        border: `1px solid ${index % 2 === 0 ? "transparent" : COLORS.border}`,
+                        background: index % 2 === 0 ? "rgba(255,255,255,0.92)" : accent.soft,
+                        border: `1px solid ${accent.main}22`,
+                        boxShadow: index % 2 === 0 ? "0 2px 6px rgba(26,16,51,0.04)" : "none",
                       }}
                     >
                       <div
@@ -2285,10 +2372,14 @@ const BattleExportBoard = React.forwardRef<
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          background: showScores && score > 0 ? COLORS.ink : "#CBD5E1",
+                          background:
+                            showScores && score > 0
+                              ? `linear-gradient(135deg, ${accent.main}, ${accent.deep})`
+                              : `linear-gradient(135deg, ${accent.main}AA, ${accent.deep}AA)`,
                           color: "#fff",
                           fontSize: 12,
                           fontWeight: 900,
+                          boxShadow: `0 3px 8px ${accent.glow}`,
                         }}
                       >
                         {index + 1}
@@ -2312,7 +2403,7 @@ const BattleExportBoard = React.forwardRef<
                             textAlign: "right",
                             fontSize: 15,
                             fontWeight: 900,
-                            color: score > 0 ? COLORS.ink : "#94A3B8",
+                            color: score > 0 ? accent.deep : "#A78BFA",
                             fontVariantNumeric: "tabular-nums",
                           }}
                         >
@@ -2332,11 +2423,13 @@ const BattleExportBoard = React.forwardRef<
       {scheduleByGroup.size > 0 && (
         <div
           style={{
+            position: "relative",
             marginTop: 20,
             padding: 16,
-            borderRadius: 16,
-            background: COLORS.card,
-            border: `1px solid ${COLORS.border}`,
+            borderRadius: 18,
+            background: "rgba(255,255,255,0.88)",
+            border: "1px solid rgba(255,255,255,0.95)",
+            boxShadow: "0 10px 28px rgba(124,58,237,0.12)",
           }}
         >
           <div
@@ -2344,11 +2437,11 @@ const BattleExportBoard = React.forwardRef<
               marginBottom: 12,
               fontSize: 13,
               fontWeight: 900,
-              color: COLORS.muted,
+              color: "#7C3AED",
               letterSpacing: 0.6,
             }}
           >
-            连麦时间表（按出场顺序，拖组不改时间）
+            ⚡ 连麦时间表（按出场顺序，拖组不改时间）
           </div>
           <div
             style={{
@@ -2360,17 +2453,20 @@ const BattleExportBoard = React.forwardRef<
             {groups.map((group, index) => {
               const time = scheduleByGroup.get(index + 1);
               if (!time) return null;
+              const accent = ACCENTS[index % ACCENTS.length];
               return (
                 <div
                   key={`schedule-${group.key}`}
                   style={{
                     padding: "10px 8px",
-                    borderRadius: 12,
-                    background: COLORS.soft,
+                    borderRadius: 14,
+                    background: `linear-gradient(160deg, ${accent.soft} 0%, #FFFFFF 100%)`,
+                    border: `1.5px solid ${accent.main}55`,
                     textAlign: "center",
+                    boxShadow: `0 6px 14px ${accent.glow}`,
                   }}
                 >
-                  <div style={{ fontSize: 12, fontWeight: 800, color: COLORS.muted }}>
+                  <div style={{ fontSize: 12, fontWeight: 900, color: accent.deep }}>
                     第{index + 1}组
                   </div>
                   <div
@@ -2378,7 +2474,7 @@ const BattleExportBoard = React.forwardRef<
                       marginTop: 4,
                       fontSize: 12,
                       fontWeight: 900,
-                      color: COLORS.ink,
+                      color: accent.main,
                       fontVariantNumeric: "tabular-nums",
                       lineHeight: 1.35,
                     }}
@@ -2396,21 +2492,23 @@ const BattleExportBoard = React.forwardRef<
       {generalLines.length > 0 && scheduleByGroup.size === 0 && (
         <div
           style={{
+            position: "relative",
             marginTop: 20,
             padding: "14px 16px",
-            borderRadius: 16,
-            background: COLORS.amberBg,
-            border: `1px solid ${COLORS.amberBorder}`,
+            borderRadius: 18,
+            background: "linear-gradient(120deg, #FEF3C7 0%, #FCE7F3 100%)",
+            border: "1.5px solid #F9A8D4",
+            boxShadow: "0 8px 20px rgba(244,114,182,0.18)",
           }}
         >
-          <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 900, color: COLORS.amberText }}>
+          <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 900, color: "#BE185D" }}>
             备注
           </div>
           <div style={{ display: "grid", gap: 6 }}>
             {generalLines.map((line, index) => (
               <div
                 key={`${index}-${line}`}
-                style={{ fontSize: 14, fontWeight: 700, color: COLORS.amberText, lineHeight: 1.55 }}
+                style={{ fontSize: 14, fontWeight: 700, color: "#9D174D", lineHeight: 1.55 }}
               >
                 {line}
               </div>
