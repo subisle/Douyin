@@ -59,8 +59,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 12;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-// v6：分轮次时间表（小组/复活/晋级/决赛）
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v6";
+// v7：小组/复活晋级名额规则（8人前4后4，7人前4后3）
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v7";
 // 小组赛分组拖动顺序（按稳定 group.key 保存）；v4：前半交错热场 + 最强不压轴
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v4";
 
@@ -202,10 +202,10 @@ function defaultExportNotes() {
     lines.push(`小组第${i}场 ${groupSchedule.get(i)}`);
   }
   lines.push(
-    "【复活赛】小组赛每组第2名晋级复活（共7人，自动1组）",
+    "【晋级/复活规则】8人组：前4晋级、后4进复活；7人组：前4晋级、后3进复活",
+    "【复活赛】小组赛落选进入；自动分组后同样 8人取前4、7人取前4 出线",
     `复活赛 ${formatLinkmicLabel(ROUND_FIRST_START.revival)}`,
-    "复活赛每组第1名出线",
-    "【晋级赛】小组赛每组第1名 + 复活赛出线（约8人）",
+    "【晋级赛】小组赛直接晋级 + 复活赛出线",
     `晋级赛 ${formatLinkmicLabel(ROUND_FIRST_START.promotion)}`,
     "【决赛】晋级赛每组第1名",
     `决赛 ${formatLinkmicLabel(ROUND_FIRST_START.final)}`
@@ -626,6 +626,40 @@ function pickRankedMember(
 ) {
   if (!groupHasScore(group, scoreMap, scoreDrafts, roundKey)) return undefined;
   return rankGroupMembers(group, scoreMap, scoreDrafts, roundKey)[rankIndex];
+}
+
+/** 从已录分组中按名次切片（from 起取 count 人）。未录分返回空。 */
+function pickRankedMembers(
+  group: BattleGroup,
+  scoreMap: Map<string, number>,
+  scoreDrafts: Record<string, string>,
+  roundKey: string,
+  fromIndex: number,
+  count: number
+) {
+  if (count <= 0) return [] as PkMember[];
+  if (!groupHasScore(group, scoreMap, scoreDrafts, roundKey)) return [] as PkMember[];
+  return rankGroupMembers(group, scoreMap, scoreDrafts, roundKey).slice(
+    Math.max(0, fromIndex),
+    Math.max(0, fromIndex) + count
+  );
+}
+
+/**
+ * 小组赛/复活赛晋级名额：
+ * - 8人及以上：前4晋级
+ * - 7人：前4晋级
+ * - 更小：前半（至少1，且至少留1人可进复活池时优先）
+ */
+function promoteCountForGroupSize(size: number) {
+  if (size <= 0) return 0;
+  if (size >= 7) return Math.min(4, size);
+  if (size <= 1) return size;
+  return Math.max(1, Math.floor(size / 2));
+}
+
+function revivalCountForGroupSize(size: number) {
+  return Math.max(0, size - promoteCountForGroupSize(size));
 }
 
 function isPkMember(member: PkMember | undefined): member is PkMember {
@@ -1064,16 +1098,25 @@ export function StarBattlePage() {
   }, [scores]);
   const groupWinners = useMemo(
     () =>
-      initialGroups
-        .map((group) => pickRankedMember(group, scoreMap, scoreDrafts, "group", 0))
-        .filter(isPkMember),
+      initialGroups.flatMap((group) =>
+        pickRankedMembers(
+          group,
+          scoreMap,
+          scoreDrafts,
+          "group",
+          0,
+          promoteCountForGroupSize(group.members.length)
+        )
+      ),
     [initialGroups, scoreDrafts, scoreMap]
   );
   const groupSeconds = useMemo(
     () =>
-      initialGroups
-        .map((group) => pickRankedMember(group, scoreMap, scoreDrafts, "group", 1))
-        .filter(isPkMember),
+      initialGroups.flatMap((group) => {
+        const promote = promoteCountForGroupSize(group.members.length);
+        const revival = revivalCountForGroupSize(group.members.length);
+        return pickRankedMembers(group, scoreMap, scoreDrafts, "group", promote, revival);
+      }),
     [initialGroups, scoreDrafts, scoreMap]
   );
   const revivalGroups = useMemo(
@@ -1082,9 +1125,16 @@ export function StarBattlePage() {
   );
   const revivalWinners = useMemo(
     () =>
-      revivalGroups
-        .map((group) => pickRankedMember(group, scoreMap, scoreDrafts, "revival", 0))
-        .filter(isPkMember),
+      revivalGroups.flatMap((group) =>
+        pickRankedMembers(
+          group,
+          scoreMap,
+          scoreDrafts,
+          "revival",
+          0,
+          promoteCountForGroupSize(group.members.length)
+        )
+      ),
     [revivalGroups, scoreDrafts, scoreMap]
   );
   const promotionGroups = useMemo(
@@ -1111,13 +1161,13 @@ export function StarBattlePage() {
   const roundMeta = BATTLE_ROUNDS.find((round) => round.key === roundKey) || BATTLE_ROUNDS[0];
   const roundHint =
     roundKey === "revival"
-      ? `小组赛每组第2名进入复活（约${groupSeconds.length}人）；自动分组，默认 ${ROUND_FIRST_START.revival} 开始连麦`
+      ? `小组赛落选进入复活（当前 ${groupSeconds.length} 人）；8人取前4、7人取前4 出线；默认 ${ROUND_FIRST_START.revival} 开始连麦`
       : roundKey === "promotion"
-        ? `小组赛第1名 + 复活赛出线进入晋级；默认 ${ROUND_FIRST_START.promotion} 开始连麦`
+        ? `小组直接晋级 ${groupWinners.length} 人 + 复活出线 ${revivalWinners.length} 人；默认 ${ROUND_FIRST_START.promotion} 开始连麦`
         : roundKey === "final"
           ? `晋级赛每组第1名进入决赛；默认 ${ROUND_FIRST_START.final} 开始连麦`
           : groupPlan.sizeMode === "preset"
-            ? "小组赛使用内置固定分组；可拖动调整出场顺序；时间按场次固定"
+            ? "小组赛：8人组前4晋级后4复活，7人组前4晋级后3复活；可拖动调整出场顺序"
             : groupPlan.sortMode === "top_wave_rest_volatility"
               ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
               : "按音浪从高到低分组；沿用 PK 15号名单";
@@ -2623,10 +2673,16 @@ function GroupCard({
   const rankLabel = (rank: number) => {
     if (!scored) return "";
     if (roundKey === "group") {
-      if (rank === 1) return "晋级";
-      if (rank === 2) return "复活";
+      const promote = promoteCountForGroupSize(group.members.length);
+      if (rank <= promote) return "晋级";
+      if (rank <= group.members.length) return "复活";
+      return "";
     }
-    if (roundKey === "revival" && rank === 1) return "晋级";
+    if (roundKey === "revival") {
+      const promote = promoteCountForGroupSize(group.members.length);
+      if (rank <= promote) return "晋级";
+      return "";
+    }
     if (roundKey === "promotion" && rank === 1) return "决赛";
     if (roundKey === "final" && rank === 1) return "冠军";
     return "";
