@@ -61,8 +61,8 @@ const GROUPS_PER_PAGE = 12;
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
 // v5：时间按出场场次顺序固定，拖组只换人
 const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v5";
-// 小组赛分组拖动顺序（按稳定 group.key 保存）；v3：最强不压轴
-const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v3";
+// 小组赛分组拖动顺序（按稳定 group.key 保存）；v4：前半交错热场 + 最强不压轴
+const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v4";
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";

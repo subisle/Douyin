@@ -1,6 +1,6 @@
 {
   "name": "douyin",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "private": true,
   "packageManager": "npm@11.12.1",
   "main": "electron/main.js",
