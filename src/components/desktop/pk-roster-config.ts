@@ -11,16 +11,20 @@ export interface RosterConfig {
 
 export const DEFAULT_PK_GROUP_SIZE = 8;
 export const ROSTER_CONFIG_STORAGE_KEY = "pk-roster-list-config-v1";
+/** 星嗨争霸赛 / PK 名单默认白名单（去重后写入） */
 export const PRESET_ROSTER_TEXT = `浩雨
-阿楠
+南方楠
 狼赫
+浩泽
+狼途
+啸恒
 浩杰
 狼九
 啸安
 狼澈
 浩鸣
 浩延
-狼宝
+狼小宝
 狼瑞
 浩艺
 狼俊
@@ -31,8 +35,7 @@ export const PRESET_ROSTER_TEXT = `浩雨
 狼佑
 浩运
 浩龙
-玖月
-浩泽
+玖玥
 狼博
 狼泽
 啸阳
@@ -65,6 +68,9 @@ export const PRESET_ROSTER_TEXT = `浩雨
 
 const ROSTER_NAME_ALIASES: Record<string, string> = {
   辰辰: "浩辰",
+  阿楠: "南方楠",
+  狼宝: "狼小宝",
+  玖月: "玖玥",
 };
 
 export const ROSTER_SLOT_OPTIONS: { key: RosterSlot; label: string; shortLabel: string }[] = [
