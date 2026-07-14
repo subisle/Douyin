@@ -27,6 +27,35 @@ for (const envPath of [path.join(__dirname, "..", ".env.local"), path.join(__dir
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
+
+// 单实例：已有进程在跑时，把焦点还给现有窗口，不再新开一个。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  // Windows 上偶发需要先闪一下任务栏再置前
+  if (process.platform === "win32") {
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.setAlwaysOnTop(false);
+  }
+  return true;
+}
+
+if (gotSingleInstanceLock) {
+  app.on("second-instance", () => {
+    if (!focusMainWindow()) {
+      // 主窗口已被关掉（例如 macOS dock 仍在）时重建
+      if (app.isReady()) createWindow();
+    }
+  });
+}
+
 const updater = createUpdater({
   isDev,
   sendStatus: (status) => sendToMainWindow("updater:status-changed", status),
@@ -579,6 +608,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return;
+
   if (process.platform === "darwin" && app.dock) {
     app.dock.setIcon(APP_ICON_PNG);
   }
@@ -588,15 +619,22 @@ app.whenReady().then(() => {
   updater.init();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      return;
+    }
+    // 已最小化或被遮挡时，点 Dock/任务栏图标恢复前台
+    focusMainWindow();
   });
 });
 
 app.on("window-all-closed", () => {
+  // Windows/Linux：关掉主窗口即退出；最小化只进任务栏，不触发这里
   if (process.platform !== "darwin") app.quit();
 });
 
 // 窗口控制 IPC
+// 最小化：系统默认进任务栏（不隐藏、不托盘常驻）
 ipcMain.handle("window:minimize", () => mainWindow?.minimize());
 ipcMain.handle("window:maximize", () => {
   if (!mainWindow) return false;
