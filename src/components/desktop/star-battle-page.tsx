@@ -1126,6 +1126,10 @@ export function StarBattlePage() {
     groupPage * GROUPS_PER_PAGE,
     groupPage * GROUPS_PER_PAGE + GROUPS_PER_PAGE
   );
+  const scheduleByGroupNo = useMemo(
+    () => parseExportSchedule(exportNotes).scheduleByGroup,
+    [exportNotes]
+  );
 
   useEffect(() => {
     setGroupPage(0);
@@ -1851,7 +1855,12 @@ export function StarBattlePage() {
         )}
         {currentGroups.length > 0 ? (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {visibleGroups.map((group) => (
+            {visibleGroups.map((group) => {
+              const groupNo =
+                currentGroups.findIndex((item) => item.key === group.key) + 1;
+              const scheduleTime =
+                groupNo > 0 ? scheduleByGroupNo.get(groupNo) || "" : "";
+              return (
               <GroupCard
                 key={group.key}
                 group={group}
@@ -1862,6 +1871,7 @@ export function StarBattlePage() {
                 onDraftChange={updateDraft}
                 onSave={saveScore}
                 onQuickAdd={quickAddScore}
+                scheduleTime={scheduleTime}
                 compact
                 draggable={roundKey === "group"}
                 dragging={draggingGroupKey === group.key}
@@ -1882,7 +1892,8 @@ export function StarBattlePage() {
                   setDragOverGroupKey(null);
                 }}
               />
-            ))}
+              );
+            })}
           </div>
         ) : (
           <Card>
@@ -2377,6 +2388,7 @@ function GroupCard({
   onDraftChange,
   onSave,
   onQuickAdd,
+  scheduleTime = "",
   compact = false,
   draggable = false,
   dragging = false,
@@ -2394,6 +2406,7 @@ function GroupCard({
   onDraftChange: (groupKey: string, personId: number, value: string) => void;
   onSave: (groupKey: string, personId: number, value: string) => void;
   onQuickAdd: (groupKey: string, personId: number, delta: number) => void;
+  scheduleTime?: string;
   compact?: boolean;
   draggable?: boolean;
   dragging?: boolean;
@@ -2481,13 +2494,29 @@ function GroupCard({
             <Users className={compact ? "size-3.5 shrink-0 text-primary" : "size-4 shrink-0 text-primary"} />
             <span className="truncate">{group.label}</span>
           </CardTitle>
-          <Badge variant="outline" className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
-            {group.members.length}人
-          </Badge>
+          <div className="flex shrink-0 items-center gap-1">
+            {scheduleTime && (
+              <Badge
+                variant="secondary"
+                className={
+                  compact
+                    ? "h-5 px-1.5 font-mono text-[10px] tabular-nums"
+                    : "font-mono text-xs tabular-nums"
+                }
+                title="开赛时间"
+              >
+                {scheduleTime}
+              </Badge>
+            )}
+            <Badge variant="outline" className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
+              {group.members.length}人
+            </Badge>
+          </div>
         </div>
         <div className={compact ? "flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground" : "flex flex-wrap gap-2 text-xs text-muted-foreground"}>
           <span>均浪 {formatWave(group.averageWave)}</span>
           <span>均分 {avgScore.toFixed(1)}</span>
+          {!compact && scheduleTime && <span>时间 {scheduleTime}</span>}
           {!compact && <span>裁判：待定</span>}
           {!compact && group.source && <span>{group.source}</span>}
         </div>
