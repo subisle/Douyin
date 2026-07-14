@@ -71,7 +71,85 @@ const ROSTER_NAME_ALIASES: Record<string, string> = {
   阿楠: "南方楠",
   狼宝: "狼小宝",
   玖月: "玖玥",
+  // 狼轩换号后平台昵称
+  农村小胖孩: "狼轩",
+  "农村小胖孩🎹（才艺）": "狼轩",
 };
+
+/**
+ * 星嗨争霸赛小组赛内置固定分组（2026-07，53人 / 8+8+8+8+7+7+7）。
+ * 按确认名单固化，不随音浪实时重排。
+ */
+export const PRESET_BATTLE_GROUPS: string[][] = [
+  ["浩鸣", "啸辰", "狼澈", "南方楠", "浩雨", "浩冬", "浩龙", "狼俊"],
+  ["狼小宝", "狼腾", "玖玥", "玖玉", "狼兴", "狼博", "狼明", "玖柒"],
+  ["狼赫", "狼凯", "浩玟", "啸安", "浩运", "玖妹", "狼泽", "啸森"],
+  ["狼辉", "啸帆", "浩延", "啸宇", "狼岳", "浩坤", "浩阳", "狼佑"],
+  ["狼艺", "狼仔", "浩辰", "浩启", "狼轩", "浩哲", "浩泽"],
+  ["狼哲", "浩艺", "狼辰", "浩杰", "狼途", "狼霆", "啸强"],
+  ["啸阳", "狼九", "狼安", "狼旭", "狼征", "啸恒", "狼瑞"],
+];
+
+export function resolvePresetBattleGroups(allMembers: PkMember[]) {
+  const byName = new Map<string, PkMember[]>();
+  allMembers.forEach((member) => {
+    const key = canonicalRosterName(member.name);
+    const list = byName.get(key) || [];
+    list.push(member);
+    byName.set(key, list);
+  });
+
+  const usedIds = new Set<number>();
+  const groups = PRESET_BATTLE_GROUPS.map((names, index) => {
+    const members: PkMember[] = [];
+    const missingNames: string[] = [];
+    names.forEach((name) => {
+      const matches = (byName.get(canonicalRosterName(name)) || []).filter(
+        (member) => !usedIds.has(member.personId)
+      );
+      if (matches.length === 0) {
+        missingNames.push(name);
+        return;
+      }
+      const picked = matches[0];
+      usedIds.add(picked.personId);
+      members.push(picked);
+    });
+    const averageWave =
+      members.length > 0
+        ? members.reduce((sum, item) => sum + item.wave, 0) / members.length
+        : 0;
+    return {
+      key: `group-${index + 1}`,
+      label: `第${index + 1}组`,
+      members,
+      averageWave,
+      missingNames,
+      source: "内置固定分组",
+    };
+  });
+
+  const leftover = allMembers.filter((member) => !usedIds.has(member.personId));
+  const missingNames = groups.flatMap((group) => group.missingNames);
+  const expected = PRESET_BATTLE_GROUPS.reduce((sum, row) => sum + row.length, 0);
+  const assigned = groups.reduce((sum, group) => sum + group.members.length, 0);
+
+  return {
+    groups,
+    leftover,
+    missingNames,
+    expected,
+    assigned,
+    detail:
+      missingNames.length > 0 || leftover.length > 0
+        ? `内置固定分组 ${assigned}/${expected} 人` +
+          (missingNames.length ? `，缺 ${missingNames.join("、")}` : "") +
+          (leftover.length
+            ? `，未入组 ${leftover.map((item) => item.name).join("、")}`
+            : "")
+        : `内置固定分组 ${groups.map((group) => `${group.members.length}人`).join(" + ")}`,
+  };
+}
 
 export const ROSTER_SLOT_OPTIONS: { key: RosterSlot; label: string; shortLabel: string }[] = [
   { key: "midmonth", label: "15号分组名单", shortLabel: "15号" },

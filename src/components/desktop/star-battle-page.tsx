@@ -36,6 +36,7 @@ import {
 import { exportElementAsImage } from "./export-image";
 import {
   loadRosterConfigs,
+  resolvePresetBattleGroups,
   resolveRosterNames,
   type RosterConfig,
   type RosterSlot,
@@ -54,9 +55,10 @@ const MAX_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 2;
-const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v1";
+// v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
+const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
 
-type GroupSizeMode = "auto" | "manual";
+type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
 
 interface ManualGroupCount {
@@ -75,15 +77,15 @@ interface GroupPlanConfig {
 
 function defaultGroupPlan(): GroupPlanConfig {
   return {
-    sizeMode: "auto",
+    sizeMode: "preset",
     sortMode: "wave_desc",
     manualCounts: [
-      { size: 8, count: 2 },
-      { size: 7, count: 0 },
+      { size: 8, count: 4 },
+      { size: 7, count: 3 },
       { size: 6, count: 0 },
       { size: 5, count: 0 },
     ],
-    manualText: "8x2",
+    manualText: "8x4,7x3",
   };
 }
 
@@ -103,8 +105,14 @@ function loadGroupPlan(): GroupPlanConfig {
           };
         })
       : defaults.manualCounts;
+    const sizeMode: GroupSizeMode =
+      parsed.sizeMode === "manual"
+        ? "manual"
+        : parsed.sizeMode === "auto"
+          ? "auto"
+          : "preset";
     return {
-      sizeMode: parsed.sizeMode === "manual" ? "manual" : "auto",
+      sizeMode,
       sortMode:
         parsed.sortMode === "top_wave_rest_volatility"
           ? "top_wave_rest_volatility"
@@ -331,6 +339,24 @@ function buildBattleGroups(
   members: PkMember[],
   plan: GroupPlanConfig = defaultGroupPlan()
 ): { groups: BattleGroup[]; detail: string; invalid: boolean } {
+  if (plan.sizeMode === "preset") {
+    const preset = resolvePresetBattleGroups(members);
+    const groups: BattleGroup[] = preset.groups.map((group) => ({
+      key: group.key,
+      label: group.label,
+      members: group.members,
+      averageWave: group.averageWave,
+      source: group.source,
+    }));
+    // 有缺人或多余人时仍展示已匹配组，但标记 invalid 方便页面提示
+    const invalid =
+      members.length > 0 &&
+      (preset.missingNames.length > 0 ||
+        preset.leftover.length > 0 ||
+        groups.every((group) => group.members.length === 0));
+    return { groups, detail: preset.detail, invalid };
+  }
+
   const { sizes, detail } = resolveGroupSizes(members.length, plan);
   if (!sizes) {
     return { groups: [], detail, invalid: members.length > 0 };
@@ -823,6 +849,7 @@ export function StarBattlePage() {
   const laterStagePlan = useMemo<GroupPlanConfig>(
     () => ({
       ...defaultGroupPlan(),
+      // 复活/晋级/决赛不沿用固定小组名单，按当前晋级人数自动切
       sizeMode: "auto",
       sortMode: "wave_desc",
     }),
@@ -889,9 +916,11 @@ export function StarBattlePage() {
         ? "小组赛第一名 + 复活赛第一名进入晋级赛"
         : roundKey === "final"
           ? "晋级赛每组第一名进入决赛"
-          : groupPlan.sortMode === "top_wave_rest_volatility"
-            ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
-            : "按音浪从高到低分组；沿用 PK 15号名单";
+          : groupPlan.sizeMode === "preset"
+            ? "小组赛使用内置固定分组；沿用 PK 15号名单"
+            : groupPlan.sortMode === "top_wave_rest_volatility"
+              ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
+              : "按音浪从高到低分组；沿用 PK 15号名单";
 
   const updateManualCount = useCallback((size: number, count: number) => {
     setGroupPlan((current) => {
@@ -1403,6 +1432,15 @@ export function StarBattlePage() {
                   <div className="flex flex-wrap gap-2">
                     <Button
                       size="sm"
+                      variant={groupPlan.sizeMode === "preset" ? "default" : "outline"}
+                      onClick={() =>
+                        setGroupPlan((current) => ({ ...current, sizeMode: "preset" }))
+                      }
+                    >
+                      内置固定
+                    </Button>
+                    <Button
+                      size="sm"
                       variant={groupPlan.sizeMode === "auto" ? "default" : "outline"}
                       onClick={() => setGroupPlan((current) => ({ ...current, sizeMode: "auto" }))}
                     >
@@ -1480,9 +1518,11 @@ export function StarBattlePage() {
                       {groupPlanDetail}
                     </div>
                     <div>
-                      {groupPlan.sortMode === "top_wave_rest_volatility"
-                        ? "前两组按总音浪排名截取；其余按日振幅/去峰日均排序，波动大的优先同组。"
-                        : "所有组都按总音浪从高到低连续切分。"}
+                      {groupPlan.sizeMode === "preset"
+                        ? "使用内置 7 组固定名单（8+8+8+8+7+7+7），不随音浪实时重排。"
+                        : groupPlan.sortMode === "top_wave_rest_volatility"
+                          ? "前两组按总音浪排名截取；其余按日振幅/去峰日均排序，波动大的优先同组。"
+                          : "所有组都按总音浪从高到低连续切分。"}
                     </div>
                   </div>
                 </div>
