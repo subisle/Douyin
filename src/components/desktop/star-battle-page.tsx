@@ -57,12 +57,12 @@ const PREFERRED_TOP_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_COUNT = 2;
 // 一页展示全部小组（当前最多 7 组），紧凑布局不再分页
 const GROUPS_PER_PAGE = 12;
-// v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
-const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
+// v3：强制默认内置固定分组（交错出场顺序）
+const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v3";
 // v7：小组/复活晋级名额规则（8人前4后4，7人前4后3）
 const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v7";
-// 小组赛分组拖动顺序（按稳定 group.key 保存）；v4：前半交错热场 + 最强不压轴
-const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v4";
+// 小组赛分组拖动顺序；v5：锁定最新内置 7 组出场顺序
+const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v5";
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
