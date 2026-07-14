@@ -57,7 +57,8 @@ const PREFERRED_TOP_GROUP_COUNT = 2;
 const GROUPS_PER_PAGE = 2;
 // v2：默认切到内置固定分组，避免沿用旧 localStorage 的 auto 方案
 const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v2";
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v1";
+// v2：刷新内置赛程备注默认文案
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v2";
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
@@ -127,7 +128,17 @@ function loadGroupPlan(): GroupPlanConfig {
 }
 
 function defaultExportNotes() {
-  return "";
+  return [
+    "中午 12:10 开播",
+    "12:15 第1组开赛，每组 10 分钟，组间间隔 10 分钟，依次类推",
+    "第1组 12:15-12:25",
+    "第2组 12:35-12:45",
+    "第3组 12:55-13:05",
+    "第4组 13:15-13:25",
+    "第5组 13:35-13:45",
+    "第6组 13:55-14:05",
+    "第7组 14:15-14:25",
+  ].join("\n");
 }
 
 function loadExportNotes(): string {
