@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { MATCH_LEDGER_STORAGE_KEY } from "./monitor-score-sync";
 import type {
   IpcResult,
   LivePkChatPayload,
@@ -38,7 +39,8 @@ import type {
 } from "@/types/electron";
 
 type MonitorLogType = "rank" | "gift" | "chat" | "member" | "event" | "status";
-type MonitorFilter = "all" | MonitorLogType | "user";
+type MonitorFilter = "all" | MonitorLogType | "user" | "score";
+type MonitorMatchMode = "pk" | "linkmic" | "single" | "unknown";
 
 interface MonitorLogRow {
   id: string;
@@ -51,7 +53,6 @@ interface MonitorLogRow {
   detail: string;
   payload: unknown;
 }
-
 interface MonitorRoomAppearance {
   roomLabel: string;
   roomId: string;
@@ -112,6 +113,7 @@ interface MonitorRoomInfo {
 interface MonitorScoreRow {
   anchorId: string;
   name: string;
+  uniqueId: string;
   score: number;
   scoreText: string;
   scoreRelative: boolean;
@@ -122,7 +124,15 @@ interface MonitorScoreRow {
 interface MonitorRoundRow {
   round: number;
   battleId: string;
+  mode: MonitorMatchMode;
+  modeLabel: string;
+  phase: string;
+  status: "running" | "finished";
+  startedAt: string;
+  endedAt: string;
   scores: MonitorScoreRow[];
+  winnerId: string;
+  winnerName: string;
 }
 
 interface MonitorLiveState {
@@ -134,13 +144,17 @@ interface MonitorLiveState {
   battleId: string;
   channelId: string;
   countdown: number;
+  hasOfficialCountdown: boolean;
   phase: string;
+  matchStatus: "idle" | "running" | "finished";
   scores: MonitorScoreRow[];
   rounds: MonitorRoundRow[];
+  currentMatchStartedAt: string;
   updatedAt: string;
 }
 
 const FILTERS: { key: MonitorFilter; label: string }[] = [
+  { key: "score", label: "分数监控" },
   { key: "all", label: "全部" },
   { key: "gift", label: "礼物" },
   { key: "chat", label: "弹幕" },
@@ -149,6 +163,11 @@ const FILTERS: { key: MonitorFilter; label: string }[] = [
   { key: "user", label: "用户" },
 ];
 const USER_CACHE_STORAGE_KEY = "douyin-monitor-user-cache-v1";
+/** 争霸赛默认单场时长（秒） */
+const MATCH_DURATION_SEC = 10 * 60;
+/** 事件流保留条数；分数场次另有独立 ledger，不依赖此上限 */
+const MONITOR_LOG_LIMIT = 2500;
+const MATCH_LEDGER_LIMIT = 80;
 
 function formatTime(value?: string) {
   const date = value ? new Date(value) : new Date();
@@ -456,6 +475,7 @@ function scoreFromPayload(value: unknown, source = ""): MonitorScoreRow | null {
   return {
     anchorId,
     name,
+    uniqueId: safeText(payload.uniqueId) || safeText(payload.douyinId),
     score,
     scoreText,
     scoreRelative: safeBoolean(payload.scoreRelative),
@@ -489,6 +509,7 @@ function sameScoreRows(a: MonitorScoreRow[], b: MonitorScoreRow[]) {
     if (
       left.anchorId !== right.anchorId ||
       left.name !== right.name ||
+      left.uniqueId !== right.uniqueId ||
       left.score !== right.score ||
       left.scoreText !== right.scoreText ||
       left.multiPkTeamScore !== right.multiPkTeamScore
@@ -528,6 +549,355 @@ function roundScoreSummary(round?: MonitorRoundRow) {
 
 function hasEffectiveScore(score: MonitorScoreRow) {
   return score.score > 0 || scoreNumber(score.scoreText) > 0;
+}
+
+function rankedScores(scores: MonitorScoreRow[]) {
+  return [...scores].sort((a, b) => b.score - a.score || a.anchorId.localeCompare(b.anchorId));
+}
+
+function winnerFromScores(scores: MonitorScoreRow[]) {
+  const ranked = rankedScores(scores.filter(hasEffectiveScore));
+  if (ranked.length === 0) return { winnerId: "", winnerName: "" };
+  return {
+    winnerId: ranked[0].anchorId,
+    winnerName: displayScoreName(ranked[0]) || ranked[0].anchorId,
+  };
+}
+
+function isTerminalBattlePhase(phase: string) {
+  const value = phase.trim().toLowerCase();
+  return ["punish", "end", "finish", "finished", "settled", "result", "settle", "over"].includes(value);
+}
+
+function isMatchFinishedPayload(payload: Record<string, unknown>) {
+  const hasPkActive = Object.prototype.hasOwnProperty.call(payload, "isPkActive");
+  const countdown = payload.pkCountDown === undefined ? null : safeNumber(payload.pkCountDown);
+  const phase = safeText(payload.battlePhase);
+  if (countdown !== null && countdown <= 0) return true;
+  if (isTerminalBattlePhase(phase)) return true;
+  if (hasPkActive && !safeBoolean(payload.isPkActive) && (countdown !== null || phase)) return true;
+  return false;
+}
+
+
+function cloneScoreRow(score: MonitorScoreRow): MonitorScoreRow {
+  return { ...score };
+}
+
+function mergeScoreMap(
+  current: MonitorScoreRow[],
+  next: MonitorScoreRow[],
+  options: { replace?: boolean; onlyIncrease?: boolean } = {}
+) {
+  const map = new Map<string, MonitorScoreRow>();
+  if (!options.replace) {
+    current.forEach((score) => map.set(score.anchorId, cloneScoreRow(score)));
+  }
+  next.forEach((score) => {
+    if (!score.anchorId) return;
+    const previous = map.get(score.anchorId);
+    if (!previous) {
+      map.set(score.anchorId, cloneScoreRow(score));
+      return;
+    }
+    const nextScore = options.onlyIncrease ? Math.max(previous.score, score.score) : score.score;
+    map.set(score.anchorId, {
+      ...previous,
+      ...score,
+      name: displayScoreName(score) ? score.name : previous.name,
+      uniqueId: score.uniqueId || previous.uniqueId,
+      score: nextScore,
+      scoreText:
+        nextScore === score.score
+          ? (score.scoreText || previous.scoreText || compactNumber(nextScore))
+          : (previous.scoreText || score.scoreText || compactNumber(nextScore)),
+      multiPkTeamScore: Math.max(previous.multiPkTeamScore, score.multiPkTeamScore),
+    });
+  });
+  return rankedScores(Array.from(map.values()));
+}
+
+function emptyMatchRound(partial: Partial<MonitorRoundRow> & Pick<MonitorRoundRow, "round" | "battleId">): MonitorRoundRow {
+  return {
+    round: partial.round,
+    battleId: partial.battleId,
+    mode: partial.mode || "unknown",
+    modeLabel: partial.modeLabel || matchModeLabel(partial.mode || "unknown"),
+    phase: partial.phase || "",
+    status: partial.status || "running",
+    startedAt: partial.startedAt || "",
+    endedAt: partial.endedAt || "",
+    scores: partial.scores || [],
+    winnerId: partial.winnerId || "",
+    winnerName: partial.winnerName || "",
+  };
+}
+
+function decorateMatchRound(row: MonitorRoundRow, scores?: MonitorScoreRow[]): MonitorRoundRow {
+  const nextScores = scores || row.scores;
+  const winner = winnerFromScores(nextScores);
+  return {
+    ...row,
+    scores: rankedScores(nextScores),
+    winnerId: winner.winnerId,
+    winnerName: winner.winnerName,
+  };
+}
+
+function findLedgerRoundIndex(ledger: MonitorRoundRow[], battleId: string) {
+  if (!battleId) return -1;
+  for (let index = ledger.length - 1; index >= 0; index -= 1) {
+    if (sameBattleId(ledger[index].battleId, battleId) || ledger[index].battleId === battleId) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function upsertMatchLedger(
+  ledger: MonitorRoundRow[],
+  payload: LivePkEventPayload | Record<string, unknown>,
+  at = ""
+): MonitorRoundRow[] {
+  const eventType = safeText(payload.eventType);
+  const battleId = safeText(payload.battleId) || safeText(payload.channelId);
+  const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType || "pk-score-snapshot");
+  const finished = isMatchFinishedPayload(payload as Record<string, unknown>);
+  const mode = matchModeFromLive({
+    mode: safeText(payload.liveMode),
+    isPkActive: safeBoolean(payload.isPkActive) || safeText(payload.liveMode) === "pk",
+    isLinkmic: safeText(payload.liveMode) === "linkmic",
+  });
+  const phase = safeText(payload.battlePhase);
+  const stamp = at || formatTime(safeText(payload.at));
+
+  // 无关事件不入账
+  if (
+    eventType
+    && !["pk-battle", "pk-score-snapshot", "linkmic-score", "live-mode"].includes(eventType)
+  ) {
+    return ledger;
+  }
+  if (!battleId && nextScores.length === 0 && !finished) {
+    return ledger;
+  }
+
+  let next = ledger.map((row) => ({ ...row, scores: row.scores.map(cloneScoreRow) }));
+  let index = battleId ? findLedgerRoundIndex(next, battleId) : -1;
+  const activeIndex = [...next].map((row, i) => ({ row, i })).reverse().find((item) => item.row.status === "running")?.i ?? -1;
+
+  // 新 battle：先结算上一场进行中的
+  if (index < 0 && battleId && activeIndex >= 0) {
+    const active = next[activeIndex];
+    if (!sameBattleId(active.battleId, battleId) && active.battleId !== battleId) {
+      next[activeIndex] = decorateMatchRound({
+        ...active,
+        status: "finished",
+        endedAt: active.endedAt || stamp,
+        phase: active.phase || phase,
+      });
+    } else {
+      index = activeIndex;
+    }
+  }
+
+  if (index < 0) {
+    // 无有效分数且不是结束，不建空场
+    if (nextScores.length === 0 && !finished && eventType === "live-mode") {
+      return next;
+    }
+    const roundNo = next.length + 1;
+    next.push(emptyMatchRound({
+      round: roundNo,
+      battleId: battleId || `round-${roundNo}`,
+      mode: mode === "unknown" ? "pk" : mode,
+      modeLabel: matchModeLabel(mode === "unknown" ? "pk" : mode),
+      phase,
+      status: finished ? "finished" : "running",
+      startedAt: stamp,
+      endedAt: finished ? stamp : "",
+      scores: nextScores,
+    }));
+    index = next.length - 1;
+  }
+
+  const current = next[index];
+  // 已锁定的最终分：只允许同 battle 分数抬升，不允许被空快照清空
+  const mergedScores = mergeScoreMap(
+    current.scores,
+    nextScores,
+    { onlyIncrease: true }
+  );
+  const shouldFinish = finished || current.status === "finished";
+  next[index] = decorateMatchRound({
+    ...current,
+    battleId: preferBattleId(current.battleId, battleId) || current.battleId,
+    mode: current.mode === "unknown" && mode !== "unknown" ? mode : current.mode,
+    modeLabel: matchModeLabel(
+      current.mode === "unknown" && mode !== "unknown" ? mode : current.mode
+    ),
+    phase: phase || current.phase,
+    status: shouldFinish ? "finished" : "running",
+    startedAt: current.startedAt || stamp,
+    endedAt: shouldFinish ? (current.endedAt || stamp) : "",
+    scores: mergedScores.length > 0 ? mergedScores : current.scores,
+  });
+
+  if (next.length > MATCH_LEDGER_LIMIT) {
+    next = next.slice(next.length - MATCH_LEDGER_LIMIT);
+    next = next.map((row, i) => ({ ...row, round: i + 1 }));
+  }
+  return next;
+}
+
+function mergeLiveRoundsWithLedger(
+  logRounds: MonitorRoundRow[],
+  ledger: MonitorRoundRow[]
+): MonitorRoundRow[] {
+  if (ledger.length === 0) return logRounds;
+  if (logRounds.length === 0) return ledger;
+
+  const merged: MonitorRoundRow[] = ledger.map((row) => decorateMatchRound({
+    ...row,
+    scores: row.scores.map(cloneScoreRow),
+  }));
+
+  logRounds.forEach((logRound) => {
+    const index = logRound.battleId
+      ? findLedgerRoundIndex(merged, logRound.battleId)
+      : -1;
+    if (index < 0) {
+      // 日志里多出来的场次补进 ledger 视图
+      if (logRound.scores.some(hasEffectiveScore) || logRound.mode === "pk" || logRound.mode === "linkmic") {
+        merged.push(decorateMatchRound({
+          ...logRound,
+          round: merged.length + 1,
+          scores: logRound.scores.map(cloneScoreRow),
+        }));
+      }
+      return;
+    }
+    const base = merged[index];
+    // ledger 已 finished 时以 ledger 分数为准，并吸收日志里更高分
+    const scores = mergeScoreMap(base.scores, logRound.scores, { onlyIncrease: true });
+    merged[index] = decorateMatchRound({
+      ...base,
+      mode: base.mode === "unknown" ? logRound.mode : base.mode,
+      modeLabel: base.mode === "unknown" ? logRound.modeLabel : base.modeLabel,
+      phase: base.phase || logRound.phase,
+      status: base.status === "finished" || logRound.status === "finished" ? "finished" : "running",
+      startedAt: base.startedAt || logRound.startedAt,
+      endedAt: base.endedAt || logRound.endedAt,
+      scores,
+    });
+  });
+
+  return merged.map((row, index) => ({ ...row, round: index + 1 }));
+}
+
+function loadMatchLedger(): MonitorRoundRow[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(MATCH_LEDGER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row, index) => {
+        if (!row || typeof row !== "object") return null;
+        const item = row as Partial<MonitorRoundRow>;
+        const scores = Array.isArray(item.scores)
+          ? item.scores.map((score) => scoreFromPayload(score, "ledger")).filter(Boolean) as MonitorScoreRow[]
+          : [];
+        return decorateMatchRound(emptyMatchRound({
+          round: safeNumber(item.round) || index + 1,
+          battleId: safeText(item.battleId) || `round-${index + 1}`,
+          mode: (item.mode as MonitorMatchMode) || "unknown",
+          modeLabel: safeText(item.modeLabel),
+          phase: safeText(item.phase),
+          status: item.status === "finished" ? "finished" : "running",
+          startedAt: safeText(item.startedAt),
+          endedAt: safeText(item.endedAt),
+          scores,
+        }));
+      })
+      .filter(Boolean) as MonitorRoundRow[];
+  } catch {
+    return [];
+  }
+}
+
+function saveMatchLedger(ledger: MonitorRoundRow[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MATCH_LEDGER_STORAGE_KEY, JSON.stringify(ledger.slice(-MATCH_LEDGER_LIMIT)));
+  } catch {
+    // ignore quota
+  }
+}
+
+
+function matchModeFromLive({
+  mode,
+  isPkActive,
+  isLinkmic,
+}: {
+  mode?: string;
+  isPkActive?: boolean;
+  isLinkmic?: boolean;
+}): MonitorMatchMode {
+  if (isPkActive || mode === "pk") return "pk";
+  if (isLinkmic || mode === "linkmic") return "linkmic";
+  if (mode === "single" || mode === "normal") return "single";
+  return "unknown";
+}
+
+function matchModeLabel(mode: MonitorMatchMode) {
+  if (mode === "pk") return "PK";
+  if (mode === "linkmic") return "连麦";
+  if (mode === "single") return "单人";
+  return "未知";
+}
+
+function parseClockToMs(value: string) {
+  const text = safeText(value).trim();
+  if (!text) return Number.NaN;
+  const full = Date.parse(text);
+  if (Number.isFinite(full)) return full;
+  const match = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return Number.NaN;
+  const now = new Date();
+  const next = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3] || 0),
+    0
+  );
+  return next.getTime();
+}
+
+function formatElapsed(seconds: number) {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function preferredAnchorId(score: MonitorScoreRow, roomInfo?: MonitorRoomInfo | null) {
+  if (!roomInfo) return score.anchorId;
+  const candidates = [
+    roomInfo.ownerUserId,
+    roomInfo.ownerDouyinId,
+    roomInfo.ownerWebRid,
+    roomInfo.ownerSecUid,
+  ].filter(Boolean);
+  if (candidates.includes(score.anchorId)) {
+    return roomInfo.ownerUserId || roomInfo.ownerDouyinId || score.anchorId;
+  }
+  return score.anchorId;
 }
 
 function mergeScoreRows(
@@ -1212,6 +1582,9 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
   const rounds: MonitorRoundRow[] = [];
   let round = 0;
   let currentBattleId = "";
+  let currentMatchMode: MonitorMatchMode = "unknown";
+  let currentMatchStartedAt = "";
+  let currentPhase = "";
   let roomOwnerScore: MonitorScoreRow | null = null;
   let roomOwnerGiftScore = 0;
   let mode = "unknown";
@@ -1222,38 +1595,141 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
   let hasLiveParticipantCount = false;
   let channelId = "";
   let countdown = 0;
+  let hasOfficialCountdown = false;
   let phase = "";
+  let matchStatus: MonitorLiveState["matchStatus"] = "idle";
   let updatedAt = "";
 
-  const ensureRound = (battleId: string, forceNew = false) => {
-    const nextBattleId = battleId || currentBattleId || `round-${round || 1}`;
-    const isSameBattle = battleId && sameBattleId(battleId, currentBattleId);
-    if (forceNew || round === 0 || (battleId && currentBattleId && !isSameBattle)) {
-      round = round + 1;
-      currentBattleId = nextBattleId;
-      scores.clear();
-      rounds.push({ round, battleId: nextBattleId, scores: [] });
-    } else if (battleId) {
-      currentBattleId = preferBattleId(currentBattleId, battleId);
-      if (round > 0) rounds[rounds.length - 1] = { ...rounds[rounds.length - 1], battleId: currentBattleId };
-    }
-  };
+  const currentMatchModeFromState = (): MonitorMatchMode =>
+    matchModeFromLive({ mode, isPkActive, isLinkmic });
 
-  const snapshotRound = () => {
-    if (round === 0) return;
-    rounds[rounds.length - 1] = {
-      round,
-      battleId: currentBattleId,
-      scores: Array.from(scores.values()),
+  const decorateRound = (row: MonitorRoundRow, nextScores?: MonitorScoreRow[]): MonitorRoundRow => {
+    const scoresForRound = nextScores || row.scores;
+    const winner = winnerFromScores(scoresForRound);
+    return {
+      ...row,
+      scores: scoresForRound,
+      winnerId: winner.winnerId,
+      winnerName: winner.winnerName,
     };
   };
 
-  const applyScores = (nextScores: MonitorScoreRow[], replace: boolean) => {
+  const ensureRound = (battleId: string, forceNew = false, at = "", matchMode?: MonitorMatchMode) => {
+    const nextBattleId = battleId || currentBattleId || `round-${round || 1}`;
+    const isSameBattle = Boolean(battleId && sameBattleId(battleId, currentBattleId));
+    const nextMode = matchMode || currentMatchModeFromState();
+    if (forceNew || round === 0 || (battleId && currentBattleId && !isSameBattle)) {
+      if (round > 0 && rounds[rounds.length - 1]?.status !== "finished") {
+        const previous = rounds[rounds.length - 1];
+        rounds[rounds.length - 1] = decorateRound({
+          ...previous,
+          status: "finished",
+          endedAt: at || previous.endedAt || updatedAt,
+          phase: previous.phase || currentPhase || phase,
+          scores: Array.from(scores.values()).length > 0 ? Array.from(scores.values()) : previous.scores,
+        });
+      }
+      round = round + 1;
+      currentBattleId = nextBattleId;
+      currentMatchMode = nextMode;
+      currentMatchStartedAt = at || updatedAt || "";
+      currentPhase = "";
+      matchStatus = "running";
+      scores.clear();
+      rounds.push({
+        round,
+        battleId: nextBattleId,
+        mode: nextMode,
+        modeLabel: matchModeLabel(nextMode),
+        phase: "",
+        status: "running",
+        startedAt: currentMatchStartedAt,
+        endedAt: "",
+        scores: [],
+        winnerId: "",
+        winnerName: "",
+      });
+    } else if (battleId) {
+      currentBattleId = preferBattleId(currentBattleId, battleId);
+      if (round > 0) {
+        const previous = rounds[rounds.length - 1];
+        const upgradedMode =
+          previous.mode === "unknown" || (previous.mode === "linkmic" && nextMode === "pk")
+            ? nextMode
+            : previous.mode;
+        currentMatchMode = upgradedMode;
+        rounds[rounds.length - 1] = decorateRound({
+          ...previous,
+          battleId: currentBattleId,
+          mode: upgradedMode,
+          modeLabel: matchModeLabel(upgradedMode),
+          startedAt: previous.startedAt || at || currentMatchStartedAt,
+          status: previous.status === "finished" ? "finished" : "running",
+        });
+        if (!currentMatchStartedAt) currentMatchStartedAt = rounds[rounds.length - 1].startedAt;
+      }
+    } else if (round > 0 && nextMode !== "unknown") {
+      const previous = rounds[rounds.length - 1];
+      if (previous.mode === "unknown" || (previous.mode === "linkmic" && nextMode === "pk")) {
+        currentMatchMode = nextMode;
+        rounds[rounds.length - 1] = decorateRound({
+          ...previous,
+          mode: nextMode,
+          modeLabel: matchModeLabel(nextMode),
+        });
+      }
+    }
+  };
+
+  const snapshotRound = (at = "", nextPhase = "") => {
+    if (round === 0) return;
+    const previous = rounds[rounds.length - 1];
+    const modeForRound = currentMatchMode === "unknown" ? previous.mode : currentMatchMode;
+    rounds[rounds.length - 1] = decorateRound({
+      ...previous,
+      battleId: currentBattleId,
+      mode: modeForRound,
+      modeLabel: matchModeLabel(modeForRound),
+      phase: nextPhase || previous.phase || currentPhase || phase,
+      startedAt: previous.startedAt || currentMatchStartedAt || at,
+      status: previous.status,
+      scores: Array.from(scores.values()),
+    });
+  };
+
+  const applyScores = (nextScores: MonitorScoreRow[], replace: boolean, at = "", nextPhase = "") => {
     if (nextScores.length === 0) return;
     if (replace) scores.clear();
-    nextScores.forEach((score) => scores.set(score.anchorId, score));
+    nextScores.forEach((score) => {
+      const previous = scores.get(score.anchorId);
+      scores.set(score.anchorId, previous ? {
+        ...previous,
+        ...score,
+        name: displayScoreName(score) ? score.name : previous.name,
+        uniqueId: score.uniqueId || previous.uniqueId,
+        score: Math.max(previous.score, score.score),
+        scoreText: score.score >= previous.score ? (score.scoreText || previous.scoreText) : previous.scoreText,
+      } : score);
+    });
     participantCount = Math.max(participantCount, scores.size);
-    snapshotRound();
+    if (round > 0 && rounds[rounds.length - 1]?.status !== "finished") {
+      matchStatus = "running";
+    }
+    snapshotRound(at, nextPhase);
+  };
+
+  const finishActiveRound = (at = "", nextPhase = "") => {
+    if (round === 0) return;
+    const previous = rounds[rounds.length - 1];
+    const nextScores = Array.from(scores.values()).length > 0 ? Array.from(scores.values()) : previous.scores;
+    rounds[rounds.length - 1] = decorateRound({
+      ...previous,
+      status: "finished",
+      endedAt: previous.endedAt || at || updatedAt,
+      phase: nextPhase || previous.phase || currentPhase || phase,
+      scores: nextScores,
+    });
+    matchStatus = "finished";
   };
 
   const rememberRoomOwner = (payload: Record<string, unknown>) => {
@@ -1274,6 +1750,7 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
         safeText(payload.nickname) ||
         safeText(payload.title) ||
         "本直播间",
+      uniqueId: safeText(payload.ownerDouyinId) || safeText(payload.uniqueId),
       score: roomOwnerGiftScore,
       scoreText: roomOwnerGiftScore ? compactNumber(roomOwnerGiftScore) : "0",
       scoreRelative: false,
@@ -1310,6 +1787,7 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
         const nextMode = safeText(payload.liveMode);
         const hasPkActive = Object.prototype.hasOwnProperty.call(payload, "isPkActive");
         const nextPkActive = hasPkActive ? safeBoolean(payload.isPkActive) : nextMode === "pk";
+        const previousActive = isPkActive || isLinkmic;
         if (nextMode) mode = nextMode;
         if (nextMode || hasPkActive) {
           isPkActive = nextPkActive || mode === "pk";
@@ -1325,9 +1803,39 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
         channelId = safeText(payload.channelId) || channelId;
         if (payload.pkCountDown !== undefined) {
           countdown = Math.max(0, safeNumber(payload.pkCountDown));
+          hasOfficialCountdown = true;
         }
         phase = safeText(payload.battlePhase) || phase;
+        if (safeText(payload.battlePhase)) currentPhase = safeText(payload.battlePhase);
         updatedAt = row.at || updatedAt;
+
+        const finished = isMatchFinishedPayload(payload);
+        const nextActive = (isPkActive || isLinkmic) && !finished;
+        if (nextActive && (!previousActive || round === 0)) {
+          ensureRound(
+            safeText(payload.battleId) || safeText(payload.channelId),
+            true,
+            row.at,
+            currentMatchModeFromState()
+          );
+        } else if (finished && (previousActive || (round > 0 && rounds[rounds.length - 1]?.status !== "finished"))) {
+          if (round === 0) {
+            ensureRound(
+              safeText(payload.battleId) || safeText(payload.channelId),
+              true,
+              row.at,
+              currentMatchModeFromState()
+            );
+          }
+          finishActiveRound(row.at, safeText(payload.battlePhase));
+        } else if (nextActive) {
+          ensureRound(
+            safeText(payload.battleId) || safeText(payload.channelId),
+            false,
+            row.at,
+            currentMatchModeFromState()
+          );
+        }
       }
 
       if (eventType === "room-info") {
@@ -1336,22 +1844,32 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
 
       if (eventType === "pk-battle" || eventType === "pk-score-snapshot") {
         const battleId = safeText(payload.battleId);
-        ensureRound(battleId, Boolean(battleId && currentBattleId && !sameBattleId(battleId, currentBattleId)));
+        const finished = isMatchFinishedPayload(payload);
+        ensureRound(
+          battleId,
+          Boolean(battleId && currentBattleId && !sameBattleId(battleId, currentBattleId)),
+          row.at,
+          "pk"
+        );
         const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType);
-        applyScores(nextScores, true);
+        applyScores(nextScores, true, row.at, safeText(payload.battlePhase));
+        if (finished) {
+          finishActiveRound(row.at, safeText(payload.battlePhase));
+        }
       } else if (eventType === "linkmic-score") {
+        ensureRound(safeText(payload.battleId) || safeText(payload.channelId), false, row.at, "linkmic");
         const nextScores = scoreRowsFromEvent(payload as LivePkEventPayload, eventType);
-        applyScores(nextScores, false);
+        applyScores(nextScores, false, row.at, safeText(payload.battlePhase));
       }
     }
 
     if (row.type === "rank") {
       if (isAnchorScoreRankPayload(payload)) {
-        ensureRound(safeText(payload.battleId));
+        ensureRound(safeText(payload.battleId), false, row.at, currentMatchModeFromState());
         const nextScores = Array.isArray(payload.ranks)
           ? dedupeScoreRows(payload.ranks.map((rank) => scoreFromPayload(rank, "interaction-score")).filter(Boolean) as MonitorScoreRow[])
           : [];
-        applyScores(nextScores, false);
+        applyScores(nextScores, false, row.at);
         updatedAt = row.at || updatedAt;
       }
     }
@@ -1359,7 +1877,6 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
     if (row.type === "gift") {
       applyGiftScore(payload, row.at);
     }
-
   }
 
   const logScores = Array.from(scores.values());
@@ -1370,6 +1887,18 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
     participantCount = Math.max(participantCount, currentScores.length);
   }
   modeLabel = liveModeStatusText({ mode, modeLabel, isPkActive, isLinkmic });
+  if ((isPkActive || isLinkmic) && round === 0 && currentScores.length > 0) {
+    ensureRound(currentBattleId || "live-score", true, updatedAt, currentMatchModeFromState());
+    applyScores(currentScores, true, updatedAt);
+  }
+  if (round > 0 && currentScores.length > 0) {
+    scores.clear();
+    currentScores.forEach((score) => scores.set(score.anchorId, score));
+    snapshotRound(updatedAt, currentPhase || phase);
+  }
+  if (round > 0 && matchStatus === "idle") {
+    matchStatus = rounds[rounds.length - 1]?.status === "finished" ? "finished" : "running";
+  }
 
   return {
     mode,
@@ -1380,9 +1909,12 @@ function buildLiveState(logs: MonitorLogRow[], liveScores: MonitorScoreRow[] = [
     battleId: currentBattleId,
     channelId,
     countdown,
+    hasOfficialCountdown,
     phase,
-    scores: currentScores,
+    matchStatus,
+    scores: rankedScores(currentScores),
     rounds,
+    currentMatchStartedAt: currentMatchStartedAt || (rounds[rounds.length - 1]?.startedAt || ""),
     updatedAt,
   };
 }
@@ -1459,10 +1991,12 @@ export function DouyinMonitorPage() {
   const [message, setMessage] = useState("");
   const [logs, setLogs] = useState<MonitorLogRow[]>([]);
   const [cachedUsers, setCachedUsers] = useState<MonitorUserRow[]>(loadCachedMonitorUsers);
-  const [filter, setFilter] = useState<MonitorFilter>("all");
+  const [filter, setFilter] = useState<MonitorFilter>("score");
   const [busy, setBusy] = useState(false);
   const [liveScores, setLiveScores] = useState<MonitorScoreRow[]>([]);
   const liveScoresRef = useRef<MonitorScoreRow[]>([]);
+  const [matchLedger, setMatchLedger] = useState<MonitorRoundRow[]>(() => loadMatchLedger());
+  const matchLedgerRef = useRef<MonitorRoundRow[]>(matchLedger);
   const [liveCountdownMs, setLiveCountdownMs] = useState(0);
   const countdownEndAtRef = useRef<number | null>(null);
   const countdownSourceMsRef = useRef<number | null>(null);
@@ -1495,7 +2029,7 @@ export function DouyinMonitorPage() {
     setLogs((prev) => [
       ...rows.map((row) => ({ ...row, id: makeId(row.type) })),
       ...prev,
-    ].slice(0, 800));
+    ].slice(0, MONITOR_LOG_LIMIT));
   }, []);
 
   const clearLiveScores = useCallback(() => {
@@ -1508,6 +2042,41 @@ export function DouyinMonitorPage() {
     if (nextScores === liveScoresRef.current || sameScoreRows(liveScoresRef.current, nextScores)) return;
     liveScoresRef.current = nextScores;
     setLiveScores(nextScores);
+  }, []);
+
+  const commitMatchLedger = useCallback((payload: LivePkEventPayload | Record<string, unknown>, at = "") => {
+    const next = upsertMatchLedger(matchLedgerRef.current, payload, at);
+    if (next === matchLedgerRef.current) return;
+    // shallow compare by length + last battle/status/score sum
+    const prev = matchLedgerRef.current;
+    const same =
+      prev.length === next.length
+      && prev.every((row, index) => {
+        const other = next[index];
+        return (
+          row.battleId === other.battleId
+          && row.status === other.status
+          && row.phase === other.phase
+          && row.endedAt === other.endedAt
+          && row.scores.length === other.scores.length
+          && row.scores.every((score, scoreIndex) => {
+            const right = other.scores[scoreIndex];
+            return score.anchorId === right.anchorId && score.score === right.score;
+          })
+        );
+      });
+    if (same) return;
+    matchLedgerRef.current = next;
+    setMatchLedger(next);
+    saveMatchLedger(next);
+  }, []);
+
+  const clearMatchLedger = useCallback(() => {
+    matchLedgerRef.current = [];
+    setMatchLedger([]);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(MATCH_LEDGER_STORAGE_KEY);
+    }
   }, []);
 
   const clearLiveCountdown = useCallback(() => {
@@ -1552,8 +2121,8 @@ export function DouyinMonitorPage() {
     if (!api) return;
     const offStatus = api.onLivePkStatus((next) => {
       setStatus(next);
+      // 停止时保留最后一场比分与场次，方便查看最终分；仅清倒计时动画。
       if (next.status !== "running") {
-        clearLiveScores();
         clearLiveCountdown();
       }
       appendRows([{
@@ -1650,12 +2219,31 @@ export function DouyinMonitorPage() {
     }) ?? (() => undefined);
     const offEvent = api.onLivePkEvent?.((payload: LivePkEventPayload) => {
       syncLiveCountdown(payload);
+      if (
+        payload.eventType === "pk-battle"
+        || payload.eventType === "pk-score-snapshot"
+        || payload.eventType === "linkmic-score"
+        || payload.eventType === "live-mode"
+      ) {
+        commitMatchLedger(payload, formatTime(payload.at));
+      }
       if (payload.eventType === "pk-battle" || payload.eventType === "pk-score-snapshot") {
-        if (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && !safeBoolean(payload.isPkActive)) {
-          clearLiveScores();
+        const nextScores = scoreRowsFromEvent(payload, payload.eventType);
+        // PK 结束（punish / isPkActive=false）时必须保留最终分，不能清空。
+        if (nextScores.length > 0) {
+          const finished = isMatchFinishedPayload(payload as unknown as Record<string, unknown>);
+          commitLiveScores((current) =>
+            finished
+              ? mergeScoreMap(current, nextScores, { onlyIncrease: true })
+              : mergeScoreRows(current, nextScores, true)
+          );
+        }
+        if (
+          (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && !safeBoolean(payload.isPkActive))
+          || (payload.pkCountDown !== undefined && safeNumber(payload.pkCountDown) <= 0)
+          || isTerminalBattlePhase(safeText(payload.battlePhase))
+        ) {
           clearLiveCountdown();
-        } else {
-          commitLiveScores((current) => mergeScoreRows(current, scoreRowsFromEvent(payload, payload.eventType), true));
         }
       } else if (payload.eventType === "linkmic-score") {
         commitLiveScores((current) => mergeScoreRows(current, scoreRowsFromEvent(payload, payload.eventType), false));
@@ -1688,7 +2276,7 @@ export function DouyinMonitorPage() {
       offEvent();
       offEmbedded();
     };
-  }, [appendRows, clearLiveCountdown, clearLiveScores, commitLiveScores, syncLiveCountdown]);
+  }, [appendRows, clearLiveCountdown, clearLiveScores, commitLiveScores, commitMatchLedger, syncLiveCountdown]);
 
   useEffect(() => {
     if (!previewOpen) return;
@@ -1831,10 +2419,33 @@ export function DouyinMonitorPage() {
 
   const liveState = useMemo(() => {
     const next = buildLiveState(logs, liveScores);
+    const rounds = mergeLiveRoundsWithLedger(next.rounds, matchLedger);
+    const latest = rounds[rounds.length - 1];
+    const mergedScores =
+      latest && latest.scores.length > 0
+        ? mergeScoreMap(next.scores, latest.scores, { onlyIncrease: true })
+        : next.scores;
+    const matchStatus =
+      latest?.status === "finished" && !next.isPkActive
+        ? "finished"
+        : next.isPkActive || next.isLinkmic
+          ? "running"
+          : latest
+            ? latest.status
+            : next.matchStatus;
+    const base = {
+      ...next,
+      scores: rankedScores(mergedScores),
+      rounds,
+      matchStatus,
+      battleId: latest?.battleId || next.battleId,
+      phase: next.phase || latest?.phase || "",
+      currentMatchStartedAt: latest?.startedAt || next.currentMatchStartedAt,
+    };
     return liveCountdownMs > 0
-      ? { ...next, countdown: liveCountdownMs / 1000 }
-      : next;
-  }, [liveCountdownMs, liveScores, logs]);
+      ? { ...base, countdown: liveCountdownMs / 1000, hasOfficialCountdown: true }
+      : base;
+  }, [liveCountdownMs, liveScores, logs, matchLedger]);
 
   const stats = useMemo(() => {
     const eventRows = logs.filter((row) => row.type === "event");
@@ -1867,7 +2478,7 @@ export function DouyinMonitorPage() {
       "user-profile",
     ]);
     return logs.filter((row) => {
-      if (filter === "user") return false;
+      if (filter === "user" || filter === "score") return false;
       if (filter !== "all" && row.type !== filter) return false;
       if (filter === "all" && row.type === "event") {
         const eventType = safeText((row.payload as Record<string, unknown>).eventType);
@@ -1896,6 +2507,17 @@ export function DouyinMonitorPage() {
     setLogs([]);
     clearLiveScores();
     clearLiveCountdown();
+    // 新开监控前，把账本里仍标记进行中的场次收成最终分，避免跨会话脏状态
+    if (matchLedgerRef.current.some((row) => row.status === "running")) {
+      const sealed = matchLedgerRef.current.map((row) =>
+        row.status === "running"
+          ? decorateMatchRound({ ...row, status: "finished", endedAt: row.endedAt || formatTime() })
+          : row
+      );
+      matchLedgerRef.current = sealed;
+      setMatchLedger(sealed);
+      saveMatchLedger(sealed);
+    }
     setBusy(true);
     setMessage("正在隐藏采集直播间连接");
     const cookieText = cookie.trim();
@@ -1950,8 +2572,8 @@ export function DouyinMonitorPage() {
     const result = await api?.stopLivePkMonitor?.();
     setBusy(false);
     if (result?.success) setStatus(result.data);
+    // 停止后保留最终比分与历史场次，只清倒计时动画。
     if (result?.success) {
-      clearLiveScores();
       clearLiveCountdown();
     }
     setPreviewOpen(false);
@@ -2174,6 +2796,69 @@ export function DouyinMonitorPage() {
     );
   };
 
+
+  const exportScoreMatches = () => {
+    const rows = liveState.rounds
+      .filter((round) => round.scores.some(hasEffectiveScore) || round.mode === "pk" || round.mode === "linkmic")
+      .flatMap((round) => {
+        const ranked = rankedScores(round.scores.filter(hasEffectiveScore));
+        if (ranked.length === 0) {
+          return [[
+            round.round,
+            round.modeLabel || matchModeLabel(round.mode),
+            round.status === "finished" ? "已结束" : "进行中",
+            round.phase || "",
+            round.startedAt || "",
+            round.endedAt || "",
+            round.battleId || "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            roomInfo.ownerUserId || roomInfo.ownerDouyinId || "",
+            roomInfo.ownerNickname || "",
+          ]];
+        }
+        return ranked.map((score, index) => [
+          round.round,
+          round.modeLabel || matchModeLabel(round.mode),
+          round.status === "finished" ? "已结束" : "进行中",
+          round.phase || "",
+          round.startedAt || "",
+          round.endedAt || "",
+          round.battleId || "",
+          index + 1,
+          displayScoreName(score) || "",
+          preferredAnchorId(score, roomInfo),
+          score.uniqueId || "",
+          score.score,
+          roomInfo.ownerUserId || roomInfo.ownerDouyinId || "",
+          roomInfo.ownerNickname || "",
+          round.winnerId === score.anchorId || round.winnerId === preferredAnchorId(score, roomInfo) ? "是" : "",
+        ]);
+      });
+    const header = [
+      "场次",
+      "形态",
+      "状态",
+      "阶段",
+      "开始",
+      "结束",
+      "battleId",
+      "排名",
+      "主播",
+      "主播ID",
+      "抖音号",
+      "分数",
+      "本房主播ID",
+      "本房主播",
+      "是否胜者",
+    ];
+    const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(",")).join("\n");
+    downloadText(`抖音分数场次_${Date.now()}.csv`, `﻿${csv}`, "text/csv;charset=utf-8");
+  };
+
   const running = status.status === "running";
 
   return (
@@ -2246,11 +2931,34 @@ export function DouyinMonitorPage() {
             <Button
               size="icon-sm"
               variant="outline"
+              onClick={exportScoreMatches}
+              disabled={liveState.rounds.length === 0}
+              title="导出分数场次 CSV（含最终分）"
+            >
+              <Swords />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
               onClick={() => setLogs([])}
               disabled={logs.length === 0}
               title="清空日志"
             >
               <Eraser />
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              onClick={() => {
+                clearMatchLedger();
+                clearLiveScores();
+                clearLiveCountdown();
+                setMessage("已清空分数场次账本与实时比分");
+              }}
+              disabled={matchLedger.length === 0 && liveScores.length === 0}
+              title="清空分数场次（最终分账本）"
+            >
+              <BarChart3 />
             </Button>
           </div>
         </div>
@@ -2312,24 +3020,40 @@ export function DouyinMonitorPage() {
 
       <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] gap-3 max-lg:grid-cols-1">
         <aside className="flex min-h-0 flex-col gap-3">
-          <LiveStateStrip liveState={liveState} />
+          <LiveStateStrip liveState={liveState} roomInfo={roomInfo} />
         </aside>
 
         <main className="flex min-h-0 flex-col gap-3">
-          <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(8.25rem,1fr))] gap-2 rounded-lg border border-border bg-card p-2 shadow-sm">
-            <StatCard icon={Activity} label="总事件" value={stats.total} />
-            <StatCard icon={Gift} label="礼物" value={stats.gifts} />
-            <StatCard icon={MessageSquareText} label="弹幕" value={stats.chats} />
-            <StatCard icon={Users} label="用户" value={stats.users} />
-            <StatCard icon={BarChart3} label="音浪" value={compactNumber(stats.fanTicket)} />
-            <StatCard icon={Users} label="进/离" value={stats.members} />
-          </div>
+          {filter !== "score" && (
+            <div className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(8.25rem,1fr))] gap-2 rounded-lg border border-border bg-card p-2 shadow-sm">
+              <StatCard icon={Activity} label="总事件" value={stats.total} />
+              <StatCard icon={Gift} label="礼物" value={stats.gifts} />
+              <StatCard icon={MessageSquareText} label="弹幕" value={stats.chats} />
+              <StatCard icon={Users} label="用户" value={stats.users} />
+              <StatCard icon={BarChart3} label="音浪" value={compactNumber(stats.fanTicket)} />
+              <StatCard icon={Users} label="进/离" value={stats.members} />
+            </div>
+          )}
           <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-muted/25 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
-                <MessageSquareText className="size-4 text-muted-foreground" />
-                <span className="text-xs font-black">事件流</span>
-                <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{filteredLogs.length} 条</span>
+                {filter === "score" ? (
+                  <Swords className="size-4 text-muted-foreground" />
+                ) : (
+                  <MessageSquareText className="size-4 text-muted-foreground" />
+                )}
+                <span className="text-xs font-black">{filter === "score" ? "分数监控" : "事件流"}</span>
+                {filter === "score" ? (
+                  <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+                    {`${liveState.scores.length} 方 · ${liveState.rounds.length} 场`}
+                    {liveState.hasOfficialCountdown
+                      ? ` · 剩余 ${countdownText(liveState.countdown)}`
+                      : ` · 单场约 ${MATCH_DURATION_SEC / 60} 分钟`}
+                    {liveState.matchStatus === "finished" ? " · 已出最终分" : ""}
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">{filteredLogs.length} 条</span>
+                )}
                 {filter === "user" && (
                   <span className="hidden text-[11px] font-semibold tabular-nums text-muted-foreground sm:inline">
                     用户 {userRows.length} · 抖音号 {userIdentitySummary.douyin} · 已关联 {userIdentitySummary.linked} · 待补 {userIdentitySummary.pending}
@@ -2377,107 +3101,117 @@ export function DouyinMonitorPage() {
                 </div>
               </div>
             </div>
-            {filter === "user" && (
-              <div className="grid grid-cols-3 gap-1 border-b border-border/70 bg-muted/20 p-2 text-center text-[10px] font-bold tabular-nums sm:hidden">
-                <div className="rounded-md bg-background/70 px-1.5 py-1">
-                  <div className="text-muted-foreground">抖音号</div>
-                  <div>{userIdentitySummary.douyin}</div>
-                </div>
-                <div className="rounded-md bg-background/70 px-1.5 py-1">
-                  <div className="text-muted-foreground">已关联</div>
-                  <div>{userIdentitySummary.linked}</div>
-                </div>
-                <div className="rounded-md bg-background/70 px-1.5 py-1">
-                  <div className="text-muted-foreground">待补</div>
-                  <div>{userIdentitySummary.pending}</div>
-                </div>
-              </div>
-            )}
-            {filter === "user" ? (
-              <div className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
-                <div>昵称</div>
-                <div>抖音号 / 状态</div>
-                <div>财富</div>
-                <div>音浪</div>
-              </div>
+            {filter === "score" ? (
+              <ScoreMonitorPanel
+                liveState={liveState}
+                roomInfo={roomInfo}
+                running={running}
+              />
             ) : (
-              <div className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
-                <div>时间</div>
-                <div>类型</div>
-                <div>昵称</div>
-                <div>抖音号</div>
-                <div>内容</div>
-              </div>
-            )}
-            <div className="h-full overflow-auto pb-10">
-              {filter === "user" ? (
-                userRows.length === 0 ? (
-                  <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-                    暂无用户，等待弹幕、礼物或进场数据
+              <>
+                {filter === "user" && (
+                  <div className="grid grid-cols-3 gap-1 border-b border-border/70 bg-muted/20 p-2 text-center text-[10px] font-bold tabular-nums sm:hidden">
+                    <div className="rounded-md bg-background/70 px-1.5 py-1">
+                      <div className="text-muted-foreground">抖音号</div>
+                      <div>{userIdentitySummary.douyin}</div>
+                    </div>
+                    <div className="rounded-md bg-background/70 px-1.5 py-1">
+                      <div className="text-muted-foreground">已关联</div>
+                      <div>{userIdentitySummary.linked}</div>
+                    </div>
+                    <div className="rounded-md bg-background/70 px-1.5 py-1">
+                      <div className="text-muted-foreground">待补</div>
+                      <div>{userIdentitySummary.pending}</div>
+                    </div>
+                  </div>
+                )}
+                {filter === "user" ? (
+                  <div className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    <div>昵称</div>
+                    <div>抖音号 / 状态</div>
+                    <div>财富</div>
+                    <div>音浪</div>
                   </div>
                 ) : (
-	                  userRows.map((user) => (
-	                    <div
-	                      key={user.key}
-	                      className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
-	                    >
-                      <div className="break-words font-semibold" title={realUserName(user)}>
-                        {realUserName(user)}
-                        {user.isMystery && <span className="ml-1 text-[10px] text-muted-foreground">脱敏</span>}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <Badge variant={identityStatus(user).tone} className="h-5 shrink-0 px-1.5 text-[10px]">
-                            {identityStatus(user).label}
-                          </Badge>
-                          <span className="truncate font-semibold" title={identityValue(user)}>
-                            {identityValue(user)}
-                          </span>
-                        </div>
-                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={user.douyinId || identityValue(user)}>
-                          {user.hasStrongIdentity ? "已识别" : "等待补全"}
-                        </div>
-                      </div>
-	                      <div className="tabular-nums">{levelText(user)}</div>
-	                      <div className="space-y-0.5">
-                        <div className="tabular-nums">本场 {compactNumber(user.fanTicket)}</div>
-                        <div className="tabular-nums text-muted-foreground">累计 {compactNumber(user.fanTicketCount)}</div>
-                        {giftTier(user) && (
-                          <Badge
-                            variant={giftMoney(user) >= 1000 ? "default" : "outline"}
-                            className="h-5 px-1.5 text-[10px] tabular-nums"
-                            title={`${moneyText(giftMoney(user))}，礼物 ${user.gifts} 次`}
-                          >
-                            ¥{giftTier(user)}
-                          </Badge>
-                        )}
-                      </div>
-	                    </div>
-	                  ))
-                )
-              ) : filteredLogs.length === 0 ? (
-                <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
-                  暂无数据
-                </div>
-              ) : (
-                filteredLogs.map((row) => (
-                  <div
-                    key={row.id}
-                    className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
-                  >
-                    <div className="text-muted-foreground">{row.at}</div>
-                    <div><Badge variant="outline" className="h-5 px-1.5 text-[10px]">{row.label}</Badge></div>
-                    <div className="truncate font-semibold" title={row.name}>{row.name}</div>
-                    <div className="truncate font-mono text-[11px] text-muted-foreground" title={logIdentityText(row)}>
-                      {logIdentityText(row)}
-                    </div>
-                    <div className="truncate text-muted-foreground" title={compactLogDetail(row, liveState)}>
-                      {compactLogDetail(row, liveState)}
-                    </div>
+                  <div className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] border-b border-border bg-muted/45 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    <div>时间</div>
+                    <div>类型</div>
+                    <div>昵称</div>
+                    <div>抖音号</div>
+                    <div>内容</div>
                   </div>
-                ))
-              )}
-            </div>
+                )}
+                <div className="h-full overflow-auto pb-10">
+                  {filter === "user" ? (
+                    userRows.length === 0 ? (
+                      <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+                        暂无用户，等待弹幕、礼物或进场数据
+                      </div>
+                    ) : (
+                      userRows.map((user) => (
+                        <div
+                          key={user.key}
+                          className="grid min-w-[620px] grid-cols-[minmax(150px,1fr)_190px_90px_130px] border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
+                        >
+                          <div className="break-words font-semibold" title={realUserName(user)}>
+                            {realUserName(user)}
+                            {user.isMystery && <span className="ml-1 text-[10px] text-muted-foreground">脱敏</span>}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <Badge variant={identityStatus(user).tone} className="h-5 shrink-0 px-1.5 text-[10px]">
+                                {identityStatus(user).label}
+                              </Badge>
+                              <span className="truncate font-semibold" title={identityValue(user)}>
+                                {identityValue(user)}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={user.douyinId || identityValue(user)}>
+                              {user.hasStrongIdentity ? "已识别" : "等待补全"}
+                            </div>
+                          </div>
+                          <div className="tabular-nums">{levelText(user)}</div>
+                          <div className="space-y-0.5">
+                            <div className="tabular-nums">本场 {compactNumber(user.fanTicket)}</div>
+                            <div className="tabular-nums text-muted-foreground">累计 {compactNumber(user.fanTicketCount)}</div>
+                            {giftTier(user) && (
+                              <Badge
+                                variant={giftMoney(user) >= 1000 ? "default" : "outline"}
+                                className="h-5 px-1.5 text-[10px] tabular-nums"
+                                title={`${moneyText(giftMoney(user))}，礼物 ${user.gifts} 次`}
+                              >
+                                ¥{giftTier(user)}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )
+                  ) : filteredLogs.length === 0 ? (
+                    <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
+                      暂无数据
+                    </div>
+                  ) : (
+                    filteredLogs.map((row) => (
+                      <div
+                        key={row.id}
+                        className="grid grid-cols-[72px_58px_minmax(110px,0.55fr)_minmax(130px,0.75fr)_minmax(0,2fr)] gap-0 border-b border-border/70 px-3 py-2 text-xs transition hover:bg-muted/25"
+                      >
+                        <div className="text-muted-foreground">{row.at}</div>
+                        <div><Badge variant="outline" className="h-5 px-1.5 text-[10px]">{row.label}</Badge></div>
+                        <div className="truncate font-semibold" title={row.name}>{row.name}</div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={logIdentityText(row)}>
+                          {logIdentityText(row)}
+                        </div>
+                        <div className="truncate text-muted-foreground" title={compactLogDetail(row, liveState)}>
+                          {compactLogDetail(row, liveState)}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </main>
       </section>
@@ -2527,8 +3261,10 @@ export function DouyinMonitorPage() {
 
 function LiveStateStrip({
   liveState,
+  roomInfo,
 }: {
   liveState: MonitorLiveState;
+  roomInfo?: MonitorRoomInfo;
 }) {
   const [showRounds, setShowRounds] = useState(false);
   const latestRound = liveState.rounds[liveState.rounds.length - 1];
@@ -2537,9 +3273,10 @@ function LiveStateStrip({
     .sort((a, b) => b.score - a.score)
     .slice(0, 9);
   const leaderScore = visibleScores.reduce((max, score) => Math.max(max, score.score), 0);
-  const pkRounds = liveState.rounds
-    .map((round) => ({ ...round, scores: round.scores.filter(hasEffectiveScore) }))
-    .filter((round) => round.scores.length > 0);
+  const matchRounds = liveState.rounds
+    .map((round) => ({ ...round, scores: rankedScores(round.scores.filter(hasEffectiveScore)) }))
+    .filter((round) => round.scores.length > 0 || round.mode === "pk" || round.mode === "linkmic");
+  const hostId = roomInfo?.ownerUserId || roomInfo?.ownerDouyinId || roomInfo?.ownerWebRid || "";
   return (
     <>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-card p-2 shadow-sm">
@@ -2558,6 +3295,16 @@ function LiveStateStrip({
             </span>
             {liveState.countdown > 0 && <span>倒计时 {countdownText(liveState.countdown)}</span>}
           </div>
+          {(roomInfo?.ownerNickname || hostId) && (
+            <div className="mt-2 space-y-0.5 text-[11px] font-semibold text-muted-foreground">
+              {roomInfo?.ownerNickname && <div className="truncate" title={roomInfo.ownerNickname}>本房 {roomInfo.ownerNickname}</div>}
+              {hostId && (
+                <div className="truncate font-mono" title={hostId}>
+                  主播ID {hostId}
+                </div>
+              )}
+            </div>
+          )}
           <div className="mt-3 rounded-md border border-border/60 bg-background/60 px-3 py-2" title={currentScore}>
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-semibold text-muted-foreground">主播分数</div>
@@ -2567,8 +3314,8 @@ function LiveStateStrip({
               <div className="mt-2 space-y-1.5">
                 {visibleScores.map((score, index) => (
                   <div key={score.anchorId || index} className="grid grid-cols-[minmax(4.5rem,7rem)_minmax(0,1fr)_4rem] items-center gap-2">
-                    <div className="truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score) || score.anchorId}>
-                      {displayScoreName(score) || compactId(score.anchorId) || `第${index + 1}方`}
+                    <div className="truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score) || preferredAnchorId(score, roomInfo)}>
+                      {displayScoreName(score) || compactId(preferredAnchorId(score, roomInfo)) || `第${index + 1}方`}
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-border/60">
                       <div
@@ -2597,20 +3344,20 @@ function LiveStateStrip({
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md bg-muted/25">
           <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-            <span className="text-xs font-semibold text-muted-foreground">PK 分数回合</span>
+            <span className="text-xs font-semibold text-muted-foreground">分数场次</span>
             <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-              {pkRounds.length} 场
+              {matchRounds.length} 场
             </Badge>
           </div>
           <div className="min-h-0 flex-1 overflow-auto p-2">
-            {pkRounds.length === 0 ? (
+            {matchRounds.length === 0 ? (
               <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border px-3 text-center">
                 <Swords className="size-5 text-muted-foreground" />
-                <div className="text-xs font-semibold text-muted-foreground">暂无 PK 回合</div>
+                <div className="text-xs font-semibold text-muted-foreground">暂无 PK / 连麦场次</div>
               </div>
             ) : (
               <div className="space-y-2">
-                {pkRounds.slice().reverse().slice(0, 8).map((round) => (
+                {matchRounds.slice().reverse().slice(0, 8).map((round) => (
                   <button
                     key={`${round.round}-${round.battleId}`}
                     type="button"
@@ -2619,11 +3366,13 @@ function LiveStateStrip({
                     title={scoreSummary(round.scores)}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black">第 {round.round} 场</span>
-                      <span className="text-[10px] font-bold tabular-nums text-muted-foreground">{round.scores.length} 方</span>
+                      <span className="text-xs font-black">第 {round.round} 场 · {round.modeLabel || "未知"}</span>
+                      <span className="text-[10px] font-bold tabular-nums text-muted-foreground">
+                        {round.status === "finished" ? "最终分 · " : ""}{round.scores.length} 方
+                      </span>
                     </div>
                     <div className="mt-1 truncate text-[11px] font-semibold tabular-nums text-muted-foreground">
-                      {roundScoreSummary(round)}
+                      {round.status === "finished" && round.winnerName ? `胜者 ${round.winnerName} · ` : ""}{roundScoreSummary(round)}
                     </div>
                   </button>
                 ))}
@@ -2633,20 +3382,365 @@ function LiveStateStrip({
           <button
             type="button"
             onClick={() => setShowRounds(true)}
-            disabled={pkRounds.length === 0}
+            disabled={matchRounds.length === 0}
             className="shrink-0 border-t border-border/60 px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground transition hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-            title={pkRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
+            title={matchRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
           >
-            {latestRound ? `最新 第${latestRound.round}场 · ${roundScoreSummary(latestRound)}` : "开始监控后自动汇总 PK 分数"}
+            {latestRound ? `最新 第${latestRound.round}场 · ${roundScoreSummary(latestRound)}` : "开始监控后自动汇总 PK / 连麦分数"}
           </button>
         </div>
       </div>
       <PkRoundsDialog
         open={showRounds}
         onClose={() => setShowRounds(false)}
-        rounds={pkRounds}
+        rounds={matchRounds}
+        roomInfo={roomInfo}
       />
     </>
+  );
+}
+
+function ScoreMonitorPanel({
+  liveState,
+  roomInfo,
+  running,
+}: {
+  liveState: MonitorLiveState;
+  roomInfo: MonitorRoomInfo;
+  running: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const hostIds = [roomInfo.ownerUserId, roomInfo.ownerDouyinId, roomInfo.ownerWebRid, roomInfo.ownerSecUid].filter(Boolean);
+  const hostId = roomInfo.ownerUserId || roomInfo.ownerDouyinId || roomInfo.ownerWebRid || roomInfo.ownerSecUid || "";
+  const visibleScores = rankedScores(liveState.scores).slice(0, 12);
+  const leaderScore = visibleScores.reduce((max, score) => Math.max(max, score.score), 0);
+  const matchRounds = liveState.rounds
+    .map((round) => ({ ...round, scores: rankedScores(round.scores.filter(hasEffectiveScore)) }))
+    .filter((round) => round.scores.length > 0 || round.mode === "pk" || round.mode === "linkmic")
+    .slice()
+    .reverse();
+  const finishedRounds = matchRounds.filter((round) => round.status === "finished");
+  const activeRound = liveState.rounds[liveState.rounds.length - 1];
+  const latestFinished = [...liveState.rounds].reverse().find((round) => round.status === "finished" && round.scores.some(hasEffectiveScore));
+  const startedAtText = activeRound?.startedAt || liveState.currentMatchStartedAt;
+  const startedMs = parseClockToMs(startedAtText);
+  const elapsedSec = Number.isFinite(startedMs)
+    ? Math.max(0, Math.floor((nowMs - startedMs) / 1000))
+    : 0;
+  const hasOfficialCountdown = liveState.hasOfficialCountdown;
+  const remainingSec = hasOfficialCountdown
+    ? Math.max(0, Math.floor(liveState.countdown))
+    : Math.max(0, MATCH_DURATION_SEC - elapsedSec);
+  const progressBase = hasOfficialCountdown
+    ? Math.max(remainingSec, elapsedSec, 1)
+    : MATCH_DURATION_SEC;
+  const progress = hasOfficialCountdown
+    ? Math.min(100, Math.max(0, ((progressBase - remainingSec) / progressBase) * 100))
+    : Math.min(100, Math.max(0, (elapsedSec / MATCH_DURATION_SEC) * 100));
+  const modeText = liveState.isPkActive
+    ? "PK"
+    : liveState.isLinkmic
+      ? "连麦"
+      : liveState.matchStatus === "finished"
+        ? (activeRound?.modeLabel || latestFinished?.modeLabel || liveState.modeLabel || "已结束")
+        : liveState.modeLabel || "正常";
+  const showTimer = liveState.isPkActive || liveState.isLinkmic || liveState.matchStatus === "running" || hasOfficialCountdown;
+  const finalRound = liveState.matchStatus === "finished"
+    ? (activeRound?.status === "finished" ? activeRound : latestFinished)
+    : null;
+  const finalScores = finalRound ? rankedScores(finalRound.scores.filter(hasEffectiveScore)) : [];
+  const winnerName = finalRound?.winnerName || (finalScores[0] ? (displayScoreName(finalScores[0]) || finalScores[0].anchorId) : "");
+
+  return (
+    <div className="h-full overflow-auto p-3">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <div className="space-y-3">
+          <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant={liveState.isPkActive ? "default" : liveState.isLinkmic ? "outline" : "secondary"}>
+                    {modeText}
+                  </Badge>
+                  <Badge variant={running ? "default" : "secondary"}>{running ? "采集中" : "未开始"}</Badge>
+                  {liveState.matchStatus === "finished" && <Badge variant="default">最终分已锁定</Badge>}
+                  {liveState.phase && <Badge variant="outline">阶段 {liveState.phase}</Badge>}
+                  <Badge variant="outline">账本 {finishedRounds.length}/{matchRounds.length} 场</Badge>
+                </div>
+                <div className="truncate text-base font-black" title={roomInfo.title || "未识别直播间"}>
+                  {roomInfo.title || "等待房间信息"}
+                </div>
+                <div className="text-xs font-semibold text-muted-foreground">
+                  {roomInfo.ownerNickname ? `本房主播 ${roomInfo.ownerNickname}` : "本房主播待识别"}
+                </div>
+              </div>
+              <div className="rounded-md border border-border/70 bg-background/70 px-3 py-2 text-right">
+                <div className="text-[11px] font-semibold text-muted-foreground">主播 ID</div>
+                <div className="mt-0.5 font-mono text-sm font-black tabular-nums" title={hostId || "-"}>
+                  {hostId || "-"}
+                </div>
+                {roomInfo.ownerDouyinId && roomInfo.ownerDouyinId !== hostId && (
+                  <div className="mt-1 text-[11px] font-semibold text-muted-foreground" title={roomInfo.ownerDouyinId}>
+                    抖音号 {roomInfo.ownerDouyinId}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-4">
+              <div className="rounded-md border border-border/60 bg-background/70 px-3 py-2">
+                <div className="text-[11px] font-semibold text-muted-foreground">当前形态</div>
+                <div className="mt-1 text-sm font-black">{modeText}</div>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/70 px-3 py-2">
+                <div className="text-[11px] font-semibold text-muted-foreground">参与方</div>
+                <div className="mt-1 text-sm font-black tabular-nums">
+                  {liveState.participantCount || visibleScores.length || 0}
+                  {liveState.isPkActive || activeRound?.mode === "pk" ? " 方" : " 人"}
+                </div>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/70 px-3 py-2">
+                <div className="text-[11px] font-semibold text-muted-foreground">已进行</div>
+                <div className="mt-1 text-sm font-black tabular-nums">
+                  {showTimer && Number.isFinite(startedMs) ? formatElapsed(elapsedSec) : "--:--"}
+                </div>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/70 px-3 py-2">
+                <div className="text-[11px] font-semibold text-muted-foreground">
+                  {hasOfficialCountdown ? (remainingSec > 0 ? "官方倒计时" : "倒计时") : "剩余约"}
+                </div>
+                <div className="mt-1 text-sm font-black tabular-nums">
+                  {!showTimer && liveState.matchStatus !== "finished"
+                    ? "--:--"
+                    : hasOfficialCountdown
+                      ? (remainingSec > 0 ? countdownText(remainingSec) : "已结束")
+                      : formatElapsed(remainingSec)}
+                </div>
+              </div>
+            </div>
+
+            {showTimer && (
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-muted-foreground">
+                  <span>场次进度</span>
+                  <span className="tabular-nums">{Math.round(progress)}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-border/60">
+                  <div
+                    className={cn("h-full rounded-full", liveState.isPkActive ? "bg-primary" : "bg-chart-2")}
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {finishedRounds.length > 0 && (
+            <div className="rounded-lg border border-border/70 bg-background/50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-black">多场最终分总表</div>
+                <div className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+                  已锁定 {finishedRounds.length} 场
+                </div>
+              </div>
+              <div className="mt-2 space-y-2">
+                {finishedRounds.slice(0, 12).map((round) => {
+                  const top = rankedScores(round.scores).slice(0, 3);
+                  return (
+                    <div key={`board-${round.round}-${round.battleId}`} className="rounded-md border border-border/60 bg-muted/20 px-2.5 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-[11px] font-black">
+                          第 {round.round} 场 · {round.modeLabel || "PK"} · 胜 {round.winnerName || "-"}
+                        </div>
+                        <div className="text-[10px] font-semibold text-muted-foreground">
+                          {round.startedAt || "--:--"}{round.endedAt ? ` → ${round.endedAt}` : ""}
+                        </div>
+                      </div>
+                      <div className="mt-1 truncate text-[11px] font-semibold tabular-nums text-muted-foreground" title={top.map((s) => `${displayScoreName(s) || s.anchorId} ${s.score}`).join(" / ")}>
+                        {top.map((s) => `${displayScoreName(s) || compactId(preferredAnchorId(s, roomInfo))} ${scorePointText(s)}`).join(" / ")}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {finalScores.length > 0 && (
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-black">最近一场最终比分</div>
+                <div className="text-[11px] font-semibold text-muted-foreground">
+                  第 {finalRound?.round} 场 · {finalRound?.modeLabel || "PK"} · 胜者 {winnerName || "-"}
+                </div>
+              </div>
+              <div className="mt-2 space-y-1.5">
+                {finalScores.map((score, index) => {
+                  const anchorId = preferredAnchorId(score, roomInfo);
+                  const isHost = hostIds.includes(score.anchorId) || hostIds.includes(anchorId);
+                  const isWinner = Boolean(finalRound?.winnerId) && (finalRound?.winnerId === score.anchorId || finalRound?.winnerId === anchorId);
+                  return (
+                    <div key={`final-${score.anchorId}-${index}`} className="grid grid-cols-[48px_minmax(0,1fr)_140px_100px] items-center gap-2 text-xs">
+                      <div className="font-black tabular-nums text-muted-foreground">#{index + 1}</div>
+                      <div className="min-w-0 truncate font-bold" title={displayScoreName(score) || anchorId}>
+                        {displayScoreName(score) || compactId(anchorId) || `第${index + 1}方`}
+                        {isHost ? " · 本房" : ""}
+                        {isWinner ? " · 胜" : ""}
+                      </div>
+                      <div className="truncate font-mono text-[11px] text-muted-foreground" title={anchorId}>{anchorId || "-"}</div>
+                      <div className="text-right text-sm font-black tabular-nums">{scorePointText(score)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-border/70 bg-background/50">
+            <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+              <div className="text-xs font-black">{liveState.matchStatus === "finished" ? "最终/实时比分" : "实时比分"}</div>
+              <div className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+                {visibleScores.length} 方
+              </div>
+            </div>
+            {visibleScores.length === 0 ? (
+              <div className="flex min-h-40 flex-col items-center justify-center gap-2 px-4 text-center">
+                <Swords className="size-6 text-muted-foreground" />
+                <div className="text-sm font-semibold">暂无分数</div>
+                <div className="text-xs text-muted-foreground">
+                  进入连麦或 PK 后自动记分；结束后写入场次账本，日志截断也不会丢最终分
+                </div>
+              </div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                <div className="grid grid-cols-[48px_minmax(0,1fr)_140px_100px] gap-2 px-3 py-2 text-[11px] font-semibold text-muted-foreground">
+                  <div>排名</div>
+                  <div>主播</div>
+                  <div>主播 ID</div>
+                  <div className="text-right">分数</div>
+                </div>
+                {visibleScores.map((score, index) => {
+                  const anchorId = preferredAnchorId(score, roomInfo);
+                  const isHost = hostIds.includes(score.anchorId) || hostIds.includes(anchorId);
+                  return (
+                    <div
+                      key={`${score.anchorId}-${index}`}
+                      className="grid grid-cols-[48px_minmax(0,1fr)_140px_100px] items-center gap-2 px-3 py-2.5 text-xs"
+                    >
+                      <div className="font-black tabular-nums text-muted-foreground">#{index + 1}</div>
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate font-bold" title={displayScoreName(score) || anchorId}>
+                            {displayScoreName(score) || compactId(anchorId) || `第${index + 1}方`}
+                          </span>
+                          {isHost && <Badge variant="outline" className="h-5 px-1.5 text-[10px]">本房</Badge>}
+                        </div>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border/60">
+                          <div
+                            className={cn(
+                              "h-full rounded-full",
+                              score.score > 0 && score.score === leaderScore ? "bg-primary" : "bg-muted-foreground/45"
+                            )}
+                            style={{
+                              width: `${leaderScore > 0 ? Math.max(4, Math.min(100, (score.score / leaderScore) * 100)) : 0}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="truncate font-mono text-[11px] text-muted-foreground" title={anchorId}>
+                        {anchorId || "-"}
+                      </div>
+                      <div className="text-right text-sm font-black tabular-nums">{scorePointText(score)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border/70 bg-background/50">
+          <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+            <div className="text-xs font-black">场次账本</div>
+            <div className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+              {finishedRounds.length} 完 / {matchRounds.length} 总
+            </div>
+          </div>
+          {matchRounds.length === 0 ? (
+            <div className="flex min-h-48 flex-col items-center justify-center gap-2 px-4 text-center">
+              <BarChart3 className="size-6 text-muted-foreground" />
+              <div className="text-sm font-semibold">还没有完整场次</div>
+              <div className="text-xs text-muted-foreground">
+                按 battleId 拆场；punish / 倒计时归零锁定最终分，并写入本地账本
+              </div>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {matchRounds.map((round) => (
+                <div key={`${round.round}-${round.battleId}`} className="px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={round.mode === "pk" ? "default" : round.mode === "linkmic" ? "outline" : "secondary"}>
+                        第 {round.round} 场 · {round.modeLabel || "未知"}
+                      </Badge>
+                      <Badge variant={round.status === "finished" ? "default" : "secondary"}>
+                        {round.status === "finished" ? "最终分" : "进行中"}
+                      </Badge>
+                      {round.phase && (
+                        <span className="text-[11px] font-semibold text-muted-foreground">阶段 {round.phase}</span>
+                      )}
+                      <span className="text-[11px] font-semibold text-muted-foreground">
+                        {round.startedAt || "--:--"}
+                        {round.endedAt ? ` → ${round.endedAt}` : " · 进行中"}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-bold tabular-nums text-muted-foreground">
+                      {round.scores.length} 方
+                    </span>
+                  </div>
+                  {round.status === "finished" && round.winnerName && (
+                    <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+                      胜者 {round.winnerName}
+                    </div>
+                  )}
+                  <div className="mt-2 space-y-1.5">
+                    {round.scores.map((score, index) => {
+                      const anchorId = preferredAnchorId(score, roomInfo);
+                      const isWinner = round.winnerId === score.anchorId || round.winnerId === anchorId;
+                      return (
+                        <div
+                          key={`${round.round}-${score.anchorId}`}
+                          className="grid grid-cols-[minmax(0,1fr)_120px_88px] items-center gap-2 text-xs"
+                        >
+                          <div className="truncate font-semibold" title={displayScoreName(score) || anchorId}>
+                            #{index + 1} {displayScoreName(score) || compactId(anchorId) || "未知主播"}
+                            {isWinner ? " · 胜" : ""}
+                          </div>
+                          <div className="truncate font-mono text-[11px] text-muted-foreground" title={anchorId}>
+                            {compactId(anchorId)}
+                          </div>
+                          <div className="text-right font-black tabular-nums">{scorePointText(score)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {round.battleId && (
+                    <div className="mt-2 truncate text-[10px] font-semibold text-muted-foreground" title={round.battleId}>
+                      battle {compactId(round.battleId)}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2654,10 +3748,12 @@ function PkRoundsDialog({
   open,
   onClose,
   rounds,
+  roomInfo,
 }: {
   open: boolean;
   onClose: () => void;
   rounds: MonitorRoundRow[];
+  roomInfo?: MonitorRoomInfo;
 }) {
   if (!open) return null;
   const visibleRounds = rounds
@@ -2681,10 +3777,10 @@ function PkRoundsDialog({
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="min-w-0">
             <h3 id="pk-rounds-title" className="truncate text-base font-black">
-              PK 场次汇总
+              分数场次汇总
             </h3>
             <p className="mt-1 text-xs font-semibold text-muted-foreground">
-              本次监控共 {visibleRounds.length} 场 PK
+              本次监控共 {visibleRounds.length} 场 PK / 连麦
             </p>
           </div>
           <Button size="icon-sm" variant="outline" onClick={onClose} title="关闭">
@@ -2696,8 +3792,8 @@ function PkRoundsDialog({
           {visibleRounds.length === 0 ? (
             <div className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border text-center">
               <Swords className="size-6 text-muted-foreground" />
-              <div className="text-sm font-semibold">暂无 PK 场次</div>
-              <div className="text-xs text-muted-foreground">开始监控后，PK 分数快照会自动汇总到这里</div>
+              <div className="text-sm font-semibold">暂无场次</div>
+              <div className="text-xs text-muted-foreground">开始监控后，分数快照会自动汇总到这里</div>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -2705,37 +3801,45 @@ function PkRoundsDialog({
                 <div key={`${round.round}-${round.battleId}`} className="overflow-hidden rounded-lg border border-border">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/35 px-3 py-2">
                     <div className="flex items-center gap-2">
-                      <Badge variant="secondary">第 {round.round} 场</Badge>
+                      <Badge variant="secondary">第 {round.round} 场 · {round.modeLabel || "未知"}</Badge>
+                      <Badge variant={round.status === "finished" ? "default" : "outline"}>
+                        {round.status === "finished" ? "最终分" : "进行中"}
+                      </Badge>
                       <span className="text-xs font-semibold text-muted-foreground">
                         battle {compactId(round.battleId)}
                       </span>
                     </div>
-                    <span className="text-xs font-black tabular-nums">{round.scores.length} 位主播</span>
+                    <span className="text-xs font-black tabular-nums">
+                      {round.winnerName ? `胜者 ${round.winnerName} · ` : ""}{round.scores.length} 位主播
+                    </span>
                   </div>
                   <div className="grid grid-cols-[minmax(0,1fr)_120px] border-b border-border bg-background/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
                     <div>主播 ID</div>
                     <div className="text-right">分数</div>
                   </div>
-                  {round.scores.map((score) => (
-                    <div
-                      key={`${round.round}-${score.anchorId}`}
-                      className="grid grid-cols-[minmax(0,1fr)_120px] border-b border-border/60 px-3 py-2 text-xs last:border-b-0"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-bold" title={score.anchorId}>
-                          {score.anchorId || "-"}
-                        </div>
-                        {displayScoreName(score) && (
-                          <div className="mt-0.5 truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score)}>
-                            {displayScoreName(score)}
+                  {round.scores.map((score) => {
+                    const anchorId = preferredAnchorId(score, roomInfo);
+                    return (
+                      <div
+                        key={`${round.round}-${score.anchorId}`}
+                        className="grid grid-cols-[minmax(0,1fr)_120px] border-b border-border/60 px-3 py-2 text-xs last:border-b-0"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-bold" title={anchorId}>
+                            {anchorId || "-"}
                           </div>
-                        )}
+                          {displayScoreName(score) && (
+                            <div className="mt-0.5 truncate text-[11px] font-semibold text-muted-foreground" title={displayScoreName(score)}>
+                              {displayScoreName(score)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right text-sm font-black tabular-nums">
+                          {scorePointText(score)}
+                        </div>
                       </div>
-                      <div className="text-right text-sm font-black tabular-nums">
-                        {scorePointText(score)}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ))}
             </div>

@@ -37,11 +37,17 @@ import {
 import { exportElementAsImage } from "./export-image";
 import {
   loadRosterConfigs,
+  PRESET_PROMOTION_GROUP_COUNT,
   resolvePresetBattleGroups,
+  resolvePresetPromotionGroups,
   resolveRosterNames,
   type RosterConfig,
   type RosterSlot,
 } from "./pk-roster-config";
+import {
+  collectScoreSyncHits,
+  loadMonitorMatchLedger,
+} from "./monitor-score-sync";
 
 interface BattleGroup {
   key: string;
@@ -57,12 +63,38 @@ const PREFERRED_TOP_GROUP_SIZE = 8;
 const PREFERRED_TOP_GROUP_COUNT = 2;
 // 一页展示全部小组（当前最多 7 组），紧凑布局不再分页
 const GROUPS_PER_PAGE = 12;
-// v3：强制默认内置固定分组（交错出场顺序）
-const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v3";
-// v7：小组/复活晋级名额规则（8人前4后4，7人前4后3）
-const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v7";
-// 小组赛分组拖动顺序；v5：锁定最新内置 7 组出场顺序
-const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v5";
+
+/**
+ * 星嗨争霸赛 · 项目内置规则（开箱默认）
+ * ------------------------------------------------------------
+ * 流程：PK15号名单 / 内置分组 → 监控记分
+ *   小组赛 → 晋级赛 → 决赛
+ *   （无复活赛）
+ *
+ * 小组赛：
+ *   - 默认 sizeMode=preset：与 PK名单页共用 PRESET_BATTLE_GROUPS 内置 7 组
+ *   - 可选 auto：先录名单，再按音浪从高到低切组
+ *   - 组间最优出场（auto/manual）
+ *
+ * 晋级赛：
+ *   - 优先使用 PRESET_PROMOTION_GROUPS 内置名单（8 组）
+ *   - 每组晋级 1 人；等待晋级赛全部结束后进入决赛
+ *
+ * 决赛：晋级各组第 1 名单组
+ *
+ * 时间：小组 12:15 / 晋级 20:15（间隔 15 分钟）/ 决赛 22:15
+ */
+// v5：内置流水线默认（自动名单切组 + 最优出场 + 总分晋级）
+// v6：默认改用内置固定分组（与 PK名单页同源），避免两边分组不一致
+const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v6";
+// v19：导出头部写明每组晋级1人、无复活赛；晋级 20:15 起
+const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v19";
+// 小组赛分组拖动顺序；v7：配合内置最优出场
+const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v7";
+
+/** 晋级赛默认组数 / 决赛席位（与内置晋级名单同步，每组出 1 人） */
+const PROMOTION_GROUP_COUNT = PRESET_PROMOTION_GROUP_COUNT;
+const PROMOTION_FINAL_SLOTS = PROMOTION_GROUP_COUNT;
 
 type GroupSizeMode = "preset" | "auto" | "manual";
 type GroupSortMode = "wave_desc" | "top_wave_rest_volatility";
@@ -83,6 +115,7 @@ interface GroupPlanConfig {
 
 function defaultGroupPlan(): GroupPlanConfig {
   return {
+    // 默认与 PK名单页同一套内置固定分组，避免两处分组各算各的
     sizeMode: "preset",
     sortMode: "wave_desc",
     manualCounts: [
@@ -136,15 +169,15 @@ const SCHEDULE_MATCH_MINUTES = 10;
 const SCHEDULE_GAP_MINUTES = 5; // 组间间隔
 const SCHEDULE_SLOT_STEP = SCHEDULE_MATCH_MINUTES + SCHEDULE_GAP_MINUTES; // 15
 
-/** 各轮次首场开始时间（上一轮打完 + 休息后） */
+/** 各轮次首场开始时间（项目内置；组数随名单变，时间按场次顺延） */
 const ROUND_FIRST_START: Record<string, string> = {
   group: "12:15",
-  // 小组末场 13:45 开打 10 分钟 → 13:55 结束，隔 5 分钟
+  // 小组末场约 13:45 开打 → 结束后进复活
   revival: "14:00",
-  // 复活约 14:00-14:10，隔 10 分钟整备
-  promotion: "14:20",
-  // 晋级约 14:20-14:30，隔 15 分钟整备进决赛
-  final: "14:45",
+  // 晋级赛晚场：20:15 起，8 场 × 间隔 15 分钟
+  promotion: "20:15",
+  // 晋级第8场 22:00 开打 → 约 22:10 结束，隔 5 分钟进决赛
+  final: "22:15",
 };
 
 function pad2(n: number) {
@@ -193,22 +226,22 @@ function buildSequentialSchedule(
 }
 
 function defaultExportNotes() {
-  const groupSchedule = buildSequentialSchedule(7, ROUND_FIRST_START.group);
+  const promotionSchedule = buildSequentialSchedule(
+    PROMOTION_GROUP_COUNT,
+    ROUND_FIRST_START.promotion
+  );
   const lines = [
-    "中午 12:10 开播",
-    "【小组赛】每组 10 分钟，组间间隔 5 分钟；拖动只换出场顺序，时间按场次固定",
+    "【规则】每组晋级 1 人",
+    "【规则】等待晋级赛全部结束后进入决赛即可",
+    "【规则】无复活赛",
+    `【晋级赛】内置 ${PROMOTION_GROUP_COUNT} 组 · 20:15 起 · 间隔 15 分钟`,
+    "【出场】中上开场→最弱→中游→次弱→中→中下→最强冲高→次强收尾",
   ];
-  for (let i = 1; i <= 7; i++) {
-    lines.push(`小组第${i}场 ${groupSchedule.get(i)}`);
+  for (let i = 1; i <= PROMOTION_GROUP_COUNT; i++) {
+    lines.push(`晋级第${i}场 ${promotionSchedule.get(i)}`);
   }
   lines.push(
-    "【晋级/复活规则】8人组：前4晋级、后4进复活；7人组：前4晋级、后3进复活",
-    "【复活赛】小组赛落选进入；自动分组后同样 8人取前4、7人取前4 出线",
-    `复活赛 ${formatLinkmicLabel(ROUND_FIRST_START.revival)}`,
-    "【晋级赛】小组赛直接晋级 + 复活赛出线",
-    `晋级赛 ${formatLinkmicLabel(ROUND_FIRST_START.promotion)}`,
-    "【决赛】晋级赛每组第1名",
-    `决赛 ${formatLinkmicLabel(ROUND_FIRST_START.final)}`
+    `【决赛】晋级 ${PROMOTION_GROUP_COUNT} 组各 1 人 · ${formatLinkmicLabel(ROUND_FIRST_START.final)}`
   );
   return lines.join("\n");
 }
@@ -316,7 +349,6 @@ function expandManualSizes(counts: ManualGroupCount[]): number[] {
 
 const BATTLE_ROUNDS = [
   { key: "group", label: "小组赛", time: "中午" },
-  { key: "revival", label: "复活赛", time: "中午" },
   { key: "promotion", label: "晋级赛", time: "晚上" },
   { key: "final", label: "决赛", time: "晚上" },
 ] as const;
@@ -469,6 +501,69 @@ function resolveGroupSizes(
   };
 }
 
+/**
+ * 直播最优出场顺序（输入：实力从高到低的下标 0=最强）。
+ * 中上开场 → 穿插弱组 → 中游回温 → 最强冲高 → 次强收尾。
+ * 7 组固定：2,6,4,5,3,0,1（与内置小组赛节奏一致）。
+ */
+function optimalStageOrderIndices(count: number): number[] {
+  if (count <= 1) return Array.from({ length: count }, (_, i) => i);
+  if (count === 2) return [1, 0]; // 次强开场，最强收尾
+  if (count === 3) return [1, 2, 0]; // 中 → 弱 → 最强
+  if (count === 4) return [1, 3, 0, 2]; // 中上 → 最弱 → 最强 → 次强
+  if (count === 5) return [1, 4, 2, 0, 3]; // 中上 → 最弱 → 中 → 最强 → 次强
+  if (count === 6) return [2, 5, 3, 4, 0, 1]; // 中上 → 最弱 → 中下 → 中 → 最强 → 次强
+  if (count === 7) return [2, 6, 4, 5, 3, 0, 1]; // 内置锁定节奏
+  if (count === 8) return [2, 7, 4, 6, 3, 5, 0, 1];
+
+  // 通用：开场取约 1/3 强位，弱组穿插，最后两场留给最强/次强
+  const used = new Set<number>();
+  const result: number[] = [];
+  const take = (i: number) => {
+    if (i < 0 || i >= count || used.has(i)) return false;
+    used.add(i);
+    result.push(i);
+    return true;
+  };
+  take(Math.min(Math.max(1, Math.floor(count / 3)), count - 1));
+  // 从最弱往上穿插，预留 0/1 给收尾
+  for (let i = count - 1; i >= 2 && result.length < count - 2; i--) take(i);
+  for (let i = 2; i < count && result.length < count - 2; i++) take(i);
+  take(0);
+  take(1);
+  for (let i = 0; i < count; i++) take(i);
+  return result;
+}
+
+/** 组间按实力排序后套最优出场；组内人员保持原序（应为从高到低）。 */
+function reorderGroupsForLivePacing(groups: BattleGroup[], labelPrefix?: string): BattleGroup[] {
+  if (groups.length <= 1) {
+    return groups.map((group, index) => ({
+      ...group,
+      label: labelPrefix ? `${labelPrefix}${index + 1}组` : group.label,
+    }));
+  }
+  const strengthDesc = [...groups].sort(
+    (a, b) =>
+      b.averageWave - a.averageWave ||
+      b.members.length - a.members.length ||
+      a.key.localeCompare(b.key)
+  );
+  const order = optimalStageOrderIndices(strengthDesc.length);
+  return order.map((strengthIndex, slot) => {
+    const group = strengthDesc[strengthIndex];
+    return {
+      ...group,
+      label: labelPrefix ? `${labelPrefix}${slot + 1}组` : `第${slot + 1}组`,
+    };
+  });
+}
+
+/** 组内按音浪从高到低排好，方便卡片展示与录分。 */
+function sortMembersHighToLow(members: PkMember[]) {
+  return [...members].sort(compareByWave);
+}
+
 function orderMembersForGroups(
   members: PkMember[],
   sizes: number[],
@@ -476,6 +571,7 @@ function orderMembersForGroups(
 ): PkMember[] {
   if (members.length === 0) return [];
   if (sortMode === "wave_desc") {
+    // 从高到低连续切组：第1刀最强组，最后一刀最弱组
     return [...members].sort(compareByWave);
   }
 
@@ -498,7 +594,8 @@ function buildBattleGroups(
     const groups: BattleGroup[] = preset.groups.map((group) => ({
       key: group.key,
       label: group.label,
-      members: group.members,
+      // 组内也统一从高到低
+      members: sortMembersHighToLow(group.members),
       averageWave: group.averageWave,
       source: group.source,
     }));
@@ -508,6 +605,7 @@ function buildBattleGroups(
       (preset.missingNames.length > 0 ||
         preset.leftover.length > 0 ||
         groups.every((group) => group.members.length === 0));
+    // 内置名单本身已是最优出场，不再二次交错
     return { groups, detail: preset.detail, invalid };
   }
 
@@ -518,8 +616,8 @@ function buildBattleGroups(
 
   const ordered = orderMembersForGroups(members, sizes, plan.sortMode);
   let cursor = 0;
-  const groups = sizes.map((size, index) => {
-    const groupMembers = ordered.slice(cursor, cursor + size);
+  const rawGroups = sizes.map((size, index) => {
+    const groupMembers = sortMembersHighToLow(ordered.slice(cursor, cursor + size));
     cursor += size;
     const averageWave =
       groupMembers.length > 0
@@ -536,7 +634,13 @@ function buildBattleGroups(
           : "按音浪从高到低",
     };
   });
-  return { groups, detail, invalid: false };
+  // 自动/手动：组间改成最优直播出场顺序
+  const groups = reorderGroupsForLivePacing(rawGroups);
+  return {
+    groups,
+    detail: `${detail}；出场最优交错`,
+    invalid: false,
+  };
 }
 
 function buildStageGroups(
@@ -544,25 +648,124 @@ function buildStageGroups(
   labelPrefix = "第",
   plan: GroupPlanConfig = defaultGroupPlan()
 ): BattleGroup[] {
-  const { groups } = buildBattleGroups(members, plan);
+  const { groups } = buildBattleGroups(members, {
+    ...plan,
+    // 后继轮次强制自动切组 + 从高到低
+    sizeMode: plan.sizeMode === "preset" ? "auto" : plan.sizeMode,
+    sortMode: "wave_desc",
+  });
   if (groups.length > 0) {
+    // buildBattleGroups 已做最优交错；这里只重贴标签
     return groups.map((group, index) => ({
       ...group,
-      key: `group-${index + 1}`,
+      key: group.key || `group-${index + 1}`,
       label: `${labelPrefix}${index + 1}组`,
     }));
   }
   if (members.length === 0) return [];
-  const averageWave = members.reduce((sum, item) => sum + item.wave, 0) / members.length;
+  const sorted = sortMembersHighToLow(members);
+  const averageWave = sorted.reduce((sum, item) => sum + item.wave, 0) / sorted.length;
   return [
     {
       key: "group-1",
       label: `${labelPrefix}1组`,
-      members,
+      members: sorted,
       averageWave,
       source: "人数不足5人，先按单组显示",
     },
   ];
+}
+
+/** 汇总某人在指定轮次的有效总分（draft 优先于已存分，同 key 不重复计）。 */
+function personRoundTotal(
+  personId: number,
+  scoreMap: Map<string, number>,
+  scoreDrafts: Record<string, string>,
+  roundKeys: string[]
+) {
+  const roundSet = new Set(roundKeys);
+  const suffix = `:${personId}`;
+  let total = 0;
+  const counted = new Set<string>();
+
+  const take = (key: string, value: number) => {
+    if (counted.has(key) || !key.endsWith(suffix)) return;
+    const roundKey = key.slice(0, key.indexOf(":"));
+    if (!roundSet.has(roundKey)) return;
+    if (!Number.isFinite(value)) return;
+    counted.add(key);
+    total += value;
+  };
+
+  for (const [key, draft] of Object.entries(scoreDrafts)) {
+    if (draft === undefined || draft === "") continue;
+    const n = Number(draft);
+    if (!Number.isFinite(n)) continue;
+    take(key, n);
+  }
+  for (const [key, score] of scoreMap) {
+    if (scoreDrafts[key] !== undefined && scoreDrafts[key] !== "") continue;
+    take(key, score);
+  }
+  return total;
+}
+
+/**
+ * 晋级赛优先用内置固定名单；匹配不足时回落到「总分高→低 + 均分 N 组」。
+ */
+function buildPromotionBattleGroups(
+  allMembers: PkMember[],
+  fallbackPool: PkMember[] = []
+): BattleGroup[] {
+  const preset = resolvePresetPromotionGroups(allMembers);
+  const matched = preset.groups.filter((group) => group.members.length > 0);
+  if (matched.length > 0 && preset.missingNames.length === 0) {
+    return matched.map((group, index) => ({
+      key: group.key,
+      label: group.label || `晋级${index + 1}组`,
+      members: group.members,
+      averageWave: group.averageWave,
+      source: group.source,
+    }));
+  }
+  // 部分匹配也展示已匹配组，缺人在 source 里提示
+  if (matched.length > 0) {
+    return matched.map((group, index) => ({
+      key: group.key,
+      label: group.label || `晋级${index + 1}组`,
+      members: group.members,
+      averageWave: group.averageWave,
+      source:
+        group.missingNames.length > 0
+          ? `${group.source}（缺 ${group.missingNames.join("、")}）`
+          : group.source,
+    }));
+  }
+
+  // 完全匹配不上时，用出线池按总分均分
+  const pool = fallbackPool.length > 0 ? fallbackPool : allMembers;
+  if (pool.length === 0) return [];
+  const count = Math.min(PROMOTION_GROUP_COUNT, pool.length);
+  const base = Math.floor(pool.length / count);
+  const rest = pool.length % count;
+  const sizes = Array.from({ length: count }, (_, index) => base + (index < rest ? 1 : 0));
+  let cursor = 0;
+  const rawGroups = sizes.map((size, index) => {
+    const groupMembers = pool.slice(cursor, cursor + size);
+    cursor += size;
+    const averageWave =
+      groupMembers.length > 0
+        ? groupMembers.reduce((sum, item) => sum + item.wave, 0) / groupMembers.length
+        : 0;
+    return {
+      key: `group-${index + 1}`,
+      label: `晋级${index + 1}组`,
+      members: groupMembers,
+      averageWave,
+      source: `回落均分 · ${count}组`,
+    };
+  });
+  return reorderGroupsForLivePacing(rawGroups, "晋级");
 }
 
 function getScoreValue(
@@ -617,17 +820,6 @@ function rankGroupMembers(
   });
 }
 
-function pickRankedMember(
-  group: BattleGroup,
-  scoreMap: Map<string, number>,
-  scoreDrafts: Record<string, string>,
-  roundKey: string,
-  rankIndex: number
-) {
-  if (!groupHasScore(group, scoreMap, scoreDrafts, roundKey)) return undefined;
-  return rankGroupMembers(group, scoreMap, scoreDrafts, roundKey)[rankIndex];
-}
-
 /** 从已录分组中按名次切片（from 起取 count 人）。未录分返回空。 */
 function pickRankedMembers(
   group: BattleGroup,
@@ -662,8 +854,12 @@ function revivalCountForGroupSize(size: number) {
   return Math.max(0, size - promoteCountForGroupSize(size));
 }
 
-function isPkMember(member: PkMember | undefined): member is PkMember {
-  return Boolean(member);
+/**
+ * 晋级赛进决赛名额：固定每组第 1 名（有人则 1 席）。
+ * 晋级固定 8 组 → 共 8 人进决赛。
+ */
+function promotionFinalCountsForGroups(sizes: number[]): number[] {
+  return sizes.map((size) => (size > 0 ? 1 : 0));
 }
 
 function escapeRegExp(value: string) {
@@ -1083,7 +1279,7 @@ export function StarBattlePage() {
   const laterStagePlan = useMemo<GroupPlanConfig>(
     () => ({
       ...defaultGroupPlan(),
-      // 复活/晋级/决赛不沿用固定小组名单，按当前晋级人数自动切
+      // 复活/晋级不沿用固定小组名单，按当前出线人数自动切
       sizeMode: "auto",
       sortMode: "wave_desc",
     }),
@@ -1137,37 +1333,82 @@ export function StarBattlePage() {
       ),
     [revivalGroups, scoreDrafts, scoreMap]
   );
+  // 晋级赛：优先内置名单；回落时用小组晋级+复活出线按总分排序
+  const promotionPool = useMemo(() => {
+    const advanced = [...groupWinners, ...revivalWinners];
+    const seen = new Set<number>();
+    const unique = advanced.filter((member) => {
+      if (seen.has(member.personId)) return false;
+      seen.add(member.personId);
+      return true;
+    });
+    return [...unique].sort((a, b) => {
+      const totalDiff =
+        personRoundTotal(b.personId, scoreMap, scoreDrafts, ["group", "revival"]) -
+        personRoundTotal(a.personId, scoreMap, scoreDrafts, ["group", "revival"]);
+      return totalDiff || b.wave - a.wave || a.personId - b.personId;
+    });
+  }, [groupWinners, revivalWinners, scoreDrafts, scoreMap]);
   const promotionGroups = useMemo(
-    () => buildStageGroups([...groupWinners, ...revivalWinners], "晋级", laterStagePlan),
-    [groupWinners, laterStagePlan, revivalWinners]
+    () => buildPromotionBattleGroups(allMembers, promotionPool),
+    [allMembers, promotionPool]
+  );
+  const promotionFinalCounts = useMemo(
+    () =>
+      promotionFinalCountsForGroups(
+        promotionGroups.map((group) => group.members.length)
+      ),
+    [promotionGroups]
   );
   const promotionWinners = useMemo(
     () =>
-      promotionGroups
-        .map((group) => pickRankedMember(group, scoreMap, scoreDrafts, "promotion", 0))
-        .filter(isPkMember),
-    [promotionGroups, scoreDrafts, scoreMap]
+      promotionGroups.flatMap((group, index) =>
+        pickRankedMembers(
+          group,
+          scoreMap,
+          scoreDrafts,
+          "promotion",
+          0,
+          promotionFinalCounts[index] || 0
+        )
+      ),
+    [promotionFinalCounts, promotionGroups, scoreDrafts, scoreMap]
   );
-  const finalGroups = useMemo(
-    () => buildStageGroups(promotionWinners, "决赛", laterStagePlan),
-    [laterStagePlan, promotionWinners]
-  );
+  const finalGroups = useMemo(() => {
+    if (promotionWinners.length === 0) return [] as BattleGroup[];
+    // 决赛：晋级出线共 8 人，单组
+    const averageWave =
+      promotionWinners.reduce((sum, item) => sum + item.wave, 0) /
+      Math.max(1, promotionWinners.length);
+    return [
+      {
+        key: "final-1",
+        label: "决赛组",
+        members: promotionWinners,
+        averageWave,
+        source: `晋级赛出线 ${promotionWinners.length} 人`,
+      },
+    ];
+  }, [promotionWinners]);
   const currentGroups = useMemo(() => {
-    if (roundKey === "revival") return revivalGroups;
     if (roundKey === "promotion") return promotionGroups;
     if (roundKey === "final") return finalGroups;
     return initialGroups;
-  }, [finalGroups, initialGroups, promotionGroups, revivalGroups, roundKey]);
+  }, [finalGroups, initialGroups, promotionGroups, roundKey]);
   const roundMeta = BATTLE_ROUNDS.find((round) => round.key === roundKey) || BATTLE_ROUNDS[0];
+  const promotionFinalSlots = useMemo(
+    () => promotionFinalCounts.reduce((sum, n) => sum + n, 0),
+    [promotionFinalCounts]
+  );
   const roundHint =
-    roundKey === "revival"
-      ? `小组赛落选进入复活（当前 ${groupSeconds.length} 人）；8人取前4、7人取前4 出线；默认 ${ROUND_FIRST_START.revival} 开始连麦`
-      : roundKey === "promotion"
-        ? `小组直接晋级 ${groupWinners.length} 人 + 复活出线 ${revivalWinners.length} 人；默认 ${ROUND_FIRST_START.promotion} 开始连麦`
-        : roundKey === "final"
-          ? `晋级赛每组第1名进入决赛；默认 ${ROUND_FIRST_START.final} 开始连麦`
-          : groupPlan.sizeMode === "preset"
-            ? "小组赛：8人组前4晋级后4复活，7人组前4晋级后3复活；可拖动调整出场顺序"
+    roundKey === "promotion"
+      ? `内置晋级 ${promotionGroups.length || PROMOTION_GROUP_COUNT} 组；每组晋级 1 人，共 ${promotionFinalSlots || PROMOTION_FINAL_SLOTS} 人；全部结束后进决赛；${ROUND_FIRST_START.promotion} 起 / 间隔 15 分钟；无复活赛`
+      : roundKey === "final"
+        ? `等待晋级赛结束；每组第 1 名共 ${promotionWinners.length || PROMOTION_FINAL_SLOTS} 人进入决赛；默认 ${ROUND_FIRST_START.final} 开始连麦`
+        : groupPlan.sizeMode === "preset"
+          ? "小组赛：使用内置固定分组；可改「自动」——先在 PK 15号名单录入参赛人，再按音浪自动切组"
+          : groupPlan.sizeMode === "auto"
+            ? "小组赛：先录参赛名单，按音浪从高到低切组，组间最优出场（中上开场→穿插弱组→最强冲高→次强收尾）"
             : groupPlan.sortMode === "top_wave_rest_volatility"
               ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
               : "按音浪从高到低分组；沿用 PK 15号名单";
@@ -1361,6 +1602,47 @@ export function StarBattlePage() {
     setSaveMessage(matched > 0 ? `已匹配并保存 ${matched} 人` : "未匹配到当前轮次人员");
   };
 
+  /**
+   * 从抖音监控分数账本同步最终分到当前轮次计分表。
+   * 规则：连麦/PK 按分组出场顺序进行 —— 第 N 场最终分写入第 N 组。
+   */
+  const syncScoresFromMonitorLedger = async () => {
+    if (currentGroups.length === 0) {
+      setSaveMessage("当前轮次没有分组，无法同步");
+      return;
+    }
+    const ledger = loadMonitorMatchLedger();
+    const finished = ledger.filter((row) => row.status === "finished" && row.scores.some((score) => score.score > 0));
+    if (finished.length === 0) {
+      setSaveMessage("监控账本里还没有已结束的最终分，请先在抖音监控完成至少一场 PK");
+      return;
+    }
+    const hits = collectScoreSyncHits({
+      groups: currentGroups,
+      rounds: finished,
+      finishedOnly: true,
+      mode: "slot",
+    });
+    if (hits.length === 0) {
+      setSaveMessage(
+        `账本有 ${finished.length} 场最终分，但按出场顺序未匹配到「${roundMeta.label}」组内主播（请核对主播ID/昵称）`
+      );
+      return;
+    }
+    let saved = 0;
+    const slotSet = new Set<number>();
+    for (const hit of hits) {
+      const scoreText = String(hit.score);
+      updateDraft(hit.groupKey, hit.personId, scoreText);
+      await saveScore(hit.groupKey, hit.personId, scoreText);
+      saved += 1;
+      slotSet.add(hit.groupSlot);
+    }
+    setSaveMessage(
+      `已按出场顺序同步 ${saved} 人 / ${slotSet.size} 组到${roundMeta.label}（监控 ${finished.length} 场 → 分组 1..${currentGroups.length}）`
+    );
+  };
+
   const exportCurrentGroups = async () => {
     if (!exportRef.current || currentGroups.length === 0) return;
     setExporting(true);
@@ -1508,6 +1790,64 @@ export function StarBattlePage() {
     });
     return offRank;
   }, [appendMonitorLogs, currentGroups, roundMeta.label, saveScore, updateDraft]);
+
+  // 监控 PK 结束后：按「第 N 场 → 第 N 组」把最终分写入当前轮次计分表
+  useEffect(() => {
+    const api = getDataApi();
+    if (!api?.onLivePkEvent) return;
+    const syncedBattleIds = new Set<string>();
+    const offEventScores = api.onLivePkEvent((payload: LivePkEventPayload) => {
+      if (payload.eventType !== "pk-score-snapshot" && payload.eventType !== "pk-battle") return;
+      const phase = String(payload.battlePhase || "").toLowerCase();
+      const countdown = payload.pkCountDown;
+      const finished =
+        (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && payload.isPkActive === false)
+        || (countdown !== undefined && Number(countdown) <= 0)
+        || ["punish", "end", "finish", "finished", "settled", "result", "settle", "over"].includes(phase);
+      if (!finished) return;
+      const battleId = String(payload.battleId || "");
+      if (battleId && syncedBattleIds.has(battleId)) return;
+
+      // 以监控账本为准（多场顺序稳定），按出场顺序映射到当前轮次分组
+      const ledger = loadMonitorMatchLedger();
+      const hits = collectScoreSyncHits({
+        groups: currentGroups,
+        rounds: ledger,
+        finishedOnly: true,
+        mode: "slot",
+      });
+      // 只写本场 battle 对应的那一组
+      const slotHits = battleId
+        ? hits.filter((hit) => hit.battleId === battleId)
+        : hits.slice(-Math.max(1, currentGroups.length));
+      if (slotHits.length === 0) return;
+
+      let matched = 0;
+      for (const hit of slotHits) {
+        const scoreText = String(hit.score);
+        updateDraft(hit.groupKey, hit.personId, scoreText);
+        void saveScore(hit.groupKey, hit.personId, scoreText);
+        matched += 1;
+      }
+      if (battleId) syncedBattleIds.add(battleId);
+      if (matched > 0) {
+        const slot = slotHits[0]?.groupSlot || 0;
+        const groupLabel = slotHits[0]?.groupLabel || "";
+        setMonitorMessage(`第${slot}场最终分 → ${groupLabel}，已写入 ${matched} 人`);
+        appendMonitorLogs([{
+          at: new Date(payload.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }),
+          type: "score",
+          name: "最终分",
+          userId: battleId,
+          value: String(matched),
+          detail: `第${slot}场连麦/PK → ${groupLabel} · 同步 ${matched} 人`,
+        }]);
+      }
+    });
+    return () => {
+      offEventScores?.();
+    };
+  }, [appendMonitorLogs, currentGroups, saveScore, updateDraft]);
 
   useEffect(() => {
     const api = getDataApi();
@@ -1770,9 +2110,20 @@ export function StarBattlePage() {
                     >
                       手动
                     </Button>
+<div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        window.dispatchEvent(new CustomEvent("app:navigate", { detail: "pk" }))
+                      }
+                    >
+                      编辑参赛名单
+                    </Button>
                     <Button size="sm" variant="outline" onClick={fillManualToTotal}>
                       按当前人数生成
                     </Button>
+                  </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {groupPlan.manualCounts.map((row) => (
@@ -1836,10 +2187,12 @@ export function StarBattlePage() {
                     </div>
                     <div>
                       {groupPlan.sizeMode === "preset"
-                        ? "使用内置 7 组固定名单（8+8+8+8+7+7+7），不随音浪实时重排。"
-                        : groupPlan.sortMode === "top_wave_rest_volatility"
-                          ? "前两组按总音浪排名截取；其余按日振幅/去峰日均排序，波动大的优先同组。"
-                          : "所有组都按总音浪从高到低连续切分。"}
+                        ? "使用内置 7 组固定名单，不随音浪实时重排。不确定谁打谁不打时请改用「自动」。"
+                        : groupPlan.sizeMode === "auto"
+                          ? "人员从高到低切组；组间最优出场（中上开场→穿插弱组→最强冲高→次强收尾）。名单变了分组会跟着变。"
+                          : groupPlan.sortMode === "top_wave_rest_volatility"
+                            ? "前两组按总音浪排名截取；其余按日振幅/去峰日均排序，波动大的优先同组；组间再套最优出场。"
+                            : "所有组都按总音浪从高到低连续切分，组间最优出场。"}
                     </div>
                   </div>
                 </div>
@@ -1861,11 +2214,14 @@ export function StarBattlePage() {
                 <Button size="sm" onClick={applyBulkScores}>
                   保存匹配到的分数
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => void syncScoresFromMonitorLedger()}>
+                  从监控账本同步
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setBulkText("")}>
                   清空文本
                 </Button>
                 <span className="text-xs text-muted-foreground">
-                  复制 PK 页面文本后可一次匹配当前轮次人员。
+                  复制 PK 页面文本后可一次匹配当前轮次人员；也可直接同步抖音监控最终分。
                 </span>
               </div>
             </CardContent>
@@ -1918,6 +2274,9 @@ export function StarBattlePage() {
                 <Button size="sm" variant="outline" onClick={stopMonitor}>
                   停止
                 </Button>
+                <Button size="sm" variant="default" onClick={() => void syncScoresFromMonitorLedger()}>
+                  同步最终分到计分表
+                </Button>
                 <Badge variant={monitorStatus.status === "running" ? "default" : "outline"}>
                   {monitorStatus.status === "running"
                     ? "监控中"
@@ -1928,7 +2287,7 @@ export function StarBattlePage() {
                         : "未启动"}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
-                  {monitorMessage || monitorStatus.lastError || "收到直播排行后自动写入当前轮次分数"}
+                  {monitorMessage || monitorStatus.lastError || "连麦按分组顺序打：第N场最终分 → 第N组计分表"}
                 </span>
               </div>
               <div className="rounded-lg border border-border bg-muted/20">
@@ -1991,6 +2350,13 @@ export function StarBattlePage() {
                 onSave={saveScore}
                 onQuickAdd={quickAddScore}
                 scheduleTime={scheduleTime}
+                finalSlots={
+                  roundKey === "promotion"
+                    ? promotionFinalCounts[
+                        currentGroups.findIndex((item) => item.key === group.key)
+                      ] || 0
+                    : 0
+                }
                 compact
                 draggable={roundKey === "group"}
                 dragging={draggingGroupKey === group.key}
@@ -2018,7 +2384,13 @@ export function StarBattlePage() {
           <Card>
             <CardContent className="py-8 text-center">
               <div className="text-base font-bold">{roundMeta.label}暂无名单</div>
-              <div className="mt-2 text-sm text-muted-foreground">{roundHint}，请先录入上一轮分数。</div>
+              <div className="mt-2 text-sm text-muted-foreground">
+                {roundKey === "promotion"
+                  ? "内置晋级名单未匹配到主播，请确认 15 号白名单与当月音浪数据。"
+                  : roundKey === "final"
+                    ? "请先在晋级赛录入各组成绩；每组第 1 名进入决赛（无复活赛）。"
+                    : `${roundHint}`}
+              </div>
             </CardContent>
           </Card>
         )}
@@ -2244,6 +2616,49 @@ const BattleExportBoard = React.forwardRef<
           <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700, color: "rgba(255,255,255,0.92)" }}>
             {periodDisplay} · {roundLabel} · 共 {totalPeople} 人
           </div>
+          {(roundKey === "promotion" || roundKey === "final") && (
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+              }}
+            >
+              {(
+                roundKey === "promotion"
+                  ? [
+                      "规则：每组晋级 1 人",
+                      "规则：等待晋级赛全部结束后进入决赛即可",
+                      "规则：无复活赛",
+                      `时间：${ROUND_FIRST_START.promotion} 起 · 间隔 15 分钟`,
+                    ]
+                  : [
+                      "规则：晋级赛每组第 1 名进入决赛",
+                      "规则：等待晋级赛全部结束后进入决赛即可",
+                      "规则：无复活赛",
+                      `时间：${ROUND_FIRST_START.final} 开始连麦`,
+                    ]
+              ).map((text) => (
+                <span
+                  key={text}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "5px 10px",
+                    borderRadius: 999,
+                    background: "rgba(255,255,255,0.22)",
+                    border: "1px solid rgba(255,255,255,0.35)",
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  {text}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
           <div
@@ -2632,6 +3047,7 @@ function GroupCard({
   onSave,
   onQuickAdd,
   scheduleTime = "",
+  finalSlots = 0,
   compact = false,
   draggable = false,
   dragging = false,
@@ -2650,6 +3066,8 @@ function GroupCard({
   onSave: (groupKey: string, personId: number, value: string) => void;
   onQuickAdd: (groupKey: string, personId: number, delta: number) => void;
   scheduleTime?: string;
+  /** 晋级赛该组进决赛名额 */
+  finalSlots?: number;
   compact?: boolean;
   draggable?: boolean;
   dragging?: boolean;
@@ -2683,7 +3101,10 @@ function GroupCard({
       if (rank <= promote) return "晋级";
       return "";
     }
-    if (roundKey === "promotion" && rank === 1) return "决赛";
+    if (roundKey === "promotion") {
+      if (finalSlots > 0 && rank <= finalSlots) return "决赛";
+      return "";
+    }
     if (roundKey === "final" && rank === 1) return "冠军";
     return "";
   };

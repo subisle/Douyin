@@ -76,7 +76,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: "douyin-monitor",
     label: "抖音监控",
     icon: MonitorPlay,
-    description: "直播画面与事件流",
+    description: "分数监控、直播画面与事件流",
     adminOnly: true,
   },
   {

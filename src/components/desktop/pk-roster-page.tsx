@@ -12,12 +12,17 @@ import { downloadDataUrlAsFile, elementToPngDataUrl } from "./export-image";
 import { cn } from "@/lib/utils";
 import type { PkMember, IpcResult } from "@/types/electron";
 import {
+  BATTLE_STAGE_TAB_OPTIONS,
   DEFAULT_PK_GROUP_SIZE,
+  PRESET_PROMOTION_GROUPS,
   PRESET_ROSTER_TEXT,
   ROSTER_CONFIG_STORAGE_KEY,
   ROSTER_SLOT_OPTIONS,
   loadRosterConfigs,
+  resolvePresetBattleGroups,
+  resolvePresetPromotionGroups,
   resolveRosterNames,
+  type BattleStageTab,
   type RosterConfig,
   type RosterSlot,
 } from "./pk-roster-config";
@@ -602,6 +607,9 @@ export function PkRosterPage() {
   const [error, setError] = useState<string | null>(null);
   const [rosterSlot, setRosterSlot] = useState<RosterSlot>("midmonth");
   const [rosterConfigs, setRosterConfigs] = useState<Record<RosterSlot, RosterConfig>>(loadRosterConfigs);
+  /** 15号：常规自动分组 / 争霸赛三轮分组 */
+  const [midmonthView, setMidmonthView] = useState<"auto" | "battle">("auto");
+  const [battleStage, setBattleStage] = useState<BattleStageTab>("group");
 
   // 后端返回的扁平列表
   const [rawMales, setRawMales] = useState<PkMember[]>([]);
@@ -707,6 +715,61 @@ export function PkRosterPage() {
     [assignCaptains, rosterMembers.females]
   );
 
+  /** 15号争霸赛：小组 / 复活 / 晋级 内置分组（按当前名单成员匹配） */
+  const battlePool = useMemo(() => {
+    // 争霸赛只看男团 + 白名单过滤后的名单
+    return rosterMembers.males;
+  }, [rosterMembers.males]);
+
+  const groupStagePreset = useMemo(
+    () => resolvePresetBattleGroups(battlePool),
+    [battlePool]
+  );
+  const promotionStagePreset = useMemo(
+    () => resolvePresetPromotionGroups(battlePool),
+    [battlePool]
+  );
+
+  const battleStageGroups = useMemo(() => {
+    if (battleStage === "promotion") {
+      return promotionStagePreset.groups.map((group, index) => ({
+        key: group.key,
+        gender: "male" as const,
+        label: group.label || `晋级${index + 1}组`,
+        members: group.members,
+        captainId: null as number | null,
+      }));
+    }
+    return groupStagePreset.groups.map((group, index) => ({
+      key: group.key,
+      gender: "male" as const,
+      label: group.label || `第${index + 1}组`,
+      members: group.members,
+      captainId: null as number | null,
+    }));
+  }, [battleStage, groupStagePreset.groups, promotionStagePreset.groups]);
+
+  const battleStageMeta = useMemo(() => {
+    if (battleStage === "promotion") {
+      return {
+        detail: promotionStagePreset.detail,
+        missing: promotionStagePreset.missingNames,
+        note: `内置晋级 ${PRESET_PROMOTION_GROUPS.length} 组 · 每组晋级 1 人 · 无复活赛 · 全部结束后进决赛`,
+      };
+    }
+    return {
+      detail: groupStagePreset.detail,
+      missing: groupStagePreset.missingNames,
+      note: "内置小组赛 7 组；可在星嗨争霸赛拖动出场顺序",
+    };
+  }, [
+    battleStage,
+    groupStagePreset.detail,
+    groupStagePreset.missingNames,
+    promotionStagePreset.detail,
+    promotionStagePreset.missingNames,
+  ]);
+
   /** 确认排除 */
   const handleConfirmExclude = useCallback((newExcluded: Set<number>) => {
     const names = allMembers
@@ -787,7 +850,9 @@ export function PkRosterPage() {
       </div>
 
       <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-        💡 系统按去最高后日均音浪从高到低自动分组，默认每组最多 {DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组{assignCaptains ? "、队长" : ""}和成员名单。
+        💡 {rosterSlot === "midmonth" && midmonthView === "battle"
+          ? "15号争霸赛分组：小组赛 / 晋级赛。晋级赛每组晋级 1 人，全部结束后进入决赛；无复活赛。"
+          : `系统按去最高后日均音浪从高到低自动分组，默认每组最多 ${DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组${assignCaptains ? "、队长" : ""}和成员名单。`}
       </div>
 
       <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
@@ -810,6 +875,34 @@ export function PkRosterPage() {
                 </button>
               ))}
             </div>
+            {rosterSlot === "midmonth" && (
+              <div className="flex rounded-md border border-border bg-background p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setMidmonthView("auto")}
+                  className={cn(
+                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
+                    midmonthView === "auto"
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  自动分组
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMidmonthView("battle")}
+                  className={cn(
+                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
+                    midmonthView === "battle"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  争霸赛分组
+                </button>
+              </div>
+            )}
             <div className="flex rounded-md border border-border bg-background p-0.5">
               <button
                 type="button"
@@ -921,6 +1014,63 @@ export function PkRosterPage() {
         <ErrorState message={error} onRetry={fetchRoster} />
       ) : rawMales.length === 0 && rawFemales.length === 0 ? (
         <EmptyState label={`${displayPeriod} 月暂无音浪数据`} />
+      ) : rosterSlot === "midmonth" && midmonthView === "battle" ? (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
+            <div className="flex flex-wrap gap-2">
+              {BATTLE_STAGE_TAB_OPTIONS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setBattleStage(item.key)}
+                  className={cn(
+                    "h-9 rounded-md px-3 text-sm font-bold transition",
+                    battleStage === item.key
+                      ? "bg-primary text-primary-foreground"
+                      : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
+              <Badge variant="secondary">
+                {battleStageGroups.length} 组 ·{" "}
+                {battleStageGroups.reduce((sum, group) => sum + group.members.length, 0)} 人
+              </Badge>
+              <Badge variant="outline">{battleStageMeta.detail}</Badge>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border bg-muted/20 px-4 py-2 text-sm text-muted-foreground">
+            {BATTLE_STAGE_TAB_OPTIONS.find((item) => item.key === battleStage)?.description}
+            {" · "}
+            {battleStageMeta.note}
+            {battleStageMeta.missing.length > 0 && (
+              <span className="ml-2 text-destructive">
+                缺：{battleStageMeta.missing.slice(0, 8).join("、")}
+                {battleStageMeta.missing.length > 8 ? "…" : ""}
+              </span>
+            )}
+          </div>
+
+          {battleStageGroups.length > 0 ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {battleStageGroups.map((group, index) => (
+                <GroupCard key={group.key} group={group} index={index} />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              label={
+                battleStage === "promotion"
+                  ? "内置晋级名单未匹配到主播，请确认 15 号白名单与当月音浪数据"
+                  : "内置小组赛名单未匹配到主播"
+              }
+            />
+          )}
+        </div>
       ) : (
         <div className="space-y-6">
           {/* 男团 */}

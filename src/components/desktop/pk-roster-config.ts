@@ -85,7 +85,6 @@ const ROSTER_NAME_ALIASES: Record<string, string> = {
  * 星嗨争霸赛 / 15号 PK 小组赛内置固定分组（锁定版）。
  * 54人：8+7+8+7+8+8+8
  * 出场：中上开场 → 最弱 → 中下 → 次弱 → 中游 → 最强冲高 → 次强收尾
- * 时间按场次固定：12:15 起，每场 10 分钟 + 间隔 5 分钟
  * 出线：8人组前4晋级后4复活；7人组前4晋级后3复活
  */
 export const PRESET_BATTLE_GROUPS: string[][] = [
@@ -105,7 +104,50 @@ export const PRESET_BATTLE_GROUPS: string[][] = [
   ["狼小宝", "狼腾", "玖玥", "玖玉", "狼兴", "狼博", "狼明", "玖柒"],
 ];
 
-export function resolvePresetBattleGroups(allMembers: PkMember[]) {
+/**
+ * 星嗨争霸赛晋级赛内置固定分组（锁定版）。
+ * 37人 / 8 组（5+5+5+5+5+4+4+4），蛇形均衡后按最优直播出场重排。
+ * 出场：中上开场 → 最弱 → 中游 → 次弱 → 中 → 中下 → 最强冲高 → 次强收尾
+ * 时间：20:15 起，每场间隔 15 分钟
+ * 出线：每组第 1 名进决赛（共 8 人）
+ */
+export const PRESET_PROMOTION_GROUPS: string[][] = [
+  // 第1场 20:15 · 中上开场（种子3）
+  ["狼澈", "啸安", "啸宇", "啸阳", "狼旭"],
+  // 第2场 20:30 · 最弱（种子8）
+  ["狼仔", "玖玉", "浩玟", "狼泽"],
+  // 第3场 20:45 · 中游（种子5）—— 狼腾 / 玖妹 不同组
+  ["狼腾", "浩哲", "浩辰", "浩运", "狼征"],
+  // 第4场 21:00 · 次弱（种子7）
+  ["狼明", "啸帆", "狼小宝", "啸强"],
+  // 第5场 21:15 · 中（种子4）
+  ["南方楠", "玖妹", "浩雨", "狼九", "狼兴"],
+  // 第6场 21:30 · 中下回温（种子6）
+  ["玖玥", "狼轩", "玖柒", "浩杰"],
+  // 第7场 21:45 · 最强冲高（种子1）
+  ["浩鸣", "狼凯", "狼赫", "浩艺", "浩启"],
+  // 第8场 22:00 · 次强收尾（种子2）
+  ["浩冬", "狼辉", "浩阳", "啸森", "狼哲"],
+];
+
+/** 晋级赛内置组数（与 PRESET_PROMOTION_GROUPS 同步） */
+export const PRESET_PROMOTION_GROUP_COUNT = PRESET_PROMOTION_GROUPS.length;
+
+export type NamedBattleGroupResult = {
+  key: string;
+  label: string;
+  members: PkMember[];
+  averageWave: number;
+  missingNames: string[];
+  source: string;
+};
+
+function resolveNamedBattleGroups(
+  nameGroups: string[][],
+  allMembers: PkMember[],
+  source: string,
+  labelPrefix = "第"
+) {
   const byName = new Map<string, PkMember[]>();
   allMembers.forEach((member) => {
     const key = canonicalRosterName(member.name);
@@ -115,7 +157,7 @@ export function resolvePresetBattleGroups(allMembers: PkMember[]) {
   });
 
   const usedIds = new Set<number>();
-  const groups = PRESET_BATTLE_GROUPS.map((names, index) => {
+  const groups: NamedBattleGroupResult[] = nameGroups.map((names, index) => {
     const members: PkMember[] = [];
     const missingNames: string[] = [];
     names.forEach((name) => {
@@ -136,17 +178,17 @@ export function resolvePresetBattleGroups(allMembers: PkMember[]) {
         : 0;
     return {
       key: `group-${index + 1}`,
-      label: `第${index + 1}组`,
+      label: `${labelPrefix}${index + 1}组`,
       members,
       averageWave,
       missingNames,
-      source: "内置固定分组",
+      source,
     };
   });
 
   const leftover = allMembers.filter((member) => !usedIds.has(member.personId));
   const missingNames = groups.flatMap((group) => group.missingNames);
-  const expected = PRESET_BATTLE_GROUPS.reduce((sum, row) => sum + row.length, 0);
+  const expected = nameGroups.reduce((sum, row) => sum + row.length, 0);
   const assigned = groups.reduce((sum, group) => sum + group.members.length, 0);
 
   return {
@@ -157,14 +199,47 @@ export function resolvePresetBattleGroups(allMembers: PkMember[]) {
     assigned,
     detail:
       missingNames.length > 0 || leftover.length > 0
-        ? `内置固定分组 ${assigned}/${expected} 人` +
+        ? `${source} ${assigned}/${expected} 人` +
           (missingNames.length ? `，缺 ${missingNames.join("、")}` : "") +
           (leftover.length
             ? `，未入组 ${leftover.map((item) => item.name).join("、")}`
             : "")
-        : `内置固定分组 ${groups.map((group) => `${group.members.length}人`).join(" + ")}`,
+        : `${source} ${groups.map((group) => `${group.members.length}人`).join(" + ")}`,
   };
 }
+
+export function resolvePresetBattleGroups(allMembers: PkMember[]) {
+  return resolveNamedBattleGroups(PRESET_BATTLE_GROUPS, allMembers, "内置小组赛分组", "第");
+}
+
+export function resolvePresetPromotionGroups(allMembers: PkMember[]) {
+  return resolveNamedBattleGroups(
+    PRESET_PROMOTION_GROUPS,
+    allMembers,
+    "内置晋级赛分组",
+    "晋级"
+  );
+}
+
+/** 15号争霸赛分组页签 */
+export type BattleStageTab = "group" | "promotion";
+
+export const BATTLE_STAGE_TAB_OPTIONS: {
+  key: BattleStageTab;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: "group",
+    label: "小组赛分组",
+    description: "内置 7 组固定名单",
+  },
+  {
+    key: "promotion",
+    label: "晋级赛分组",
+    description: "内置 8 组；每组晋级 1 人，晋级赛全部结束后进入决赛；无复活赛",
+  },
+];
 
 export const ROSTER_SLOT_OPTIONS: { key: RosterSlot; label: string; shortLabel: string }[] = [
   { key: "midmonth", label: "15号分组名单", shortLabel: "15号" },
