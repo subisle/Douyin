@@ -2,14 +2,22 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowRight,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
+  CircleCheckBig,
   ClipboardPaste,
   Download,
   GripVertical,
+  ListChecks,
+  LockKeyhole,
+  MonitorUp,
   RefreshCw,
   Sparkles,
+  Trophy,
   Users,
+  X,
 } from "lucide-react";
 import { getDataApi } from "@/client/http-electron-api";
 import { Badge } from "@/components/ui/badge";
@@ -18,12 +26,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import type {
   IpcResult,
-  LivePkMonitorStatus,
-  LivePkChatPayload,
-  LivePkEventPayload,
-  LivePkGiftPayload,
-  LivePkMemberPayload,
-  LivePkRankPayload,
   PkMember,
   PkRosterData,
   StarBattleScore,
@@ -45,8 +47,12 @@ import {
   type RosterSlot,
 } from "./pk-roster-config";
 import {
+  beginMonitorScoreSyncContext,
   collectScoreSyncHits,
   loadMonitorMatchLedger,
+  loadMonitorScoreSyncContext,
+  monitorRoundsForSyncContext,
+  type MonitorScoreSyncContext,
 } from "./monitor-score-sync";
 
 interface BattleGroup {
@@ -55,6 +61,7 @@ interface BattleGroup {
   members: PkMember[];
   averageWave: number;
   source?: string;
+  incomplete?: boolean;
 }
 
 const MIN_GROUP_SIZE = 5;
@@ -91,6 +98,7 @@ const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v6";
 const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v19";
 // 小组赛分组拖动顺序；v7：配合内置最优出场
 const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v7";
+const ACTIVE_ROUND_STORAGE_KEY = "star-battle-active-round-v1";
 
 /** 晋级赛默认组数 / 决赛席位（与内置晋级名单同步，每组出 1 人） */
 const PROMOTION_GROUP_COUNT = PRESET_PROMOTION_GROUP_COUNT;
@@ -355,14 +363,12 @@ const BATTLE_ROUNDS = [
 
 type BattleRoundKey = (typeof BATTLE_ROUNDS)[number]["key"];
 
-interface MonitorLogRow {
-  id: string;
-  at: string;
-  type: "score" | "gift" | "chat" | "member" | "event" | "status";
-  name: string;
-  userId: string;
-  value: string;
-  detail: string;
+function loadActiveRound(): BattleRoundKey {
+  if (typeof window === "undefined") return "group";
+  const saved = window.localStorage.getItem(ACTIVE_ROUND_STORAGE_KEY);
+  return BATTLE_ROUNDS.some((round) => round.key === saved)
+    ? saved as BattleRoundKey
+    : "group";
 }
 
 function currentPeriod(): string {
@@ -739,6 +745,7 @@ function buildPromotionBattleGroups(
         group.missingNames.length > 0
           ? `${group.source}（缺 ${group.missingNames.join("、")}）`
           : group.source,
+      incomplete: group.missingNames.length > 0,
     }));
   }
 
@@ -806,6 +813,17 @@ function groupHasScore(
   );
 }
 
+function groupIsSettled(
+  group: BattleGroup,
+  scoreMap: Map<string, number>,
+  scoreDrafts: Record<string, string>,
+  roundKey: string
+) {
+  return group.members.length > 0 && group.members.every((member) =>
+    hasScoreEntry(scoreMap, scoreDrafts, roundKey, group.key, member.personId)
+  );
+}
+
 function rankGroupMembers(
   group: BattleGroup,
   scoreMap: Map<string, number>,
@@ -820,7 +838,7 @@ function rankGroupMembers(
   });
 }
 
-/** 从已录分组中按名次切片（from 起取 count 人）。未录分返回空。 */
+/** 从已结算分组中按名次切片（from 起取 count 人）。未录完返回空。 */
 function pickRankedMembers(
   group: BattleGroup,
   scoreMap: Map<string, number>,
@@ -830,7 +848,7 @@ function pickRankedMembers(
   count: number
 ) {
   if (count <= 0) return [] as PkMember[];
-  if (!groupHasScore(group, scoreMap, scoreDrafts, roundKey)) return [] as PkMember[];
+  if (!groupIsSettled(group, scoreMap, scoreDrafts, roundKey)) return [] as PkMember[];
   return rankGroupMembers(group, scoreMap, scoreDrafts, roundKey).slice(
     Math.max(0, fromIndex),
     Math.max(0, fromIndex) + count
@@ -890,197 +908,6 @@ function findScoreInText(text: string, member: PkMember) {
   return "";
 }
 
-function namesMatch(a: string, b: string) {
-  const left = a.trim().toLowerCase();
-  const right = b.trim().toLowerCase();
-  if (!left || !right) return false;
-  return left === right || left.includes(right) || right.includes(left);
-}
-
-function monitorName(payload: {
-  nickname?: string;
-  realName?: string;
-  displayName?: string;
-  isMystery?: boolean;
-}) {
-  const realName = payload.realName || payload.nickname || "";
-  const displayName = payload.displayName || "";
-  if (payload.isMystery && displayName && realName && displayName !== realName) {
-    return `${realName}(${displayName})`;
-  }
-  return realName || displayName || "未知";
-}
-
-function monitorIdentityDetail(payload: {
-  displayName?: string;
-  realName?: string;
-  secUid?: string;
-  uniqueId?: string;
-  isMystery?: boolean;
-  mysteryMan?: number;
-  userLevel?: number;
-  badgeLevel?: number;
-  consumeLevel?: number;
-  payScore?: number;
-  totalRechargeDiamondCount?: number;
-  fanTicketCount?: number;
-  ipLocation?: string;
-  followerCount?: number;
-  cacheHit?: boolean;
-}) {
-  const parts: string[] = [];
-  if (payload.cacheHit) parts.push("缓存命中");
-  if (payload.isMystery) parts.push(`神秘人${payload.mysteryMan ? `L${payload.mysteryMan}` : ""}`);
-  if (payload.displayName && payload.realName && payload.displayName !== payload.realName) {
-    parts.push(`${payload.displayName} -> ${payload.realName}`);
-  }
-  if (payload.uniqueId) parts.push(`抖音号:${payload.uniqueId}`);
-  if (payload.secUid) parts.push(`sec:${payload.secUid.slice(0, 12)}...`);
-  if (payload.userLevel) parts.push(`用户等级:${payload.userLevel}`);
-  if (payload.badgeLevel) parts.push(`徽章等级:${payload.badgeLevel}`);
-  if (payload.consumeLevel) parts.push(`财富等级:${payload.consumeLevel}`);
-  if (payload.payScore) parts.push(`付费分:${payload.payScore}`);
-  if (payload.totalRechargeDiamondCount) parts.push(`充值钻石:${payload.totalRechargeDiamondCount}`);
-  if (payload.fanTicketCount) parts.push(`粉丝票:${payload.fanTicketCount}`);
-  if (payload.ipLocation) parts.push(`IP:${payload.ipLocation}`);
-  if (payload.followerCount) parts.push(`粉丝:${payload.followerCount}`);
-  return parts.join(" / ");
-}
-
-function eventLabel(eventType: string) {
-  const labels: Record<string, string> = {
-    "room-user-seq": "在线榜",
-    "room-stats": "在线人数",
-    fansclub: "粉丝团",
-    social: "社交",
-    like: "点赞",
-    "pico-like": "互动点赞",
-    "chat-like": "弹幕点赞",
-    "room-message": "房间消息",
-    "room-verify": "房间校验",
-    "room-start": "开播",
-    "short-touch-area": "短触区",
-    "in-room-banner": "房间横幅",
-    "ranklist-hour-entrance": "小时榜",
-    "rank-list-hour-enter": "小时榜",
-    "gift-update": "礼物更新",
-    "linkmic-score": "连线分数",
-  };
-  return labels[eventType] || eventType;
-}
-
-function textValue(value: unknown) {
-  if (value === null || value === undefined || value === "") return "";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return "";
-}
-
-function monitorEventValue(payload: LivePkEventPayload) {
-  if (typeof payload.displayValue === "number" && payload.displayValue > 0) return String(payload.displayValue);
-  if (typeof payload.totalUser === "number" && payload.totalUser > 0) return String(payload.totalUser);
-  if (typeof payload.hotScore === "number" && payload.hotScore > 0) return String(payload.hotScore);
-  if (typeof payload.count === "number" && payload.count > 0) return String(payload.count);
-  if (typeof payload.total === "number" && payload.total > 0) return String(payload.total);
-  if (typeof payload.followCount === "number" && payload.followCount > 0) return String(payload.followCount);
-  return "";
-}
-
-function monitorEventDetail(payload: LivePkEventPayload) {
-  const detail = monitorIdentityDetail(payload);
-  const body =
-    payload.eventType === "room-stats"
-      ? [
-          payload.displayShort,
-          payload.displayMiddle,
-          payload.displayLong,
-          payload.total ? `累计 ${payload.total}` : "",
-        ].filter(Boolean).join(" / ")
-      : payload.eventType === "room-user-seq"
-        ? [
-            payload.totalUserText || (payload.totalUser ? `在线 ${payload.totalUser}` : ""),
-            payload.popularityText || (payload.popularity ? `人气 ${payload.popularity}` : ""),
-            payload.upRightStatsText,
-            payload.ranks?.length ? `榜单 ${payload.ranks.length} 人` : "",
-          ].filter(Boolean).join(" / ")
-        : payload.eventType === "like" || payload.eventType === "pico-like"
-          ? [
-              payload.count ? `本次 ${payload.count}` : "",
-              payload.total ? `累计 ${payload.total}` : "",
-              textValue(payload.emoji),
-              textValue(payload.scene),
-            ].filter(Boolean).join(" / ")
-          : payload.eventType === "chat-like"
-            ? [
-                payload.count ? `弹幕点赞 ${payload.count}` : "",
-                Array.isArray(payload.entries) ? `${payload.entries.length} 条消息` : "",
-              ].filter(Boolean).join(" / ")
-          : payload.eventType === "social"
-            ? [
-                payload.action !== undefined ? `动作 ${textValue(payload.action)}` : "",
-                payload.followCount ? `关注数 ${payload.followCount}` : "",
-                textValue(payload.shareTarget),
-              ].filter(Boolean).join(" / ")
-            : payload.eventType === "fansclub"
-              ? [
-                  textValue(payload.content),
-                  payload.leftDiamond ? `剩余钻石 ${payload.leftDiamond}` : "",
-                ].filter(Boolean).join(" / ")
-              : payload.eventType === "linkmic-score"
-                ? [
-                    payload.hotScore ? `热度分 ${payload.hotScore}` : "",
-                    payload.scoreSource !== undefined ? `来源 ${textValue(payload.scoreSource)}` : "",
-                    textValue(payload.extra),
-                  ].filter(Boolean).join(" / ")
-                : payload.eventType === "short-touch-area"
-                  ? [
-                      textValue(payload.name),
-                      payload.messageType !== undefined ? `消息类型 ${textValue(payload.messageType)}` : "",
-                      textValue(payload.containerPayload),
-                    ].filter(Boolean).join(" / ")
-                  : payload.eventType === "in-room-banner"
-                    ? [
-                        payload.position !== undefined ? `位置 ${textValue(payload.position)}` : "",
-                        payload.actionType !== undefined ? `动作 ${textValue(payload.actionType)}` : "",
-                        textValue(payload.containerUrl),
-                        textValue(payload.lynxContainerUrl),
-                      ].filter(Boolean).join(" / ")
-                    : payload.eventType === "gift-update"
-                      ? [
-                          payload.updateType !== undefined ? `更新 ${textValue(payload.updateType)}` : "",
-                          Array.isArray(payload.updateGiftIds) ? `礼物 ${payload.updateGiftIds.length}` : "",
-                          Array.isArray(payload.updateAssetIds) ? `资产 ${payload.updateAssetIds.length}` : "",
-                        ].filter(Boolean).join(" / ")
-                : [
-                    textValue(payload.content),
-                    textValue(payload.tipContent),
-                    textValue(payload.displayLong),
-                    payload.infoBytes ? `info ${payload.infoBytes} bytes` : "",
-                  ].filter(Boolean).join(" / ");
-  return [detail, body, payload.method].filter(Boolean).join(" / ");
-}
-
-function findRankScore(payload: LivePkRankPayload, member: PkMember) {
-  const memberIds = new Set(memberIdentityValues(member));
-  const hit = payload.ranks.find(
-    (rank) =>
-      (rank.userId && memberIds.has(rank.userId)) ||
-      (rank.uniqueId && memberIds.has(rank.uniqueId)) ||
-      namesMatch(rank.nickname, member.name)
-  );
-  if (!hit || !Number.isFinite(hit.score) || hit.score <= 0) return "";
-  return String(hit.score);
-}
-
-function rankMatchesMember(rank: LivePkRankPayload["ranks"][number], member: PkMember) {
-  const memberIds = new Set(memberIdentityValues(member));
-  return (
-    (rank.userId && memberIds.has(rank.userId)) ||
-    (rank.uniqueId && memberIds.has(rank.uniqueId)) ||
-    namesMatch(rank.nickname, member.name)
-  );
-}
-
 export function StarBattlePage() {
   const exportRef = useRef<HTMLDivElement>(null);
   const [period, setPeriod] = useState(currentPeriod());
@@ -1090,7 +917,7 @@ export function StarBattlePage() {
   const [scoreDrafts, setScoreDrafts] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState("");
-  const [roundKey, setRoundKey] = useState<BattleRoundKey>("group");
+  const [roundKey, setRoundKey] = useState<BattleRoundKey>(loadActiveRound);
   const [groupPlan, setGroupPlan] = useState<GroupPlanConfig>(loadGroupPlan);
   const [groupOrderKeys, setGroupOrderKeys] = useState<string[]>(loadGroupOrder);
   const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null);
@@ -1098,19 +925,9 @@ export function StarBattlePage() {
   const [groupPage, setGroupPage] = useState(0);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState("");
-  const [monitorOpen] = useState(false);
-  const [monitorUrl, setMonitorUrl] = useState("");
-  const [monitorWs, setMonitorWs] = useState("");
-  const [monitorCookie, setMonitorCookie] = useState("");
-  const [manualMonitorOpen, setManualMonitorOpen] = useState(false);
-  const [monitorStatus, setMonitorStatus] = useState<LivePkMonitorStatus>({
-    status: "idle",
-    startedAt: null,
-    lastError: null,
-    lastRankAt: null,
-  });
-  const [monitorMessage, setMonitorMessage] = useState("");
-  const [monitorLogs, setMonitorLogs] = useState<MonitorLogRow[]>([]);
+  const [monitorLedger, setMonitorLedger] = useState(loadMonitorMatchLedger);
+  const [syncContext, setSyncContext] = useState<MonitorScoreSyncContext | null>(loadMonitorScoreSyncContext);
+  const [syncingLedger, setSyncingLedger] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportNotes, setExportNotes] = useState(loadExportNotes);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -1163,6 +980,23 @@ export function StarBattlePage() {
   useEffect(() => {
     fetchScores();
   }, [fetchScores]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTIVE_ROUND_STORAGE_KEY, roundKey);
+  }, [roundKey]);
+
+  useEffect(() => {
+    const reloadMonitorState = () => {
+      setMonitorLedger(loadMonitorMatchLedger());
+      setSyncContext(loadMonitorScoreSyncContext());
+    };
+    window.addEventListener("focus", reloadMonitorState);
+    window.addEventListener("storage", reloadMonitorState);
+    return () => {
+      window.removeEventListener("focus", reloadMonitorState);
+      window.removeEventListener("storage", reloadMonitorState);
+    };
+  }, []);
 
   useEffect(() => {
     const syncRosterConfig = () => setRosterConfigs(loadRosterConfigs());
@@ -1360,22 +1194,36 @@ export function StarBattlePage() {
       ),
     [promotionGroups]
   );
+  const promotionSettledCount = useMemo(
+    () => promotionGroups.filter((group) =>
+      groupIsSettled(group, scoreMap, scoreDrafts, "promotion")
+    ).length,
+    [promotionGroups, scoreDrafts, scoreMap]
+  );
+  const promotionBlockedGroupCount =
+    Math.max(0, PROMOTION_GROUP_COUNT - promotionGroups.length)
+    + promotionGroups.filter((group) =>
+      group.incomplete || !groupIsSettled(group, scoreMap, scoreDrafts, "promotion")
+    ).length;
+  const promotionReadyForFinal =
+    promotionGroups.length === PROMOTION_GROUP_COUNT && promotionBlockedGroupCount === 0;
   const promotionWinners = useMemo(
     () =>
-      promotionGroups.flatMap((group, index) =>
-        pickRankedMembers(
+      promotionGroups.flatMap((group, index) => {
+        if (!groupIsSettled(group, scoreMap, scoreDrafts, "promotion")) return [];
+        return pickRankedMembers(
           group,
           scoreMap,
           scoreDrafts,
           "promotion",
           0,
           promotionFinalCounts[index] || 0
-        )
-      ),
+        );
+      }),
     [promotionFinalCounts, promotionGroups, scoreDrafts, scoreMap]
   );
   const finalGroups = useMemo(() => {
-    if (promotionWinners.length === 0) return [] as BattleGroup[];
+    if (!promotionReadyForFinal || promotionWinners.length === 0) return [] as BattleGroup[];
     // 决赛：晋级出线共 8 人，单组
     const averageWave =
       promotionWinners.reduce((sum, item) => sum + item.wave, 0) /
@@ -1389,7 +1237,7 @@ export function StarBattlePage() {
         source: `晋级赛出线 ${promotionWinners.length} 人`,
       },
     ];
-  }, [promotionWinners]);
+  }, [promotionReadyForFinal, promotionWinners]);
   const currentGroups = useMemo(() => {
     if (roundKey === "promotion") return promotionGroups;
     if (roundKey === "final") return finalGroups;
@@ -1412,6 +1260,81 @@ export function StarBattlePage() {
             : groupPlan.sortMode === "top_wave_rest_volatility"
               ? "前两组按音浪从高到低，剩余按波动聚类；沿用 PK 15号名单"
               : "按音浪从高到低分组；沿用 PK 15号名单";
+
+  const currentGroupKeys = useMemo(
+    () => currentGroups.map((group) => group.key),
+    [currentGroups]
+  );
+  const syncContextMatchesRound = Boolean(
+    syncContext
+    && syncContext.period === period
+    && syncContext.roundKey === roundKey
+  );
+  const syncContextMatchesGroups = Boolean(
+    syncContextMatchesRound
+    && syncContext
+    && syncContext.expectedGroupCount === currentGroupKeys.length
+    && syncContext.groupKeys.length === currentGroupKeys.length
+    && syncContext.groupKeys.every((key, index) => key === currentGroupKeys[index])
+  );
+  const scopedMonitorRounds = useMemo(
+    () => syncContextMatchesGroups
+      ? monitorRoundsForSyncContext(syncContext, monitorLedger)
+      : [],
+    [monitorLedger, syncContext, syncContextMatchesGroups]
+  );
+  const finishedMonitorRounds = useMemo(
+    () => scopedMonitorRounds.filter((row) =>
+      row.status === "finished" && row.scores.some((score) => score.score > 0)
+    ),
+    [scopedMonitorRounds]
+  );
+  const monitorSyncHits = useMemo(
+    () => collectScoreSyncHits({
+      groups: currentGroups,
+      rounds: finishedMonitorRounds,
+      finishedOnly: true,
+      mode: "slot",
+    }),
+    [currentGroups, finishedMonitorRounds]
+  );
+  const monitorMatchedGroupCount = useMemo(
+    () => new Set(monitorSyncHits.map((hit) => hit.groupSlot)).size,
+    [monitorSyncHits]
+  );
+  const monitorFullyMatchedGroupCount = useMemo(
+    () => currentGroups.filter((group, index) =>
+      monitorSyncHits.filter((hit) => hit.groupSlot === index + 1).length === group.members.length
+    ).length,
+    [currentGroups, monitorSyncHits]
+  );
+  const monitorRoundOverflow = finishedMonitorRounds.length > currentGroups.length;
+  const monitorHasUnmatchedRounds =
+    finishedMonitorRounds.length > 0
+    && monitorFullyMatchedGroupCount < Math.min(finishedMonitorRounds.length, currentGroups.length);
+  const canSyncMonitorScores =
+    syncContextMatchesGroups
+    && !monitorRoundOverflow
+    && monitorSyncHits.length > 0
+    && !syncingLedger;
+  const currentStartedGroupCount = useMemo(
+    () => currentGroups.filter((group) =>
+      groupHasScore(group, scoreMap, scoreDrafts, roundKey)
+    ).length,
+    [currentGroups, roundKey, scoreDrafts, scoreMap]
+  );
+  const currentSettledGroupCount = useMemo(
+    () => currentGroups.filter((group) =>
+      groupIsSettled(group, scoreMap, scoreDrafts, roundKey)
+    ).length,
+    [currentGroups, roundKey, scoreDrafts, scoreMap]
+  );
+
+  useEffect(() => {
+    if (data && roundKey === "final" && !promotionReadyForFinal) {
+      setRoundKey("promotion");
+    }
+  }, [data, promotionReadyForFinal, roundKey]);
 
   const reorderGroupStage = useCallback((fromKey: string, toKey: string) => {
     if (!fromKey || !toKey || fromKey === toKey) return;
@@ -1502,7 +1425,7 @@ export function StarBattlePage() {
   const saveScore = useCallback(
     async (groupKey: string, personId: number, rawValue: string) => {
       const api = getDataApi();
-      if (!api?.saveStarBattleScore) return;
+      if (!api?.saveStarBattleScore) return false;
       const key = scoreKey(roundKey, groupKey, personId);
       const normalized = normalizeScoreText(rawValue);
       setSavingKey(key);
@@ -1518,7 +1441,7 @@ export function StarBattlePage() {
       setSavingKey(null);
       if (!res.success) {
         setSaveMessage(res.error || "保存失败");
-        return;
+        return false;
       }
       setScoreDrafts((prev) => {
         const next = { ...prev };
@@ -1538,6 +1461,7 @@ export function StarBattlePage() {
         ];
       });
       setSaveMessage(normalized === "" ? "已清空" : "已保存");
+      return true;
     },
     [period, roundKey]
   );
@@ -1546,34 +1470,6 @@ export function StarBattlePage() {
     const key = scoreKey(roundKey, groupKey, personId);
     setScoreDrafts((prev) => ({ ...prev, [key]: value }));
   }, [roundKey]);
-
-  const appendMonitorLogs = useCallback((rows: Omit<MonitorLogRow, "id">[]) => {
-    if (rows.length === 0) return;
-    setMonitorLogs((prev) => [
-      ...rows.map((row, index) => ({
-        ...row,
-        id: `${row.at}-${row.type}-${row.userId || row.name}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-      })),
-      ...prev,
-    ].slice(0, 300));
-  }, []);
-
-  const exportMonitorLogs = () => {
-    const header = ["时间", "类型", "昵称", "用户ID", "数值", "详情"];
-    const lines = [
-      header,
-      ...monitorLogs.map((row) => [row.at, row.type, row.name, row.userId, row.value, row.detail]),
-    ].map((cols) =>
-      cols.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")
-    );
-    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `直播监控_${period}_${roundMeta.label}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   const quickAddScore = (groupKey: string, personId: number, delta: number) => {
     const key = scoreKey(roundKey, groupKey, personId);
@@ -1611,36 +1507,69 @@ export function StarBattlePage() {
       setSaveMessage("当前轮次没有分组，无法同步");
       return;
     }
-    const ledger = loadMonitorMatchLedger();
-    const finished = ledger.filter((row) => row.status === "finished" && row.scores.some((score) => score.score > 0));
-    if (finished.length === 0) {
-      setSaveMessage("监控账本里还没有已结束的最终分，请先在抖音监控完成至少一场 PK");
+    if (!syncContextMatchesRound) {
+      setSaveMessage("当前轮次尚未关联监控，请先点“进入直播监控”建立本轮账本");
       return;
     }
-    const hits = collectScoreSyncHits({
-      groups: currentGroups,
-      rounds: finished,
-      finishedOnly: true,
-      mode: "slot",
-    });
-    if (hits.length === 0) {
-      setSaveMessage(
-        `账本有 ${finished.length} 场最终分，但按出场顺序未匹配到「${roundMeta.label}」组内主播（请核对主播ID/昵称）`
-      );
+    if (!syncContextMatchesGroups) {
+      setSaveMessage("本轮分组已变化，请重新进入直播监控后再同步");
       return;
     }
+    if (monitorRoundOverflow) {
+      setSaveMessage(`本轮只配置 ${currentGroups.length} 组，但账本新增了 ${finishedMonitorRounds.length} 场，请重新关联正确轮次`);
+      return;
+    }
+    if (finishedMonitorRounds.length === 0) {
+      setSaveMessage("本轮账本还没有已结束的最终分，请先完成至少一场 PK");
+      return;
+    }
+    if (monitorSyncHits.length === 0) {
+      setSaveMessage(`本轮已有 ${finishedMonitorRounds.length} 场最终分，但未匹配到${roundMeta.label}名单，请核对主播ID或昵称`);
+      return;
+    }
+
+    setSyncingLedger(true);
     let saved = 0;
     const slotSet = new Set<number>();
-    for (const hit of hits) {
-      const scoreText = String(hit.score);
-      updateDraft(hit.groupKey, hit.personId, scoreText);
-      await saveScore(hit.groupKey, hit.personId, scoreText);
-      saved += 1;
-      slotSet.add(hit.groupSlot);
+    try {
+      for (const hit of monitorSyncHits) {
+        const success = await saveScore(hit.groupKey, hit.personId, String(hit.score));
+        if (!success) continue;
+        saved += 1;
+        slotSet.add(hit.groupSlot);
+      }
+      setSaveMessage(
+        `已同步 ${saved} 人 / ${slotSet.size} 组到${roundMeta.label}；第 N 场对应第 N 组`
+      );
+    } finally {
+      setSyncingLedger(false);
     }
-    setSaveMessage(
-      `已按出场顺序同步 ${saved} 人 / ${slotSet.size} 组到${roundMeta.label}（监控 ${finished.length} 场 → 分组 1..${currentGroups.length}）`
-    );
+  };
+
+  const startMonitorScope = () => {
+    if (currentGroups.length === 0) {
+      setSaveMessage("当前轮次没有可监控的分组");
+      return;
+    }
+    const ledger = loadMonitorMatchLedger();
+    const context = beginMonitorScoreSyncContext({
+      period,
+      roundKey,
+      roundLabel: roundMeta.label,
+      groupKeys: currentGroupKeys,
+      rounds: ledger,
+    });
+    setMonitorLedger(ledger);
+    setSyncContext(context);
+    window.dispatchEvent(new CustomEvent("app:navigate", { detail: "douyin-monitor" }));
+  };
+
+  const openMonitorForCurrentRound = () => {
+    if (!syncContextMatchesGroups || monitorRoundOverflow) {
+      startMonitorScope();
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("app:navigate", { detail: "douyin-monitor" }));
   };
 
   const exportCurrentGroups = async () => {
@@ -1661,259 +1590,6 @@ export function StarBattlePage() {
     }
   };
 
-  const startMonitor = async () => {
-    const api = getDataApi();
-    if (!api?.startLivePkMonitor) return;
-    const res = await api.startLivePkMonitor({ websocketUrl: monitorWs, cookie: monitorCookie });
-    if (res.success) {
-      setMonitorStatus(res.data);
-      setMonitorMessage("监控启动中");
-    } else {
-      setMonitorMessage(res.error || "监控启动失败");
-    }
-  };
-
-  const startBuiltInMonitor = async () => {
-    const api = getDataApi();
-    if (!api?.startLivePkMonitorFromUrl) return;
-    const res = await api.startLivePkMonitorFromUrl({
-      liveRoomUrl: monitorUrl,
-      cookie: monitorCookie,
-    });
-    if (res.success) {
-      setMonitorStatus(res.data);
-      setMonitorMessage("内置监控已启动");
-    } else {
-      setMonitorMessage(res.error || "内置监控启动失败");
-    }
-  };
-
-  const stopMonitor = async () => {
-    const api = getDataApi();
-    if (!api?.stopLivePkMonitor) return;
-    const res = await api.stopLivePkMonitor();
-    if (res.success) {
-      setMonitorStatus(res.data);
-      setMonitorMessage("监控已停止");
-    } else {
-      setMonitorMessage(res.error || "停止失败");
-    }
-  };
-
-  useEffect(() => {
-    const api = getDataApi();
-    if (!api?.onLivePkStatus) return;
-    const offStatus = api.onLivePkStatus((status) => {
-      setMonitorStatus(status);
-      appendMonitorLogs([{
-        at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "status",
-        name: "监控状态",
-        userId: "",
-        value: status.status,
-        detail: status.lastError || "",
-      }]);
-    });
-    const offError = api.onLivePkError?.((message) => {
-      setMonitorMessage(message);
-      appendMonitorLogs([{
-        at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "status",
-        name: "错误",
-        userId: "",
-        value: "",
-        detail: message,
-      }]);
-    }) ?? (() => undefined);
-    const offCapture = api.onLivePkCaptureStatus?.((message) => {
-      setMonitorMessage(message);
-      appendMonitorLogs([{
-        at: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "status",
-        name: "采集",
-        userId: "",
-        value: "",
-        detail: message,
-      }]);
-    }) ?? (() => undefined);
-    void api.getLivePkMonitorStatus?.().then((res) => {
-      if (res.success) setMonitorStatus(res.data);
-    });
-    return () => {
-      offStatus();
-      offError();
-      offCapture();
-    };
-  }, [appendMonitorLogs]);
-
-  useEffect(() => {
-    const api = getDataApi();
-    if (!api?.onLivePkRank) return;
-    const offRank = api.onLivePkRank((payload) => {
-      let matched = 0;
-      const logRows: Omit<MonitorLogRow, "id">[] = [];
-      for (const group of currentGroups) {
-        for (const member of group.members) {
-          const score = findRankScore(payload, member);
-          if (!score) continue;
-          matched += 1;
-          updateDraft(group.key, member.personId, score);
-          void saveScore(group.key, member.personId, score);
-          logRows.push({
-            at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-            type: "score",
-            name: member.name,
-            userId: member.anchorId,
-            value: score,
-            detail: `${roundMeta.label} ${group.label}`,
-          });
-        }
-      }
-      const unmatched = payload.ranks
-        .filter((rank) => rank.score > 0)
-        .filter((rank) => !currentGroups.some((group) =>
-          group.members.some((member) => rankMatchesMember(rank, member))
-        ))
-        .slice(0, 12)
-        .map((rank) => ({
-          at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-          type: "score" as const,
-          name: monitorName(rank) || "未匹配",
-          userId: rank.userId || rank.uniqueId || rank.secUid || "",
-          value: String(rank.score),
-          detail: monitorIdentityDetail(rank) || "未匹配当前轮次",
-        }));
-      appendMonitorLogs([...logRows, ...unmatched]);
-      if (matched > 0) {
-        setMonitorMessage(`直播分数已同步 ${matched} 人`);
-      }
-    });
-    return offRank;
-  }, [appendMonitorLogs, currentGroups, roundMeta.label, saveScore, updateDraft]);
-
-  // 监控 PK 结束后：按「第 N 场 → 第 N 组」把最终分写入当前轮次计分表
-  useEffect(() => {
-    const api = getDataApi();
-    if (!api?.onLivePkEvent) return;
-    const syncedBattleIds = new Set<string>();
-    const offEventScores = api.onLivePkEvent((payload: LivePkEventPayload) => {
-      if (payload.eventType !== "pk-score-snapshot" && payload.eventType !== "pk-battle") return;
-      const phase = String(payload.battlePhase || "").toLowerCase();
-      const countdown = payload.pkCountDown;
-      const finished =
-        (Object.prototype.hasOwnProperty.call(payload, "isPkActive") && payload.isPkActive === false)
-        || (countdown !== undefined && Number(countdown) <= 0)
-        || ["punish", "end", "finish", "finished", "settled", "result", "settle", "over"].includes(phase);
-      if (!finished) return;
-      const battleId = String(payload.battleId || "");
-      if (battleId && syncedBattleIds.has(battleId)) return;
-
-      // 以监控账本为准（多场顺序稳定），按出场顺序映射到当前轮次分组
-      const ledger = loadMonitorMatchLedger();
-      const hits = collectScoreSyncHits({
-        groups: currentGroups,
-        rounds: ledger,
-        finishedOnly: true,
-        mode: "slot",
-      });
-      // 只写本场 battle 对应的那一组
-      const slotHits = battleId
-        ? hits.filter((hit) => hit.battleId === battleId)
-        : hits.slice(-Math.max(1, currentGroups.length));
-      if (slotHits.length === 0) return;
-
-      let matched = 0;
-      for (const hit of slotHits) {
-        const scoreText = String(hit.score);
-        updateDraft(hit.groupKey, hit.personId, scoreText);
-        void saveScore(hit.groupKey, hit.personId, scoreText);
-        matched += 1;
-      }
-      if (battleId) syncedBattleIds.add(battleId);
-      if (matched > 0) {
-        const slot = slotHits[0]?.groupSlot || 0;
-        const groupLabel = slotHits[0]?.groupLabel || "";
-        setMonitorMessage(`第${slot}场最终分 → ${groupLabel}，已写入 ${matched} 人`);
-        appendMonitorLogs([{
-          at: new Date(payload.at || Date.now()).toLocaleTimeString("zh-CN", { hour12: false }),
-          type: "score",
-          name: "最终分",
-          userId: battleId,
-          value: String(matched),
-          detail: `第${slot}场连麦/PK → ${groupLabel} · 同步 ${matched} 人`,
-        }]);
-      }
-    });
-    return () => {
-      offEventScores?.();
-    };
-  }, [appendMonitorLogs, currentGroups, saveScore, updateDraft]);
-
-  useEffect(() => {
-    const api = getDataApi();
-    const offGift = api?.onLivePkGift?.((payload: LivePkGiftPayload) => {
-      const giftDetail = [
-        `${payload.giftName} x${payload.count}`,
-        payload.diamondCount ? `单价 ${payload.diamondCount}` : "",
-        payload.baseScore ? `基础 ${payload.baseScore}` : "",
-        `实际 ${payload.fanTicket || 0}`,
-        payload.bonusScore ? `加成 +${payload.bonusScore}${payload.bonusRate ? ` x${payload.bonusRate.toFixed(2)}` : ""}` : "",
-        payload.roomFanTicketCount ? `房间累计 ${payload.roomFanTicketCount}` : "",
-        payload.clientGiftSource ? `来源 ${payload.clientGiftSource}` : "",
-      ].filter(Boolean).join(" / ");
-      appendMonitorLogs([{
-        at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "gift",
-        name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
-        value: String(payload.fanTicket || ""),
-        detail: [monitorIdentityDetail(payload), giftDetail]
-          .filter(Boolean)
-          .join(" / "),
-      }]);
-    }) ?? (() => undefined);
-    const offMember = api?.onLivePkMember?.((payload: LivePkMemberPayload) => {
-      appendMonitorLogs([{
-        at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "member",
-        name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
-        value: payload.memberCount ? String(payload.memberCount) : "",
-        detail: monitorIdentityDetail(payload),
-      }]);
-    }) ?? (() => undefined);
-    const offChat = api?.onLivePkChat?.((payload: LivePkChatPayload) => {
-      appendMonitorLogs([{
-        at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "chat",
-        name: monitorName(payload),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
-        value: "",
-        detail: [
-          monitorIdentityDetail(payload),
-          payload.content,
-          payload.priorityLevel ? `优先级 ${payload.priorityLevel}` : "",
-        ].filter(Boolean).join(" / "),
-      }]);
-    }) ?? (() => undefined);
-    const offEvent = api?.onLivePkEvent?.((payload: LivePkEventPayload) => {
-      appendMonitorLogs([{
-        at: new Date(payload.at).toLocaleTimeString("zh-CN", { hour12: false }),
-        type: "event",
-        name: payload.nickname || eventLabel(payload.eventType),
-        userId: payload.userId || payload.uniqueId || payload.secUid || "",
-        value: monitorEventValue(payload),
-        detail: monitorEventDetail(payload),
-      }]);
-    }) ?? (() => undefined);
-    return () => {
-      offGift();
-      offMember();
-      offChat();
-      offEvent();
-    };
-  }, [appendMonitorLogs]);
-
   if (unavailable) return <Wrap><BrowserModeState /></Wrap>;
   if (loading && !data) return <Wrap><LoadingState label="正在加载星嗨争霸赛…" /></Wrap>;
   if (error && !data) return <Wrap><ErrorState message={error} onRetry={fetchData} /></Wrap>;
@@ -1921,23 +1597,20 @@ export function StarBattlePage() {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-foreground text-background">
-              <Sparkles className="size-5" />
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+              <Sparkles />
             </div>
             <div className="min-w-0">
-              <h2 className="truncate text-xl font-black tracking-normal">星嗨争霸赛</h2>
-              <div className="mt-1 flex flex-wrap gap-2">
+              <h2 className="truncate text-lg font-black tracking-normal">星嗨争霸赛</h2>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 <Badge variant="secondary">{period}</Badge>
-                <Badge variant="outline">{roundMeta.label}</Badge>
                 <Badge variant={invalidGrouping ? "destructive" : "outline"}>
                   {invalidGrouping ? "人数不满足分组" : `${currentGroups.length} 组`}
                 </Badge>
-                <Badge variant="secondary">
-                  沿用PK 15号名单 {allMembers.length}人
-                </Badge>
+                <Badge variant="outline">参赛 {allMembers.length} 人</Badge>
                 {includeResolution.unmatchedNames.length > 0 && (
                   <Badge variant="destructive">
                     未匹配 {includeResolution.unmatchedNames.length}人
@@ -1946,37 +1619,36 @@ export function StarBattlePage() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="icon" variant="outline" onClick={() => setPeriod(shiftPeriod(period, -1))}>
-              <ChevronLeft className="size-4" />
-            </Button>
-            <Input
-              type="month"
-              value={period}
-              onChange={(event) => setPeriod(event.target.value)}
-              className="h-9 w-40 bg-background/80"
-            />
-            <Button size="icon" variant="outline" onClick={() => setPeriod(shiftPeriod(period, 1))}>
-              <ChevronRight className="size-4" />
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setPeriod(currentPeriod())}>
-              本月
-            </Button>
-            <Button size="sm" variant="outline" onClick={fetchData} disabled={loading}>
-              <RefreshCw className="size-4" />
-              刷新
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setBulkOpen((value) => !value)}>
-              <ClipboardPaste className="size-4" />
-              批量录分
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => window.dispatchEvent(new CustomEvent("app:navigate", { detail: "douyin-monitor" }))}
-            >
-              <RefreshCw className={`size-4 ${monitorStatus.status === "running" ? "animate-spin" : ""}`} />
-              直播监控
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="flex items-center gap-1 rounded-md border border-border bg-background p-1">
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setPeriod(shiftPeriod(period, -1))}
+                aria-label="上个月"
+                title="上个月"
+              >
+                <ChevronLeft />
+              </Button>
+              <Input
+                type="month"
+                value={period}
+                onChange={(event) => setPeriod(event.target.value)}
+                className="h-7 w-36 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+              />
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setPeriod(shiftPeriod(period, 1))}
+                aria-label="下个月"
+                title="下个月"
+              >
+                <ChevronRight />
+              </Button>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setPeriod(currentPeriod())}>本月</Button>
+            <Button size="icon-sm" variant="outline" onClick={fetchData} disabled={loading} title="刷新赛事数据" aria-label="刷新赛事数据">
+              <RefreshCw className={loading ? "animate-spin" : ""} />
             </Button>
             <Button
               size="sm"
@@ -1986,10 +1658,9 @@ export function StarBattlePage() {
               备注
             </Button>
             <Button size="sm" onClick={exportCurrentGroups} disabled={exporting || currentGroups.length === 0}>
-              <Download className="size-4" />
+              <Download data-icon="inline-start" />
               {exporting ? "导出中" : "导出图片"}
             </Button>
-            {saveMessage && <span className="text-xs font-semibold text-muted-foreground">{saveMessage}</span>}
           </div>
         </div>
       </section>
@@ -2017,62 +1688,156 @@ export function StarBattlePage() {
       )}
 
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-3">
-          <div className="flex flex-wrap gap-2">
-            {BATTLE_ROUNDS.map((round) => (
-              <Button
-                key={round.key}
-                size="sm"
-                variant={roundKey === round.key ? "default" : "outline"}
-                onClick={() => setRoundKey(round.key)}
-              >
-                {round.label}
+        <section className="overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+          <div className="grid gap-3 border-b border-border/70 p-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <div role="tablist" aria-label="比赛轮次" className="flex max-w-full items-center gap-1 overflow-x-auto rounded-md border border-border bg-muted/30 p-1">
+                {BATTLE_ROUNDS.map((round, index) => {
+                  const finalLocked = round.key === "final" && !promotionReadyForFinal;
+                  return (
+                    <Button
+                      key={round.key}
+                      role="tab"
+                      aria-selected={roundKey === round.key}
+                      size="sm"
+                      variant={roundKey === round.key ? "default" : "ghost"}
+                      onClick={() => setRoundKey(round.key)}
+                      disabled={finalLocked}
+                      title={finalLocked ? `晋级赛还有 ${promotionBlockedGroupCount} 组未结算或名单不完整` : undefined}
+                      className="shrink-0"
+                    >
+                      <span className="text-[10px] opacity-60">0{index + 1}</span>
+                      {finalLocked && <LockKeyhole data-icon="inline-start" />}
+                      {round.label}
+                    </Button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge variant="outline">已录分 {currentStartedGroupCount}/{currentGroups.length} 组</Badge>
+                <Badge variant={currentGroups.length > 0 && currentSettledGroupCount === currentGroups.length ? "default" : "secondary"}>
+                  已结算 {currentSettledGroupCount}/{currentGroups.length} 组
+                </Badge>
+                {roundKey === "promotion" && !promotionReadyForFinal && (
+                  <Badge variant="outline">决赛待解锁</Badge>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+              <Button size="sm" variant={bulkOpen ? "secondary" : "outline"} onClick={() => setBulkOpen((value) => !value)}>
+                <ClipboardPaste data-icon="inline-start" />
+                批量录分
               </Button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            {roundKey === "group" && (
-              <>
-                <span className="hidden text-xs text-muted-foreground sm:inline">
-                  拖动调整出场顺序；时间按第1/2/3…场次固定
-                </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={openMonitorForCurrentRound}
+                disabled={currentGroups.length === 0}
+              >
+                <MonitorUp data-icon="inline-start" />
+                {monitorRoundOverflow
+                  ? "重新关联监控"
+                  : syncContextMatchesGroups
+                    ? "返回直播监控"
+                    : "进入直播监控"}
+              </Button>
+              {syncContextMatchesGroups && !monitorRoundOverflow && finishedMonitorRounds.length > 0 && (
                 <Button
-                  size="sm"
+                  size="icon-sm"
                   variant="outline"
-                  onClick={resetGroupOrder}
-                  disabled={baseGroupStageGroups.length === 0}
+                  onClick={startMonitorScope}
+                  title="从当前时刻重新记录本轮"
+                  aria-label="从当前时刻重新记录本轮"
                 >
+                  <RefreshCw />
+                </Button>
+              )}
+              <Button size="sm" onClick={() => void syncScoresFromMonitorLedger()} disabled={!canSyncMonitorScores}>
+                <ListChecks data-icon="inline-start" />
+                {syncingLedger ? "同步中" : `同步最终分${monitorSyncHits.length > 0 ? ` ${monitorSyncHits.length}` : ""}`}
+              </Button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2 text-xs">
+              {syncContextMatchesGroups && !monitorRoundOverflow && finishedMonitorRounds.length > 0 && !monitorHasUnmatchedRounds ? (
+                <CircleCheckBig className="size-4 shrink-0 text-primary" />
+              ) : syncContext && (!syncContextMatchesRound || !syncContextMatchesGroups || monitorRoundOverflow || monitorHasUnmatchedRounds) ? (
+                <CircleAlert className="size-4 shrink-0 text-destructive" />
+              ) : (
+                <ListChecks className="size-4 shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0">
+                <span className="font-bold text-foreground">
+                  {!syncContext
+                    ? "本轮尚未关联直播监控"
+                    : !syncContextMatchesRound
+                      ? `当前账本关联 ${syncContext.period} ${syncContext.roundLabel}`
+                      : !syncContextMatchesGroups
+                        ? "本轮分组已变化"
+                        : monitorRoundOverflow
+                          ? `新增 ${finishedMonitorRounds.length} 场，超出本轮 ${currentGroups.length} 组`
+                          : finishedMonitorRounds.length === 0
+                            ? "已关联本轮监控，等待最终分"
+                            : monitorHasUnmatchedRounds
+                              ? `本轮有 ${finishedMonitorRounds.length - monitorFullyMatchedGroupCount} 场未完整匹配名单`
+                              : `本轮最终分 ${finishedMonitorRounds.length}/${currentGroups.length} 场`}
+                </span>
+                {syncContextMatchesGroups && finishedMonitorRounds.length > 0 && !monitorRoundOverflow && (
+                  <span className="ml-2 text-muted-foreground">
+                    已匹配 {monitorSyncHits.length} 人 / {monitorMatchedGroupCount} 组
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {roundKey === "group" && (
+                <Button size="sm" variant="ghost" onClick={() => setRoundKey("promotion")}>
+                  查看晋级赛
+                  <ArrowRight data-icon="inline-end" />
+                </Button>
+              )}
+              {roundKey === "promotion" && (
+                <Button size="sm" variant="ghost" onClick={() => setRoundKey("final")} disabled={!promotionReadyForFinal}>
+                  <Trophy data-icon="inline-start" />
+                  进入决赛
+                </Button>
+              )}
+            </div>
+          </div>
+          {saveMessage && (
+            <div aria-live="polite" className="flex items-center gap-2 border-t border-border/70 px-3 py-2 text-xs font-semibold text-muted-foreground">
+              <CircleCheckBig className="size-4 shrink-0" />
+              <span className="min-w-0 break-words">{saveMessage}</span>
+            </div>
+          )}
+        </section>
+
+        {(roundKey === "group" || totalPages > 1) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="text-xs text-muted-foreground">
+              {roundKey === "group" ? "分组顺序决定直播场次与时间" : `${roundMeta.label}分组`}
+            </div>
+            <div className="flex items-center gap-2">
+              {roundKey === "group" && (
+                <Button size="sm" variant="outline" onClick={resetGroupOrder} disabled={baseGroupStageGroups.length === 0}>
                   恢复默认顺序
                 </Button>
-              </>
-            )}
-            {totalPages > 1 && (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={groupPage <= 0}
-                  onClick={() => setGroupPage((page) => Math.max(0, page - 1))}
-                >
-                  <ChevronLeft className="size-4" />
-                  上一页
-                </Button>
-                <span className="min-w-16 text-center text-xs font-semibold text-muted-foreground">
-                  {groupPage + 1} / {totalPages}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={groupPage >= totalPages - 1}
-                  onClick={() => setGroupPage((page) => Math.min(totalPages - 1, page + 1))}
-                >
-                  下一页
-                  <ChevronRight className="size-4" />
-                </Button>
-              </>
-            )}
+              )}
+              {totalPages > 1 && (
+                <>
+                  <Button size="icon-sm" variant="outline" disabled={groupPage <= 0} onClick={() => setGroupPage((page) => Math.max(0, page - 1))} aria-label="上一页" title="上一页">
+                    <ChevronLeft />
+                  </Button>
+                  <span className="min-w-12 text-center text-xs font-semibold text-muted-foreground">{groupPage + 1} / {totalPages}</span>
+                  <Button size="icon-sm" variant="outline" disabled={groupPage >= totalPages - 1} onClick={() => setGroupPage((page) => Math.min(totalPages - 1, page + 1))} aria-label="下一页" title="下一页">
+                    <ChevronRight />
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {roundKey === "group" && (
           <Card>
@@ -2203,129 +1968,32 @@ export function StarBattlePage() {
 
         {bulkOpen && (
           <Card>
-            <CardContent className="space-y-3 py-4">
+            <CardHeader className="flex flex-row items-center justify-between gap-3 pb-2">
+              <div>
+                <CardTitle className="text-sm">批量录分 · {roundMeta.label}</CardTitle>
+                <div className="mt-1 text-xs text-muted-foreground">按主播姓名或抖音 ID 匹配当前名单</div>
+              </div>
+              <Button size="icon-sm" variant="ghost" onClick={() => setBulkOpen(false)} aria-label="关闭批量录分" title="关闭">
+                <X />
+              </Button>
+            </CardHeader>
+            <CardContent className="space-y-3">
               <textarea
                 value={bulkText}
                 onChange={(event) => setBulkText(event.target.value)}
-                placeholder="粘贴 PK 页面文本，例如：狼某 1280。系统会按当前轮次人员姓名或抖音ID匹配分数。"
-                className="min-h-28 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                placeholder="狼某 1280"
+                className="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-ring focus:ring-[3px] focus:ring-ring/50"
               />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={applyBulkScores}>
-                  保存匹配到的分数
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void syncScoresFromMonitorLedger()}>
-                  从监控账本同步
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => setBulkText("")}>
-                  清空文本
-                </Button>
-                <span className="text-xs text-muted-foreground">
-                  复制 PK 页面文本后可一次匹配当前轮次人员；也可直接同步抖音监控最终分。
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-        {monitorOpen && (
-          <Card>
-            <CardContent className="space-y-3 py-4">
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
-                  value={monitorUrl}
-                  onChange={(event) => setMonitorUrl(event.target.value)}
-                  placeholder="抖音直播间地址，例如 https://live.douyin.com/xxxx"
-                />
-                <Button
-                  size="sm"
-                  onClick={startBuiltInMonitor}
-                  disabled={monitorStatus.status === "connecting" || monitorStatus.status === "running"}
-                >
-                  内置监控
-                </Button>
-              </div>
-              {manualMonitorOpen && (
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-                  <Input
-                    value={monitorWs}
-                    onChange={(event) => setMonitorWs(event.target.value)}
-                    placeholder="备用：WebSocket 地址，包含 webcast/im/push"
-                  />
-                  <textarea
-                    value={monitorCookie}
-                    onChange={(event) => setMonitorCookie(event.target.value)}
-                    placeholder="备用：Cookie；填了以后内置监控和手动连接都会使用"
-                    className="min-h-20 rounded-md border border-input bg-background/80 px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  />
-                </div>
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  onClick={startMonitor}
-                  disabled={monitorStatus.status === "connecting" || monitorStatus.status === "running"}
-                  variant="outline"
-                >
-                  手动连接
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setManualMonitorOpen((value) => !value)}>
-                  {manualMonitorOpen ? "收起备用" : "备用输入"}
-                </Button>
-                <Button size="sm" variant="outline" onClick={stopMonitor}>
-                  停止
-                </Button>
-                <Button size="sm" variant="default" onClick={() => void syncScoresFromMonitorLedger()}>
-                  同步最终分到计分表
-                </Button>
-                <Badge variant={monitorStatus.status === "running" ? "default" : "outline"}>
-                  {monitorStatus.status === "running"
-                    ? "监控中"
-                    : monitorStatus.status === "connecting"
-                      ? "连接中"
-                      : monitorStatus.status === "error"
-                        ? "错误"
-                        : "未启动"}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  {monitorMessage || monitorStatus.lastError || "连麦按分组顺序打：第N场最终分 → 第N组计分表"}
-                </span>
-              </div>
-              <div className="rounded-lg border border-border bg-muted/20">
-                <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-                  <div className="text-sm font-bold">监控输出</div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline">{monitorLogs.length} 条</Badge>
-                    <Button size="sm" variant="outline" onClick={exportMonitorLogs} disabled={monitorLogs.length === 0}>
-                      导出CSV
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setMonitorLogs([])} disabled={monitorLogs.length === 0}>
-                      清空
-                    </Button>
-                  </div>
-                </div>
-                <div className="max-h-56 overflow-auto p-2">
-                  {monitorLogs.length === 0 ? (
-                    <div className="px-2 py-6 text-center text-xs text-muted-foreground">
-                      暂无输出，启动监控后会持续显示分数、进场、礼物和弹幕。
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      {monitorLogs.slice(0, 80).map((row) => (
-                        <div
-                          key={row.id}
-                          className="grid grid-cols-[70px_52px_minmax(80px,120px)_90px_minmax(0,1fr)] gap-2 rounded-md bg-background px-2 py-1.5 text-xs"
-                        >
-                          <span className="text-muted-foreground">{row.at}</span>
-                          <span className="font-bold">
-                            {row.type === "score" ? "分数" : row.type === "gift" ? "礼物" : row.type === "chat" ? "弹幕" : row.type === "member" ? "进场" : "状态"}
-                          </span>
-                          <span className="truncate font-semibold">{row.name}</span>
-                          <span className="truncate text-right font-bold">{row.value}</span>
-                          <span className="truncate text-muted-foreground">{row.detail}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">{bulkText.trim() ? `${bulkText.trim().split(/\r?\n/).length} 行待匹配` : "等待粘贴"}</span>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setBulkText("")} disabled={!bulkText}>
+                    清空
+                  </Button>
+                  <Button size="sm" onClick={applyBulkScores}>
+                    <ClipboardPaste data-icon="inline-start" />
+                    保存匹配到的分数
+                  </Button>
                 </div>
               </div>
             </CardContent>
@@ -2339,44 +2007,44 @@ export function StarBattlePage() {
               const scheduleTime =
                 groupNo > 0 ? scheduleByGroupNo.get(groupNo) || "" : "";
               return (
-              <GroupCard
-                key={group.key}
-                group={group}
-                roundKey={roundKey}
-                scoreDrafts={scoreDrafts}
-                scoreMap={scoreMap}
-                savingKey={savingKey}
-                onDraftChange={updateDraft}
-                onSave={saveScore}
-                onQuickAdd={quickAddScore}
-                scheduleTime={scheduleTime}
-                finalSlots={
-                  roundKey === "promotion"
-                    ? promotionFinalCounts[
-                        currentGroups.findIndex((item) => item.key === group.key)
-                      ] || 0
-                    : 0
-                }
-                compact
-                draggable={roundKey === "group"}
-                dragging={draggingGroupKey === group.key}
-                dragOver={dragOverGroupKey === group.key}
-                onDragStart={() => setDraggingGroupKey(group.key)}
-                onDragEnd={() => {
-                  setDraggingGroupKey(null);
-                  setDragOverGroupKey(null);
-                }}
-                onDragOver={() => {
-                  if (roundKey !== "group") return;
-                  setDragOverGroupKey(group.key);
-                }}
-                onDrop={() => {
-                  if (roundKey !== "group" || !draggingGroupKey) return;
-                  reorderGroupStage(draggingGroupKey, group.key);
-                  setDraggingGroupKey(null);
-                  setDragOverGroupKey(null);
-                }}
-              />
+                <GroupCard
+                  key={group.key}
+                  group={group}
+                  roundKey={roundKey}
+                  scoreDrafts={scoreDrafts}
+                  scoreMap={scoreMap}
+                  savingKey={savingKey}
+                  onDraftChange={updateDraft}
+                  onSave={saveScore}
+                  onQuickAdd={quickAddScore}
+                  scheduleTime={scheduleTime}
+                  finalSlots={
+                    roundKey === "promotion"
+                      ? promotionFinalCounts[
+                          currentGroups.findIndex((item) => item.key === group.key)
+                        ] || 0
+                      : 0
+                  }
+                  compact
+                  draggable={roundKey === "group"}
+                  dragging={draggingGroupKey === group.key}
+                  dragOver={dragOverGroupKey === group.key}
+                  onDragStart={() => setDraggingGroupKey(group.key)}
+                  onDragEnd={() => {
+                    setDraggingGroupKey(null);
+                    setDragOverGroupKey(null);
+                  }}
+                  onDragOver={() => {
+                    if (roundKey !== "group") return;
+                    setDragOverGroupKey(group.key);
+                  }}
+                  onDrop={() => {
+                    if (roundKey !== "group" || !draggingGroupKey) return;
+                    reorderGroupStage(draggingGroupKey, group.key);
+                    setDraggingGroupKey(null);
+                    setDragOverGroupKey(null);
+                  }}
+                />
               );
             })}
           </div>
@@ -2388,7 +2056,7 @@ export function StarBattlePage() {
                 {roundKey === "promotion"
                   ? "内置晋级名单未匹配到主播，请确认 15 号白名单与当月音浪数据。"
                   : roundKey === "final"
-                    ? "请先在晋级赛录入各组成绩；每组第 1 名进入决赛（无复活赛）。"
+                    ? `晋级赛已结算 ${promotionSettledCount}/${promotionGroups.length} 组；全部录完后生成决赛名单。`
                     : `${roundHint}`}
               </div>
             </CardContent>
@@ -3083,13 +2751,17 @@ function GroupCard({
   }, 0);
   const avgScore = group.members.length > 0 ? groupScore / group.members.length : 0;
   const scored = groupHasScore(group, scoreMap, scoreDrafts, roundKey);
-  const displayMembers = scored
+  const scoredMemberCount = group.members.filter((member) =>
+    hasScoreEntry(scoreMap, scoreDrafts, roundKey, group.key, member.personId)
+  ).length;
+  const settled = groupIsSettled(group, scoreMap, scoreDrafts, roundKey);
+  const displayMembers = settled
     ? rankGroupMembers(group, scoreMap, scoreDrafts, roundKey)
     : group.members;
   const rankByPerson = new Map(displayMembers.map((member, index) => [member.personId, index + 1]));
 
   const rankLabel = (rank: number) => {
-    if (!scored) return "";
+    if (!settled) return "";
     if (roundKey === "group") {
       const promote = promoteCountForGroupSize(group.members.length);
       if (rank <= promote) return "晋级";
@@ -3181,6 +2853,16 @@ function GroupCard({
             <Badge variant="outline" className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
               {group.members.length}人
             </Badge>
+            {group.incomplete && (
+              <Badge variant="destructive" className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
+                名单缺失
+              </Badge>
+            )}
+            {scored && (
+              <Badge variant={settled ? "default" : "secondary"} className={compact ? "h-5 px-1.5 text-[10px]" : undefined}>
+                {settled ? "已结算" : `${scoredMemberCount}/${group.members.length}`}
+              </Badge>
+            )}
           </div>
         </div>
         <div className={compact ? "flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground" : "flex flex-wrap gap-2 text-xs text-muted-foreground"}>

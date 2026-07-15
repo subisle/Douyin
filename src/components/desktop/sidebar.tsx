@@ -27,7 +27,7 @@ export function Sidebar({
     <aside
       className={cn(
         "flex shrink-0 flex-col border-r border-border/70 bg-sidebar/80 backdrop-blur-xl transition-all duration-300",
-        collapsed ? "w-14" : "w-44"
+        collapsed ? "w-14" : "w-14 sm:w-44"
       )}
     >
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-3">
@@ -39,7 +39,8 @@ export function Sidebar({
             <button
               key={item.id}
               onClick={() => onNavigate(item.id)}
-              title={collapsed ? item.label : undefined}
+              title={item.label}
+              aria-label={item.label}
               className={cn(
                 "group relative flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left transition-all duration-200",
                 isActive
@@ -54,19 +55,19 @@ export function Sidebar({
                 )}
               />
               {!collapsed && (
-                <span className="min-w-0 flex-1 truncate text-sm font-semibold leading-tight">
+                <span className="hidden min-w-0 flex-1 truncate text-sm font-semibold leading-tight sm:block">
                   {item.label}
                 </span>
               )}
               {isActive && !collapsed && (
-                <span className="absolute right-2.5 size-1.5 rounded-full bg-primary-foreground" />
+                <span className="absolute right-2.5 hidden size-1.5 rounded-full bg-primary-foreground sm:block" />
               )}
             </button>
           );
         })}
       </nav>
 
-      <div className="border-t border-border/70 px-2 py-2">
+      <div className="hidden border-t border-border/70 px-2 py-2 sm:block">
         <button
           onClick={onToggle}
           className="flex w-full items-center justify-center rounded-lg p-2.5 text-muted-foreground transition-all duration-200 hover:bg-background/70 hover:text-foreground"

@@ -2,6 +2,8 @@ import type { PkMember } from "@/types/electron";
 
 /** 与抖音监控分数账本共用，勿改 key */
 export const MATCH_LEDGER_STORAGE_KEY = "douyin-monitor-match-ledger-v1";
+/** 争霸赛进入监控时写入，用于隔离历史场次，避免跨轮次同步。 */
+export const SCORE_SYNC_CONTEXT_STORAGE_KEY = "star-battle-monitor-sync-context-v1";
 
 export interface MonitorLedgerScore {
   anchorId: string;
@@ -22,6 +24,17 @@ export interface MonitorLedgerRound {
   scores: MonitorLedgerScore[];
   winnerId?: string;
   winnerName?: string;
+}
+
+export interface MonitorScoreSyncContext {
+  version: 1;
+  period: string;
+  roundKey: string;
+  roundLabel: string;
+  expectedGroupCount: number;
+  groupKeys: string[];
+  baselineBattleIds: string[];
+  createdAt: string;
 }
 
 function safeText(value: unknown) {
@@ -85,6 +98,73 @@ export function loadMonitorMatchLedger(): MonitorLedgerRound[] {
   } catch {
     return [];
   }
+}
+
+export function loadMonitorScoreSyncContext(): MonitorScoreSyncContext | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SCORE_SYNC_CONTEXT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<MonitorScoreSyncContext>;
+    if (
+      parsed.version !== 1
+      || !safeText(parsed.period)
+      || !safeText(parsed.roundKey)
+      || !Array.isArray(parsed.groupKeys)
+      || !Array.isArray(parsed.baselineBattleIds)
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      period: safeText(parsed.period),
+      roundKey: safeText(parsed.roundKey),
+      roundLabel: safeText(parsed.roundLabel) || safeText(parsed.roundKey),
+      expectedGroupCount: Math.max(0, safeNumber(parsed.expectedGroupCount)),
+      groupKeys: parsed.groupKeys.map(safeText).filter(Boolean),
+      baselineBattleIds: parsed.baselineBattleIds.map(safeText).filter(Boolean),
+      createdAt: safeText(parsed.createdAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function beginMonitorScoreSyncContext(options: {
+  period: string;
+  roundKey: string;
+  roundLabel: string;
+  groupKeys: string[];
+  rounds?: MonitorLedgerRound[];
+}): MonitorScoreSyncContext {
+  const rounds = options.rounds || loadMonitorMatchLedger();
+  const context: MonitorScoreSyncContext = {
+    version: 1,
+    period: safeText(options.period),
+    roundKey: safeText(options.roundKey),
+    roundLabel: safeText(options.roundLabel) || safeText(options.roundKey),
+    expectedGroupCount: options.groupKeys.length,
+    groupKeys: options.groupKeys.map(safeText).filter(Boolean),
+    baselineBattleIds: Array.from(
+      new Set(rounds.map((round) => safeText(round.battleId)).filter(Boolean))
+    ),
+    createdAt: new Date().toISOString(),
+  };
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(SCORE_SYNC_CONTEXT_STORAGE_KEY, JSON.stringify(context));
+  }
+  return context;
+}
+
+export function monitorRoundsForSyncContext(
+  context: MonitorScoreSyncContext | null,
+  rounds: MonitorLedgerRound[] = loadMonitorMatchLedger()
+) {
+  if (!context) return [] as MonitorLedgerRound[];
+  const baseline = new Set(context.baselineBattleIds);
+  return sortLedgerRoundsByPlayOrder(
+    rounds.filter((round) => !baseline.has(safeText(round.battleId)))
+  );
 }
 
 export function memberIdentityKeys(member: Pick<PkMember, "personId" | "name" | "anchorId" | "anchorIds" | "douyinNos">) {

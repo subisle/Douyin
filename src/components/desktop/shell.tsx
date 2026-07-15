@@ -163,7 +163,7 @@ export function DesktopShell() {
           />
 
           <ScrollArea className="min-w-0 flex-1">
-            <main className="mx-auto max-w-7xl p-5 md:p-8">
+            <main className="mx-auto max-w-7xl p-3 sm:p-5 md:p-8">
               {currentPage === "datacenter" ? (
                 <DashboardPage />
               ) : currentPage === "anchors" ? (

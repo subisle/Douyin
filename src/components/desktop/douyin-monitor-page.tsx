@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  ArrowRight,
   BarChart3,
   ChevronDown,
   Cookie,
@@ -12,6 +13,7 @@ import {
   FileSpreadsheet,
   Gift,
   Grip,
+  ListChecks,
   MessageSquareText,
   Monitor,
   Play,
@@ -25,7 +27,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { MATCH_LEDGER_STORAGE_KEY } from "./monitor-score-sync";
+import {
+  loadMonitorScoreSyncContext,
+  MATCH_LEDGER_STORAGE_KEY,
+  monitorRoundsForSyncContext,
+} from "./monitor-score-sync";
 import type {
   IpcResult,
   LivePkChatPayload,
@@ -1997,6 +2003,7 @@ export function DouyinMonitorPage() {
   const liveScoresRef = useRef<MonitorScoreRow[]>([]);
   const [matchLedger, setMatchLedger] = useState<MonitorRoundRow[]>(() => loadMatchLedger());
   const matchLedgerRef = useRef<MonitorRoundRow[]>(matchLedger);
+  const [scoreSyncContext] = useState(loadMonitorScoreSyncContext);
   const [liveCountdownMs, setLiveCountdownMs] = useState(0);
   const countdownEndAtRef = useRef<number | null>(null);
   const countdownSourceMsRef = useRef<number | null>(null);
@@ -2568,16 +2575,23 @@ export function DouyinMonitorPage() {
 
   const stopMonitor = async () => {
     const api = getDataApi();
-    setBusy(true);
-    const result = await api?.stopLivePkMonitor?.();
-    setBusy(false);
-    if (result?.success) setStatus(result.data);
-    // 停止后保留最终比分与历史场次，只清倒计时动画。
-    if (result?.success) {
-      clearLiveCountdown();
+    if (!api?.stopLivePkMonitor) {
+      setMessage("当前环境不支持停止直播监控");
+      return false;
     }
+    setBusy(true);
+    const result = await api.stopLivePkMonitor();
+    setBusy(false);
+    if (!result.success) {
+      setMessage(result.error || "停止直播监控失败");
+      return false;
+    }
+    setStatus(result.data);
+    // 停止后保留最终比分与历史场次，只清倒计时动画。
+    clearLiveCountdown();
     setPreviewOpen(false);
     setEmbeddedState({ embedded: false, liveRoomUrl: "" });
+    return true;
   };
 
   const closePreview = async () => {
@@ -2860,6 +2874,21 @@ export function DouyinMonitorPage() {
   };
 
   const running = status.status === "running";
+  const scoreSyncRounds = useMemo(
+    () => monitorRoundsForSyncContext(scoreSyncContext, matchLedger),
+    [matchLedger, scoreSyncContext]
+  );
+  const scoreSyncFinishedCount = scoreSyncRounds.filter((round) =>
+    round.status === "finished" && round.scores.some((score) => score.score > 0)
+  ).length;
+
+  const returnToBattleScores = async () => {
+    if (running) {
+      const stopped = await stopMonitor();
+      if (!stopped) return;
+    }
+    window.dispatchEvent(new CustomEvent("app:navigate", { detail: "star-battle" }));
+  };
 
   return (
     <div className="flex h-[calc(100vh-8rem)] min-h-[600px] flex-col gap-3">
@@ -2992,6 +3021,26 @@ export function DouyinMonitorPage() {
             </div>
           </div>
         </div>
+
+        {scoreSyncContext && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 bg-primary/5 px-3 py-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <ListChecks className="size-4 shrink-0 text-primary" />
+              <div className="min-w-0 text-xs">
+                <span className="font-bold text-foreground">
+                  {scoreSyncContext.period} · {scoreSyncContext.roundLabel}
+                </span>
+                <span className="ml-2 text-muted-foreground">
+                  最终分 {scoreSyncFinishedCount}/{scoreSyncContext.expectedGroupCount} 场
+                </span>
+              </div>
+            </div>
+            <Button size="sm" onClick={() => void returnToBattleScores()} disabled={busy}>
+              {running ? "停止并返回计分" : "返回计分表"}
+              <ArrowRight data-icon="inline-end" />
+            </Button>
+          </div>
+        )}
 
         {showCookiePanel && (
           <div className="mx-3 mb-3 grid gap-2 rounded-md border border-border bg-background/80 p-2 md:grid-cols-[minmax(0,1fr)_auto]">
