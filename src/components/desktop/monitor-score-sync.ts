@@ -2,6 +2,7 @@ import type { PkMember } from "@/types/electron";
 
 /** 与抖音监控分数账本共用，勿改 key */
 export const MATCH_LEDGER_STORAGE_KEY = "douyin-monitor-match-ledger-v1";
+export const MATCH_LEDGER_UPDATED_EVENT = "douyin-monitor:match-ledger-updated";
 /** 争霸赛进入监控时写入，用于隔离历史场次，避免跨轮次同步。 */
 export const SCORE_SYNC_CONTEXT_STORAGE_KEY = "star-battle-monitor-sync-context-v1";
 

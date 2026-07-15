@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import {
   loadMonitorScoreSyncContext,
   MATCH_LEDGER_STORAGE_KEY,
+  MATCH_LEDGER_UPDATED_EVENT,
   monitorRoundsForSyncContext,
 } from "./monitor-score-sync";
 import type {
@@ -833,10 +834,16 @@ function loadMatchLedger(): MonitorRoundRow[] {
   }
 }
 
+function notifyMatchLedgerUpdated() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(MATCH_LEDGER_UPDATED_EVENT));
+}
+
 function saveMatchLedger(ledger: MonitorRoundRow[]) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(MATCH_LEDGER_STORAGE_KEY, JSON.stringify(ledger.slice(-MATCH_LEDGER_LIMIT)));
+    notifyMatchLedgerUpdated();
   } catch {
     // ignore quota
   }
@@ -1983,7 +1990,7 @@ function compactLogDetail(row: MonitorLogRow, liveState: MonitorLiveState) {
   return row.detail;
 }
 
-export function DouyinMonitorPage() {
+export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
   const previewRef = useRef<HTMLDivElement>(null);
   const previewStageRef = useRef<HTMLDivElement>(null);
   const [liveRoomUrl, setLiveRoomUrl] = useState("");
@@ -2083,6 +2090,7 @@ export function DouyinMonitorPage() {
     setMatchLedger([]);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(MATCH_LEDGER_STORAGE_KEY);
+      notifyMatchLedgerUpdated();
     }
   }, []);
 
@@ -2298,6 +2306,13 @@ export function DouyinMonitorPage() {
   }, [previewOpen, syncPreviewBounds]);
 
   useEffect(() => {
+    if (active || !previewOpen) return;
+    setPreviewOpen(false);
+    setEmbeddedState({ embedded: false, liveRoomUrl: "" });
+    void getDataApi()?.closeLivePkEmbeddedMonitor?.({ stopMonitor: false });
+  }, [active, previewOpen]);
+
+  useEffect(() => {
     const api = getDataApi();
     void api?.readLivePkCookie?.().then((result) => {
       if (!result.success || !result.data.saved || !result.data.cookie) return;
@@ -2306,12 +2321,6 @@ export function DouyinMonitorPage() {
       setCookieUpdatedAt(result.data.updatedAt || null);
       setMessage("已加载本机保存的 Cookie");
     });
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      void getDataApi()?.stopLivePkMonitor?.();
-    };
   }, []);
 
   const currentLogUsers = useMemo(() => {
@@ -2882,13 +2891,11 @@ export function DouyinMonitorPage() {
     round.status === "finished" && round.scores.some((score) => score.score > 0)
   ).length;
 
-  const returnToBattleScores = async () => {
-    if (running) {
-      const stopped = await stopMonitor();
-      if (!stopped) return;
-    }
+  const returnToBattleScores = () => {
     window.dispatchEvent(new CustomEvent("app:navigate", { detail: "star-battle" }));
   };
+
+  if (!active) return null;
 
   return (
     <div className="flex h-[calc(100vh-8rem)] min-h-[600px] flex-col gap-3">
@@ -3032,11 +3039,12 @@ export function DouyinMonitorPage() {
                 </span>
                 <span className="ml-2 text-muted-foreground">
                   最终分 {scoreSyncFinishedCount}/{scoreSyncContext.expectedGroupCount} 场
+                  {running ? " · 后台监控中" : ""}
                 </span>
               </div>
             </div>
-            <Button size="sm" onClick={() => void returnToBattleScores()} disabled={busy}>
-              {running ? "停止并返回计分" : "返回计分表"}
+            <Button size="sm" onClick={returnToBattleScores} disabled={busy}>
+              {running ? "返回计分表（继续监控）" : "返回计分表"}
               <ArrowRight data-icon="inline-end" />
             </Button>
           </div>

@@ -43,6 +43,8 @@ export function DesktopShell() {
   const [draggingFile, setDraggingFile] = useState(false);
   const [showStartup, setShowStartup] = useState(true);
   const [unlocked, setUnlocked] = useState(false);
+  const [monitorMounted, setMonitorMounted] = useState(false);
+  const [battleMounted, setBattleMounted] = useState(false);
   const [userRole, setUserRole] = useState<AppRole>("admin");
   const [droppedImportFile, setDroppedImportFile] = useState<DroppedImportFile | null>(null);
 
@@ -79,6 +81,11 @@ export function DesktopShell() {
     };
     window.addEventListener("app:navigate", handler as EventListener);
     return () => window.removeEventListener("app:navigate", handler as EventListener);
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (currentPage === "douyin-monitor") setMonitorMounted(true);
+    if (currentPage === "star-battle") setBattleMounted(true);
   }, [currentPage]);
 
   useEffect(() => {
@@ -164,7 +171,13 @@ export function DesktopShell() {
 
           <ScrollArea className="min-w-0 flex-1">
             <main className="mx-auto max-w-7xl p-3 sm:p-5 md:p-8">
-              {currentPage === "datacenter" ? (
+              {(monitorMounted || currentPage === "douyin-monitor") && (
+                <DouyinMonitorPage active={currentPage === "douyin-monitor"} />
+              )}
+              {(battleMounted || currentPage === "star-battle") && (
+                <StarBattlePage active={currentPage === "star-battle"} />
+              )}
+              {currentPage === "douyin-monitor" || currentPage === "star-battle" ? null : currentPage === "datacenter" ? (
                 <DashboardPage />
               ) : currentPage === "anchors" ? (
                 <AnchorsPage />
@@ -179,10 +192,6 @@ export function DesktopShell() {
                 <FlowingFlagCard />
               ) : currentPage === "pk" ? (
                 <PkRosterPage />
-              ) : currentPage === "douyin-monitor" ? (
-                <DouyinMonitorPage />
-              ) : currentPage === "star-battle" ? (
-                <StarBattlePage />
               ) : currentPage === "reward" ? (
                 <RewardPage />
               ) : currentPage === "poster-board" ? (

@@ -51,8 +51,10 @@ import {
   collectScoreSyncHits,
   loadMonitorMatchLedger,
   loadMonitorScoreSyncContext,
+  MATCH_LEDGER_UPDATED_EVENT,
   monitorRoundsForSyncContext,
   type MonitorScoreSyncContext,
+  type ScoreSyncHit,
 } from "./monitor-score-sync";
 
 interface BattleGroup {
@@ -908,8 +910,10 @@ function findScoreInText(text: string, member: PkMember) {
   return "";
 }
 
-export function StarBattlePage() {
+export function StarBattlePage({ active = true }: { active?: boolean }) {
   const exportRef = useRef<HTMLDivElement>(null);
+  const monitorSyncInFlightRef = useRef(false);
+  const autoSyncedHitSignaturesRef = useRef<Set<string>>(new Set());
   const [period, setPeriod] = useState(currentPeriod());
   const [data, setData] = useState<PkRosterData | null>(null);
   const [rosterConfigs, setRosterConfigs] = useState<Record<RosterSlot, RosterConfig>>(loadRosterConfigs);
@@ -927,6 +931,7 @@ export function StarBattlePage() {
   const [bulkText, setBulkText] = useState("");
   const [monitorLedger, setMonitorLedger] = useState(loadMonitorMatchLedger);
   const [syncContext, setSyncContext] = useState<MonitorScoreSyncContext | null>(loadMonitorScoreSyncContext);
+  const [monitorRunning, setMonitorRunning] = useState(false);
   const [syncingLedger, setSyncingLedger] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportNotes, setExportNotes] = useState(loadExportNotes);
@@ -992,10 +997,25 @@ export function StarBattlePage() {
     };
     window.addEventListener("focus", reloadMonitorState);
     window.addEventListener("storage", reloadMonitorState);
+    window.addEventListener(MATCH_LEDGER_UPDATED_EVENT, reloadMonitorState);
     return () => {
       window.removeEventListener("focus", reloadMonitorState);
       window.removeEventListener("storage", reloadMonitorState);
+      window.removeEventListener(MATCH_LEDGER_UPDATED_EVENT, reloadMonitorState);
     };
+  }, []);
+
+  useEffect(() => {
+    const api = getDataApi();
+    if (!api?.onLivePkStatus) return;
+    const applyStatus = (status: { status: string }) => {
+      setMonitorRunning(status.status === "running" || status.status === "connecting");
+    };
+    const offStatus = api.onLivePkStatus(applyStatus);
+    void api.getLivePkMonitorStatus?.().then((result) => {
+      if (result.success) applyStatus(result.data);
+    });
+    return offStatus;
   }, []);
 
   useEffect(() => {
@@ -1502,6 +1522,37 @@ export function StarBattlePage() {
    * 从抖音监控分数账本同步最终分到当前轮次计分表。
    * 规则：连麦/PK 按分组出场顺序进行 —— 第 N 场最终分写入第 N 组。
    */
+  const persistMonitorHits = useCallback(async (hits: ScoreSyncHit[], automatic = false) => {
+    if (monitorSyncInFlightRef.current || hits.length === 0) {
+      return { saved: 0, failed: 0, groups: 0 };
+    }
+    monitorSyncInFlightRef.current = true;
+    setSyncingLedger(true);
+    let saved = 0;
+    let failed = 0;
+    const slotSet = new Set<number>();
+    try {
+      for (const hit of hits) {
+        const success = await saveScore(hit.groupKey, hit.personId, String(hit.score));
+        if (!success) {
+          failed += 1;
+          continue;
+        }
+        saved += 1;
+        slotSet.add(hit.groupSlot);
+      }
+      if (saved > 0) {
+        setSaveMessage(
+          `${automatic ? "已自动同步" : "已同步"} ${saved} 人 / ${slotSet.size} 组到${roundMeta.label}${failed > 0 ? `，${failed} 人失败` : ""}`
+        );
+      }
+      return { saved, failed, groups: slotSet.size };
+    } finally {
+      monitorSyncInFlightRef.current = false;
+      setSyncingLedger(false);
+    }
+  }, [roundMeta.label, saveScore]);
+
   const syncScoresFromMonitorLedger = async () => {
     if (currentGroups.length === 0) {
       setSaveMessage("当前轮次没有分组，无法同步");
@@ -1528,23 +1579,45 @@ export function StarBattlePage() {
       return;
     }
 
-    setSyncingLedger(true);
-    let saved = 0;
-    const slotSet = new Set<number>();
-    try {
-      for (const hit of monitorSyncHits) {
-        const success = await saveScore(hit.groupKey, hit.personId, String(hit.score));
-        if (!success) continue;
-        saved += 1;
-        slotSet.add(hit.groupSlot);
-      }
-      setSaveMessage(
-        `已同步 ${saved} 人 / ${slotSet.size} 组到${roundMeta.label}；第 N 场对应第 N 组`
-      );
-    } finally {
-      setSyncingLedger(false);
-    }
+    await persistMonitorHits(monitorSyncHits);
   };
+
+  useEffect(() => {
+    autoSyncedHitSignaturesRef.current.clear();
+  }, [syncContext?.createdAt]);
+
+  useEffect(() => {
+    if (
+      !syncContextMatchesGroups
+      || monitorRoundOverflow
+      || monitorSyncHits.length === 0
+      || syncingLedger
+      || monitorSyncInFlightRef.current
+    ) {
+      return;
+    }
+    const pendingHits = monitorSyncHits.filter((hit) => {
+      const signature = `${hit.battleId}:${hit.groupKey}:${hit.personId}:${hit.score}`;
+      return !autoSyncedHitSignaturesRef.current.has(signature);
+    });
+    if (pendingHits.length === 0) return;
+
+    const signatures = pendingHits.map(
+      (hit) => `${hit.battleId}:${hit.groupKey}:${hit.personId}:${hit.score}`
+    );
+    signatures.forEach((signature) => autoSyncedHitSignaturesRef.current.add(signature));
+    void persistMonitorHits(pendingHits, true).then(({ failed }) => {
+      if (failed > 0) {
+        signatures.forEach((signature) => autoSyncedHitSignaturesRef.current.delete(signature));
+      }
+    });
+  }, [
+    monitorRoundOverflow,
+    monitorSyncHits,
+    persistMonitorHits,
+    syncContextMatchesGroups,
+    syncingLedger,
+  ]);
 
   const startMonitorScope = () => {
     if (currentGroups.length === 0) {
@@ -1590,6 +1663,7 @@ export function StarBattlePage() {
     }
   };
 
+  if (!active) return null;
   if (unavailable) return <Wrap><BrowserModeState /></Wrap>;
   if (loading && !data) return <Wrap><LoadingState label="正在加载星嗨争霸赛…" /></Wrap>;
   if (error && !data) return <Wrap><ErrorState message={error} onRetry={fetchData} /></Wrap>;
@@ -1718,6 +1792,7 @@ export function StarBattlePage() {
                 <Badge variant={currentGroups.length > 0 && currentSettledGroupCount === currentGroups.length ? "default" : "secondary"}>
                   已结算 {currentSettledGroupCount}/{currentGroups.length} 组
                 </Badge>
+                {monitorRunning && <Badge variant="default">后台监控中</Badge>}
                 {roundKey === "promotion" && !promotionReadyForFinal && (
                   <Badge variant="outline">决赛待解锁</Badge>
                 )}
