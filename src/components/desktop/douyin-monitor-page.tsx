@@ -2462,6 +2462,10 @@ export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
       ? { ...base, countdown: liveCountdownMs / 1000, hasOfficialCountdown: true }
       : base;
   }, [liveCountdownMs, liveScores, logs, matchLedger]);
+  const completedLiveRounds = useMemo(
+    () => liveState.rounds.filter((round) => round.status === "finished"),
+    [liveState.rounds]
+  );
 
   const stats = useMemo(() => {
     const eventRows = logs.filter((row) => row.type === "event");
@@ -2523,17 +2527,6 @@ export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
     setLogs([]);
     clearLiveScores();
     clearLiveCountdown();
-    // 新开监控前，把账本里仍标记进行中的场次收成最终分，避免跨会话脏状态
-    if (matchLedgerRef.current.some((row) => row.status === "running")) {
-      const sealed = matchLedgerRef.current.map((row) =>
-        row.status === "running"
-          ? decorateMatchRound({ ...row, status: "finished", endedAt: row.endedAt || formatTime() })
-          : row
-      );
-      matchLedgerRef.current = sealed;
-      setMatchLedger(sealed);
-      saveMatchLedger(sealed);
-    }
     setBusy(true);
     setMessage("正在隐藏采集直播间连接");
     const cookieText = cookie.trim();
@@ -2821,7 +2814,7 @@ export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
 
 
   const exportScoreMatches = () => {
-    const rows = liveState.rounds
+    const rows = completedLiveRounds
       .filter((round) => round.scores.some(hasEffectiveScore) || round.mode === "pk" || round.mode === "linkmic")
       .flatMap((round) => {
         const ranked = rankedScores(round.scores.filter(hasEffectiveScore));
@@ -2968,7 +2961,7 @@ export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
               size="icon-sm"
               variant="outline"
               onClick={exportScoreMatches}
-              disabled={liveState.rounds.length === 0}
+              disabled={completedLiveRounds.length === 0}
               title="导出分数场次 CSV（含最终分）"
             >
               <Swords />
@@ -3102,7 +3095,7 @@ export function DouyinMonitorPage({ active = true }: { active?: boolean }) {
                 <span className="text-xs font-black">{filter === "score" ? "分数监控" : "事件流"}</span>
                 {filter === "score" ? (
                   <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">
-                    {`${liveState.scores.length} 方 · ${liveState.rounds.length} 场`}
+                    {`${liveState.scores.length} 方 · ${completedLiveRounds.length} 场`}
                     {liveState.hasOfficialCountdown
                       ? ` · 剩余 ${countdownText(liveState.countdown)}`
                       : ` · 单场约 ${MATCH_DURATION_SEC / 60} 分钟`}
@@ -3324,7 +3317,6 @@ function LiveStateStrip({
   roomInfo?: MonitorRoomInfo;
 }) {
   const [showRounds, setShowRounds] = useState(false);
-  const latestRound = liveState.rounds[liveState.rounds.length - 1];
   const currentScore = currentScoreSummary(liveState.scores);
   const visibleScores = [...liveState.scores]
     .sort((a, b) => b.score - a.score)
@@ -3332,7 +3324,11 @@ function LiveStateStrip({
   const leaderScore = visibleScores.reduce((max, score) => Math.max(max, score.score), 0);
   const matchRounds = liveState.rounds
     .map((round) => ({ ...round, scores: rankedScores(round.scores.filter(hasEffectiveScore)) }))
-    .filter((round) => round.scores.length > 0 || round.mode === "pk" || round.mode === "linkmic");
+    .filter((round) =>
+      round.status === "finished"
+      && (round.scores.length > 0 || round.mode === "pk" || round.mode === "linkmic")
+    );
+  const latestRound = matchRounds[matchRounds.length - 1];
   const hostId = roomInfo?.ownerUserId || roomInfo?.ownerDouyinId || roomInfo?.ownerWebRid || "";
   return (
     <>
@@ -3410,7 +3406,9 @@ function LiveStateStrip({
             {matchRounds.length === 0 ? (
               <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border px-3 text-center">
                 <Swords className="size-5 text-muted-foreground" />
-                <div className="text-xs font-semibold text-muted-foreground">暂无 PK / 连麦场次</div>
+                <div className="text-xs font-semibold text-muted-foreground">
+                  {liveState.isPkActive || liveState.isLinkmic ? "当前 PK / 连麦进行中" : "暂无已结束场次"}
+                </div>
               </div>
             ) : (
               <div className="space-y-2">
@@ -3441,9 +3439,9 @@ function LiveStateStrip({
             onClick={() => setShowRounds(true)}
             disabled={matchRounds.length === 0}
             className="shrink-0 border-t border-border/60 px-3 py-2 text-left text-[11px] font-semibold text-muted-foreground transition hover:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
-            title={matchRounds.map((round) => `第${round.round}轮 ${scoreSummary(round.scores)}`).join(" | ")}
+            title={matchRounds.map((round) => `第${round.round}场 ${scoreSummary(round.scores)}`).join(" | ")}
           >
-            {latestRound ? `最新 第${latestRound.round}场 · ${roundScoreSummary(latestRound)}` : "开始监控后自动汇总 PK / 连麦分数"}
+            {latestRound ? `最新 第${latestRound.round}场 · ${roundScoreSummary(latestRound)}` : "PK / 连麦结束后显示场次"}
           </button>
         </div>
       </div>
@@ -3476,12 +3474,12 @@ function ScoreMonitorPanel({
   const hostId = roomInfo.ownerUserId || roomInfo.ownerDouyinId || roomInfo.ownerWebRid || roomInfo.ownerSecUid || "";
   const visibleScores = rankedScores(liveState.scores).slice(0, 12);
   const leaderScore = visibleScores.reduce((max, score) => Math.max(max, score.score), 0);
-  const matchRounds = liveState.rounds
+  const trackedRounds = liveState.rounds
     .map((round) => ({ ...round, scores: rankedScores(round.scores.filter(hasEffectiveScore)) }))
     .filter((round) => round.scores.length > 0 || round.mode === "pk" || round.mode === "linkmic")
     .slice()
     .reverse();
-  const finishedRounds = matchRounds.filter((round) => round.status === "finished");
+  const finishedRounds = trackedRounds.filter((round) => round.status === "finished");
   const activeRound = liveState.rounds[liveState.rounds.length - 1];
   const latestFinished = [...liveState.rounds].reverse().find((round) => round.status === "finished" && round.scores.some(hasEffectiveScore));
   const startedAtText = activeRound?.startedAt || liveState.currentMatchStartedAt;
@@ -3527,7 +3525,7 @@ function ScoreMonitorPanel({
                   <Badge variant={running ? "default" : "secondary"}>{running ? "采集中" : "未开始"}</Badge>
                   {liveState.matchStatus === "finished" && <Badge variant="default">最终分已锁定</Badge>}
                   {liveState.phase && <Badge variant="outline">阶段 {liveState.phase}</Badge>}
-                  <Badge variant="outline">账本 {finishedRounds.length}/{matchRounds.length} 场</Badge>
+                  <Badge variant="outline">已完成 {finishedRounds.length} 场</Badge>
                 </div>
                 <div className="truncate text-base font-black" title={roomInfo.title || "未识别直播间"}>
                   {roomInfo.title || "等待房间信息"}
@@ -3725,20 +3723,22 @@ function ScoreMonitorPanel({
           <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
             <div className="text-xs font-black">场次账本</div>
             <div className="text-[11px] font-semibold tabular-nums text-muted-foreground">
-              {finishedRounds.length} 完 / {matchRounds.length} 总
+              已完成 {finishedRounds.length} 场
             </div>
           </div>
-          {matchRounds.length === 0 ? (
+          {finishedRounds.length === 0 ? (
             <div className="flex min-h-48 flex-col items-center justify-center gap-2 px-4 text-center">
               <BarChart3 className="size-6 text-muted-foreground" />
-              <div className="text-sm font-semibold">还没有完整场次</div>
+              <div className="text-sm font-semibold">
+                {liveState.isPkActive || liveState.isLinkmic ? "等待当前 PK / 连麦结束" : "还没有完整场次"}
+              </div>
               <div className="text-xs text-muted-foreground">
-                按 battleId 拆场；punish / 倒计时归零锁定最终分，并写入本地账本
+                结束并锁定最终分后显示回合
               </div>
             </div>
           ) : (
             <div className="divide-y divide-border/60">
-              {matchRounds.map((round) => (
+              {finishedRounds.map((round) => (
                 <div key={`${round.round}-${round.battleId}`} className="px-3 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -3818,7 +3818,7 @@ function PkRoundsDialog({
       ...round,
       scores: round.scores.filter((score) => score.score > 0 || scoreNumber(score.scoreText) > 0),
     }))
-    .filter((round) => round.scores.length > 0);
+    .filter((round) => round.status === "finished" && round.scores.length > 0);
   return (
     <div
       className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
