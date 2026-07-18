@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test built-in database config
+        run: npm run test:db-config
+
       - name: Temporarily remove API routes (incompatible with static export)
         run: |
           if [ -d "src/app/api" ]; then

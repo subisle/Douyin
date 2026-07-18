@@ -1,6 +1,7 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const { applyBuiltInDbEnv } = require("./db-config");
 
 // 先加载环境变量，再加载 db，避免缺 DB_* 时过早失败
 const isDev = !app.isPackaged;
@@ -16,17 +17,8 @@ for (const envPath of [
   }
 }
 
-// 桌面端内置数据库 fallback（与 electron/db.js 保持一致）
-const BUILT_IN_DB = {
-  DB_HOST: "mysql7.sqlpub.com",
-  DB_PORT: "3312",
-  DB_USER: "douyinxs",
-  DB_PASSWORD: "WABZfpfGGlPSxlrs",
-  DB_NAME: "douyinxs",
-};
-for (const [key, value] of Object.entries(BUILT_IN_DB)) {
-  if (!String(process.env[key] || "").trim()) process.env[key] = value;
-}
+// 保证主进程后续加载的所有模块都能读到完整数据库配置。
+applyBuiltInDbEnv();
 
 const db = require("./db");
 const { createUpdater } = require("./updater");

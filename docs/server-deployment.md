@@ -17,13 +17,16 @@ Web / iOS App / Desktop
 ## 2. 环境要求
 
 - Node.js 22 LTS 或兼容版本
-- MySQL 8.x 或兼容版本
+- MySQL 8.x 或兼容版本（项目默认使用内置远程数据库）
 - Nginx/Caddy/宝塔反代均可
 - 推荐使用 PM2 或 systemd 保活
 
-## 3. 服务端环境变量
+## 3. 数据库配置
 
-网站服务器 `.env` 示例：
+数据库连接已集中内置在 `electron/db-config.js`。从 GitHub 拉取代码后，即使未设置
+`DB_HOST`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`，桌面端和网站 API 也会使用内置数据库。
+
+需要切换数据库时，可通过网站服务器 `.env` 覆盖任意 `DB_*` 配置：
 
 ```env
 NODE_ENV=production
@@ -45,8 +48,9 @@ JWT_SECRET=change_me_to_long_random_string
 
 注意：
 
-- `.env` 只放在服务器，不提交 Git。
-- iOS App、浏览器、桌面端都不能拿数据库账号。
+- `.env` 仅用于覆盖内置配置，不是启动必需项。
+- 自定义 `.env` 只放在服务器，不提交 Git。
+- iOS App 和浏览器仍通过网站 API 访问数据，不直接连接数据库。
 - MySQL 用户建议只授权业务库，不使用 root。
 
 ## 4. 构建与启动
