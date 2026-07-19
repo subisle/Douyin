@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   CalendarDays,
+  Clock,
   Columns3,
   Download,
   FileSpreadsheet,
@@ -30,11 +31,13 @@ import {
   type ColumnWidths,
   type ReportCanvasStyle,
 } from "./draw-report-canvas";
+import { downloadCsv } from "./csv";
 import { downloadCanvasAsPng } from "./export-image";
 import type { TierRule, DailyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
 type GenderView = "male" | "female";
+type ExportKind = "image" | "report" | "duration";
 
 const DEFAULT_REPORT_TITLE = "薇笑传媒主播数据统计";
 const COLUMNS_STORAGE_KEY = "daily-report-visible-columns";
@@ -172,7 +175,7 @@ export function DailyReportPage() {
   const [hydrated, setHydrated] = useState(false);
 
   // 导出
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportKind | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // 初始化读取 localStorage
@@ -339,7 +342,7 @@ export function DailyReportPage() {
   const handleExportImage = async () => {
     const canvas = canvasRef.current;
     if (!canvas || exporting || rows.length === 0) return;
-    setExporting(true);
+    setExporting("image");
     try {
       const genderText = gender === "male" ? "男" : "女";
       const styleText = reportStyle === "apple" ? "样式二" : "样式一";
@@ -350,13 +353,13 @@ export function DailyReportPage() {
       console.error("导出图片失败", e);
       alert("导出失败: " + String(e));
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   };
 
   const handleExportCSV = async () => {
     if (rows.length === 0 || exporting) return;
-    setExporting(true);
+    setExporting("report");
     try {
       const headers = [
         "排名",
@@ -402,7 +405,29 @@ export function DailyReportPage() {
       console.error("导出CSV失败", e);
       alert("导出失败: " + String(e));
     } finally {
-      setExporting(false);
+      setExporting(null);
+    }
+  };
+
+  const handleExportDurationCSV = () => {
+    if (rows.length === 0 || exporting) return;
+    setExporting("duration");
+    try {
+      const data = rows.map((row, index) => ({
+        排名: index + 1,
+        主播ID: row.anchorId,
+        主播姓名: row.name,
+        日期: date,
+        "当日有效时长(分钟)": row.dailyDuration > 0 ? row.dailyDuration : 0,
+        "累计时长(分钟)": row.totalDuration > 0 ? row.totalDuration : 0,
+      }));
+      const genderText = gender === "male" ? "男" : "女";
+      downloadCsv(data, `${date}_${genderText}_时长数据_${rows.length}人.csv`);
+    } catch (e) {
+      console.error("导出时长CSV失败", e);
+      alert("导出失败: " + String(e));
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -572,20 +597,29 @@ export function DailyReportPage() {
               {/* 导出图片 */}
               <button
                 onClick={handleExportImage}
-                disabled={exporting || !report || rows.length === 0}
+                disabled={exporting !== null || !report || rows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <Download className="size-4" />
-                {exporting ? "导出中…" : "导出图片"}
+                {exporting === "image" ? "导出中…" : "导出图片"}
               </button>
               {/* 导出 CSV */}
               <button
                 onClick={handleExportCSV}
-                disabled={exporting || !report || rows.length === 0}
+                disabled={exporting !== null || !report || rows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <FileSpreadsheet className="size-4" />
-                导出 CSV
+                {exporting === "report" ? "导出中…" : "导出 CSV"}
+              </button>
+              {/* 单独导出时长 CSV */}
+              <button
+                onClick={handleExportDurationCSV}
+                disabled={exporting !== null || !report || rows.length === 0}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+              >
+                <Clock className="size-4" />
+                {exporting === "duration" ? "导出中…" : "导出时长"}
               </button>
               {/* 字段设置 */}
               <button
