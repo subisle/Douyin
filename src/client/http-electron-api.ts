@@ -74,6 +74,30 @@ async function request<T>(
 
 const noopAsync = async () => undefined;
 
+const WEB_WEIXIN_STATUS = {
+  available: false,
+  phase: "disconnected" as const,
+  connected: false,
+  monitoring: false,
+  accountId: null,
+  userId: null,
+  baseUrl: "",
+  savedAt: null,
+  qrDataUrl: null,
+  qrExpiresAt: null,
+  statusText: "微信机器人仅支持桌面端",
+  lastPollAt: null,
+  lastMessageAt: null,
+  error: null,
+  receivedCount: 0,
+  sentCount: 0,
+};
+
+const WEB_WEIXIN_SETTINGS = {
+  autoReplyEnabled: false,
+  autoReplyText: "消息已收到。",
+};
+
 export function createHttpElectronApi(): ElectronAPI {
   return {
     windowMinimize: noopAsync,
@@ -161,6 +185,24 @@ export function createHttpElectronApi(): ElectronAPI {
     onLivePkEvent: () => () => undefined,
     onLivePkError: () => () => undefined,
     onLivePkCaptureStatus: () => () => undefined,
+
+    getWeixinBotStatus: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
+    getWeixinBotMessages: () => Promise.resolve({ success: true, data: [] }),
+    getWeixinBotSettings: () => Promise.resolve({ success: true, data: WEB_WEIXIN_SETTINGS }),
+    startWeixinBotLogin: () =>
+      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
+    cancelWeixinBotLogin: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
+    startWeixinBot: () =>
+      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
+    stopWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
+    disconnectWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
+    sendWeixinBotMessage: () =>
+      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
+    saveWeixinBotSettings: (payload) => Promise.resolve({ success: true, data: payload }),
+    clearWeixinBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),
+    onWeixinBotStatus: () => () => undefined,
+    onWeixinBotMessage: () => () => undefined,
+    onWeixinBotMessagesCleared: () => () => undefined,
 
     getAnchors: () => request("/anchors"),
     getFamilyTree: () => request("/family-tree"),

@@ -102,6 +102,52 @@ export interface LivePkCookieState {
   updatedAt?: string | null;
 }
 
+export type WeixinBotPhase =
+  | "disconnected"
+  | "connecting"
+  | "awaiting_scan"
+  | "scanned"
+  | "running"
+  | "stopped"
+  | "session_expired"
+  | "error";
+
+export interface WeixinBotStatus {
+  available: boolean;
+  phase: WeixinBotPhase;
+  connected: boolean;
+  monitoring: boolean;
+  accountId: string | null;
+  userId: string | null;
+  baseUrl: string;
+  savedAt: string | null;
+  qrDataUrl: string | null;
+  qrExpiresAt: string | null;
+  statusText: string;
+  lastPollAt: string | null;
+  lastMessageAt: string | null;
+  error: string | null;
+  receivedCount: number;
+  sentCount: number;
+}
+
+export interface WeixinBotMessage {
+  id: string;
+  direction: "inbound" | "outbound";
+  conversationId: string;
+  userId: string;
+  groupId: string | null;
+  kind: "text" | "image" | "voice" | "file" | "video" | "unknown";
+  content: string;
+  createdAt: string;
+  status: "received" | "sent" | "failed";
+}
+
+export interface WeixinBotSettings {
+  autoReplyEnabled: boolean;
+  autoReplyText: string;
+}
+
 export interface LivePkRankItem {
   rank: number;
   anchorId?: string;
@@ -638,6 +684,26 @@ declare global {
     onLivePkEvent: (callback: (payload: LivePkEventPayload) => void) => () => void;
     onLivePkError: (callback: (message: string) => void) => () => void;
     onLivePkCaptureStatus: (callback: (message: string) => void) => () => void;
+    // ── 微信 iLink Bot ──
+    getWeixinBotStatus: () => Promise<IpcResult<WeixinBotStatus>>;
+    getWeixinBotMessages: () => Promise<IpcResult<WeixinBotMessage[]>>;
+    getWeixinBotSettings: () => Promise<IpcResult<WeixinBotSettings>>;
+    startWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
+    cancelWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
+    startWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
+    stopWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
+    disconnectWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
+    sendWeixinBotMessage: (payload: {
+      conversationId: string;
+      text: string;
+    }) => Promise<IpcResult<WeixinBotMessage>>;
+    saveWeixinBotSettings: (
+      payload: WeixinBotSettings
+    ) => Promise<IpcResult<WeixinBotSettings>>;
+    clearWeixinBotMessages: () => Promise<IpcResult<{ cleared: boolean }>>;
+    onWeixinBotStatus: (callback: (status: WeixinBotStatus) => void) => () => void;
+    onWeixinBotMessage: (callback: (message: WeixinBotMessage) => void) => () => void;
+    onWeixinBotMessagesCleared: (callback: () => void) => () => void;
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;

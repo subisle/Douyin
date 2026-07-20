@@ -17,6 +17,7 @@ import { RewardPage } from "./reward-page";
 import { StarBattlePage } from "./star-battle-page";
 import { SettingsPage } from "./settings-page";
 import { PosterBoardPage } from "./poster-board-page";
+import { WeixinBotPage } from "./weixin-bot-page";
 import { LockScreen } from "./lock-screen";
 import { type PageId, type AppRole } from "./types";
 import type { DroppedImportFile } from "./import-page";
@@ -196,6 +197,8 @@ export function DesktopShell() {
                 <RewardPage />
               ) : currentPage === "poster-board" ? (
                 <PosterBoardPage />
+              ) : currentPage === "weixin-bot" ? (
+                <WeixinBotPage />
               ) : currentPage === "settings" ? (
                 <SettingsPage />
               ) : null}

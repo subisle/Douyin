@@ -69,6 +69,34 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("live-pk:capture-status", handler);
   },
 
+  // 微信机器人
+  getWeixinBotStatus: () => ipcRenderer.invoke("weixin-bot:status"),
+  getWeixinBotMessages: () => ipcRenderer.invoke("weixin-bot:messages"),
+  getWeixinBotSettings: () => ipcRenderer.invoke("weixin-bot:settings"),
+  startWeixinBotLogin: () => ipcRenderer.invoke("weixin-bot:login"),
+  cancelWeixinBotLogin: () => ipcRenderer.invoke("weixin-bot:login-cancel"),
+  startWeixinBot: () => ipcRenderer.invoke("weixin-bot:start"),
+  stopWeixinBot: () => ipcRenderer.invoke("weixin-bot:stop"),
+  disconnectWeixinBot: () => ipcRenderer.invoke("weixin-bot:disconnect"),
+  sendWeixinBotMessage: (payload) => ipcRenderer.invoke("weixin-bot:send", payload),
+  saveWeixinBotSettings: (payload) => ipcRenderer.invoke("weixin-bot:save-settings", payload),
+  clearWeixinBotMessages: () => ipcRenderer.invoke("weixin-bot:clear-messages"),
+  onWeixinBotStatus: (callback) => {
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on("weixin-bot:status-changed", handler);
+    return () => ipcRenderer.removeListener("weixin-bot:status-changed", handler);
+  },
+  onWeixinBotMessage: (callback) => {
+    const handler = (_event, message) => callback(message);
+    ipcRenderer.on("weixin-bot:message", handler);
+    return () => ipcRenderer.removeListener("weixin-bot:message", handler);
+  },
+  onWeixinBotMessagesCleared: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("weixin-bot:messages-cleared", handler);
+    return () => ipcRenderer.removeListener("weixin-bot:messages-cleared", handler);
+  },
+
   // 数据
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),
   getFamilyTree: () => ipcRenderer.invoke("data:getFamilyTree"),

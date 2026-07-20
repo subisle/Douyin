@@ -23,6 +23,7 @@ applyBuiltInDbEnv();
 const db = require("./db");
 const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
+const { WeixinBotService } = require("./weixin-bot");
 const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
@@ -71,6 +72,21 @@ const updater = createUpdater({
   sendStatus: (status) => sendToMainWindow("updater:status-changed", status),
 });
 const livePkWatcher = new LivePkWatcher();
+const weixinBot = new WeixinBotService({
+  storagePath: () => path.join(app.getPath("userData"), "weixin-bot.v1.json"),
+  encryptToken: (token) => {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error("当前系统不可用安全存储，未保存微信令牌");
+    }
+    return safeStorage.encryptString(String(token)).toString("base64");
+  },
+  decryptToken: (encrypted) => {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error("当前系统不可用安全存储，无法读取微信令牌");
+    }
+    return safeStorage.decryptString(Buffer.from(String(encrypted), "base64"));
+  },
+});
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";
@@ -93,6 +109,16 @@ function sendToMainWindow(channel, ...args) {
     // 窗口退出时 webContents 可能刚好被销毁，忽略清理期消息。
   }
 }
+
+weixinBot.on("status", (status) => {
+  sendToMainWindow("weixin-bot:status-changed", status);
+});
+weixinBot.on("message", (message) => {
+  sendToMainWindow("weixin-bot:message", message);
+});
+weixinBot.on("messages-cleared", () => {
+  sendToMainWindow("weixin-bot:messages-cleared");
+});
 
 livePkWatcher.on("status", (status) => {
   sendToMainWindow("live-pk:status-changed", status);
@@ -627,6 +653,9 @@ app.whenReady().then(() => {
 
   // 初始化自动更新（生产环境）
   updater.init();
+  void weixinBot.initialize().catch((error) => {
+    console.error("[weixin-bot] 初始化失败", error?.message || String(error));
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -641,6 +670,10 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   // Windows/Linux：关掉主窗口即退出；最小化只进任务栏，不触发这里
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  void weixinBot.shutdown();
 });
 
 // 窗口控制 IPC
@@ -723,6 +756,19 @@ ipcMain.handle("live-pk:stop", wrap(() => {
   return closeEmbeddedLiveView({ stopMonitor: true });
 }));
 ipcMain.handle("live-pk:status", wrap(() => livePkWatcher.getStatus()));
+
+// 微信 iLink Bot IPC：令牌和消息上下文只在主进程内处理。
+ipcMain.handle("weixin-bot:status", wrap(() => weixinBot.getStatus()));
+ipcMain.handle("weixin-bot:messages", wrap(() => weixinBot.getMessages()));
+ipcMain.handle("weixin-bot:settings", wrap(() => weixinBot.getSettings()));
+ipcMain.handle("weixin-bot:login", wrap(() => weixinBot.startLogin()));
+ipcMain.handle("weixin-bot:login-cancel", wrap(() => weixinBot.cancelLogin()));
+ipcMain.handle("weixin-bot:start", wrap(() => weixinBot.startMonitoring()));
+ipcMain.handle("weixin-bot:stop", wrap(() => weixinBot.stopMonitoring()));
+ipcMain.handle("weixin-bot:disconnect", wrap(() => weixinBot.disconnect()));
+ipcMain.handle("weixin-bot:send", wrap((payload) => weixinBot.sendText(payload)));
+ipcMain.handle("weixin-bot:save-settings", wrap((payload) => weixinBot.saveSettings(payload)));
+ipcMain.handle("weixin-bot:clear-messages", wrap(() => weixinBot.clearMessages()));
 
 // 数据 IPC：统一返回 { success, data?, error? }
 function wrap(fn) {

@@ -11,6 +11,7 @@ import {
   Settings,
   Trophy,
   Image,
+  Bot,
 } from "lucide-react";
 
 export type PageId =
@@ -24,6 +25,7 @@ export type PageId =
   | "star-battle"
   | "reward"
   | "poster-board"
+  | "weixin-bot"
   | "settings";
 
 export type AppRole = "admin" | "guest";
@@ -105,6 +107,13 @@ export const NAV_ITEMS: NavItem[] = [
     label: "海报导出",
     icon: Image,
     description: "男团模板海报导出",
+    adminOnly: true,
+  },
+  {
+    id: "weixin-bot",
+    label: "微信机器人",
+    icon: Bot,
+    description: "微信消息连接与回复",
     adminOnly: true,
   },
   {
