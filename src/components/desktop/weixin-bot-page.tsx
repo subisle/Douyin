@@ -76,28 +76,28 @@ const COMMAND_GROUPS: {
   items: { example: string; desc: string; icon: LucideIcon }[];
 }[] = [
   {
-    title: "报告图片",
+    title: "报告",
     items: [
-      { example: "每日报告", desc: "最新音浪日 · 男团 + 女队两张图", icon: ImageIcon },
-      { example: "男团每日报告", desc: "只发男团报告图", icon: ImageIcon },
-      { example: "女团每日报告", desc: "只发女队报告图", icon: ImageIcon },
-      { example: "18号音浪", desc: "指定日男团报告图", icon: Waves },
+      { example: "每日报告", desc: "男团 + 女队图", icon: ImageIcon },
+      { example: "男团每日报告", desc: "仅男团", icon: ImageIcon },
+      { example: "女团每日报告", desc: "仅女队", icon: ImageIcon },
+      { example: "18号音浪", desc: "指定日", icon: Waves },
     ],
   },
   {
-    title: "主播查询",
+    title: "查询",
     items: [
-      { example: "小张时长", desc: "累计直播时长（最近时长日）", icon: Timer },
-      { example: "小张多少日音浪", desc: "本月有音浪天数与累计", icon: Waves },
-      { example: "小张18号音浪", desc: "指定日日音浪与累计", icon: Waves },
+      { example: "小张时长", desc: "累计时长", icon: Timer },
+      { example: "小张多少日音浪", desc: "本月天数", icon: Waves },
+      { example: "小张18号音浪", desc: "指定日音浪", icon: Waves },
     ],
   },
   {
     title: "文件",
     items: [
-      { example: "音浪文件", desc: "发送最新日音浪 CSV", icon: FileSpreadsheet },
-      { example: "音浪文件18号", desc: "发送指定日音浪 CSV", icon: FileSpreadsheet },
-      { example: "发送 CSV 附件", desc: "自动识别音浪/时长并导入", icon: FileSpreadsheet },
+      { example: "音浪文件", desc: "导出 CSV", icon: FileSpreadsheet },
+      { example: "音浪文件18号", desc: "指定日 CSV", icon: FileSpreadsheet },
+      { example: "发送 CSV 附件", desc: "自动导入", icon: FileSpreadsheet },
     ],
   },
 ];
@@ -548,20 +548,17 @@ export function WeixinBotPage() {
 function CommandGuide({ onPick }: { onPick: (example: string) => void }) {
   return (
     <aside className="flex min-h-[548px] flex-col overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 px-3">
-        <HelpCircle className="size-4 text-[#07c160]" />
-        <span className="text-sm font-semibold">命令速查</span>
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 px-3">
+        <HelpCircle className="size-3.5 text-[#07c160]" />
+        <span className="text-sm font-semibold">命令</span>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-        <p className="text-[11px] leading-5 text-muted-foreground">
-          用户在微信发送这些中文命令即可。点示例可填入左侧输入框试发。
-        </p>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
         {COMMAND_GROUPS.map((group) => (
-          <div key={group.title} className="space-y-1.5">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div key={group.title} className="space-y-1">
+            <div className="px-1 text-[10px] font-semibold tracking-wide text-muted-foreground">
               {group.title}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {group.items.map((item) => {
                 const Icon = item.icon;
                 return (
@@ -569,14 +566,12 @@ function CommandGuide({ onPick }: { onPick: (example: string) => void }) {
                     key={item.example}
                     type="button"
                     onClick={() => onPick(item.example)}
-                    className="flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2 py-2 text-left transition hover:border-[#07c160]/25 hover:bg-[#07c160]/8"
+                    className="flex w-full items-center gap-2 rounded-md border border-transparent px-1.5 py-1.5 text-left transition hover:border-[#07c160]/25 hover:bg-[#07c160]/8"
                   >
-                    <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background">
-                      <Icon className="size-3.5 text-[#07c160]" />
-                    </div>
+                    <Icon className="size-3.5 shrink-0 text-[#07c160]" />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-semibold text-foreground">{item.example}</div>
-                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{item.desc}</div>
+                      <div className="truncate text-xs font-medium text-foreground">{item.example}</div>
+                      <div className="truncate text-[10px] leading-4 text-muted-foreground">{item.desc}</div>
                     </div>
                   </button>
                 );
@@ -584,8 +579,8 @@ function CommandGuide({ onPick }: { onPick: (example: string) => void }) {
             </div>
           </div>
         ))}
-        <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
-          日期可写：今日、昨日、18号、7月18日、2026-07-18。未写日期时取库内最新音浪/时长日。
+        <div className="rounded-md border border-dashed border-border/70 bg-muted/15 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
+          日期：今日 / 昨日 / 18号 / 7月18日 / 2026-07-18
         </div>
       </div>
     </aside>
