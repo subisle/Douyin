@@ -308,26 +308,56 @@ function csvBuffer(rows) {
   return Buffer.from(`\uFEFF${text}`, "utf8");
 }
 
+function normalizeIsoDate(value) {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    // 本地年月日，避免 toISOString 在东八区把午夜推前一天
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const match = text.match(/(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
 async function getLatestDate(db, kind) {
-  const summary = await db.getDashboardSummary();
+  let summary = {};
+  try {
+    if (typeof db.getDashboardSummary === "function") {
+      summary = (await db.getDashboardSummary()) || {};
+    }
+  } catch {
+    summary = {};
+  }
   const fromSummary = kind === "duration"
     ? (summary.latestDurationDate || summary.latestDataDate)
     : (summary.latestWaveDate || summary.latestDataDate);
-  if (fromSummary) return String(fromSummary).slice(0, 10);
-  if (kind === "duration") {
-    const rows = await db.exportDurationSnapshots();
-    return rows
-      .map((row) => String(row.快照日期 || row.日期 || "").slice(0, 10))
+  const fromSummaryDate = normalizeIsoDate(fromSummary);
+  if (fromSummaryDate) return fromSummaryDate;
+
+  try {
+    if (kind === "duration") {
+      const rows = typeof db.exportDurationSnapshots === "function"
+        ? await db.exportDurationSnapshots()
+        : [];
+      return (Array.isArray(rows) ? rows : [])
+        .map((row) => normalizeIsoDate(row?.快照日期 || row?.日期))
+        .filter(Boolean)
+        .sort()
+        .at(-1) || null;
+    }
+    const rows = typeof db.exportWaveSnapshots === "function"
+      ? await db.exportWaveSnapshots()
+      : [];
+    return (Array.isArray(rows) ? rows : [])
+      .map((row) => normalizeIsoDate(row?.日期))
       .filter(Boolean)
       .sort()
       .at(-1) || null;
+  } catch {
+    return null;
   }
-  const rows = await db.exportWaveSnapshots();
-  return rows
-    .map((row) => String(row.日期 || "").slice(0, 10))
-    .filter(Boolean)
-    .sort()
-    .at(-1) || null;
 }
 
 async function resolveReportDate(db, spec, kind = "wave") {
@@ -457,25 +487,33 @@ function createWeixinCommandHandler({ db, renderReportPng }) {
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
 
   return async function handleCommand(args) {
-    const items = Array.isArray(args.items) ? args.items : [];
-    const fileItem = items.find((item) => item?.type === 4 && item.file_item);
-    if (fileItem) {
-      await handleInboundFile({ ...args, fileItem }, db);
-      return { handled: true };
-    }
+    try {
+      const items = Array.isArray(args.items) ? args.items : [];
+      const fileItem = items.find((item) => item?.type === 4 && item.file_item);
+      if (fileItem) {
+        await handleInboundFile({ ...args, fileItem }, db);
+        return { handled: true };
+      }
 
-    const command = parseBotCommand(args.text);
-    if (!command) return { handled: false };
-    if (command.type === "help") {
-      await args.replyText(HELP_TEXT);
+      const command = parseBotCommand(args.text);
+      if (!command) return { handled: false };
+      if (command.type === "help") {
+        await args.replyText(HELP_TEXT);
+        return { handled: true };
+      }
+      if (command.type === "report") await sendReport(args, command, db, renderReportPng);
+      else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db);
+      else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db);
+      else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db);
+      else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
       return { handled: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (typeof args.replyText === "function") {
+        await args.replyText(`处理失败：${message}`);
+      }
+      return { handled: true, error: message };
     }
-    if (command.type === "report") await sendReport(args, command, db, renderReportPng);
-    else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db);
-    else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db);
-    else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db);
-    else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
-    return { handled: true };
   };
 }
 
@@ -484,6 +522,8 @@ module.exports = {
   normalizeText,
   parseDateSpec,
   resolveDateSpec,
+  normalizeIsoDate,
+  getLatestDate,
   parseBotCommand,
   parseWaveValue,
   parseDurationValue,

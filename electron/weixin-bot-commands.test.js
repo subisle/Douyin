@@ -5,7 +5,9 @@ const sharp = require("sharp");
 const {
   buildImportMeta,
   createWeixinCommandHandler,
+  getLatestDate,
   matchImportRows,
+  normalizeIsoDate,
   parseBotCommand,
   parseCsvText,
   resolveDateSpec,
@@ -216,4 +218,151 @@ test("report command defaults to male and sends its generated image", async () =
   assert.match(replies[0], /2026-07-18 男团每日报告/);
   assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
   assert.deepEqual(images[0].buffer, Buffer.from("PNG"));
+});
+
+
+test("normalizeIsoDate keeps local calendar day for Date values", () => {
+  assert.equal(normalizeIsoDate("2026-07-18"), "2026-07-18");
+  assert.equal(normalizeIsoDate("2026-07-18T00:00:00.000Z"), "2026-07-18");
+  assert.equal(normalizeIsoDate(null), null);
+  assert.equal(normalizeIsoDate(""), null);
+  // Asia/Shanghai midnight as Date must not slip to previous UTC day via toISOString
+  const localMidnight = new Date(2026, 6, 18, 0, 0, 0);
+  assert.equal(normalizeIsoDate(localMidnight), "2026-07-18");
+});
+
+test("getLatestDate prefers summary fields and falls back safely", async () => {
+  assert.equal(
+    await getLatestDate({
+      getDashboardSummary: async () => ({
+        latestWaveDate: "2026-07-20",
+        latestDurationDate: "2026-07-10",
+        latestDataDate: "2026-07-20",
+      }),
+    }, "wave"),
+    "2026-07-20"
+  );
+  assert.equal(
+    await getLatestDate({
+      getDashboardSummary: async () => ({
+        latestWaveDate: "2026-07-20",
+        latestDurationDate: "2026-07-10",
+        latestDataDate: "2026-07-20",
+      }),
+    }, "duration"),
+    "2026-07-10"
+  );
+
+  // missing new fields / empty object → export fallback
+  assert.equal(
+    await getLatestDate({
+      getDashboardSummary: async () => ({}),
+      exportWaveSnapshots: async () => [{ 日期: "2026-07-12" }, { 日期: "2026-07-15" }],
+    }, "wave"),
+    "2026-07-15"
+  );
+
+  // null summary and thrown summary both degrade to export / null
+  assert.equal(
+    await getLatestDate({
+      getDashboardSummary: async () => null,
+      exportWaveSnapshots: async () => [{ 日期: "2026-07-11" }],
+    }, "wave"),
+    "2026-07-11"
+  );
+  assert.equal(
+    await getLatestDate({
+      getDashboardSummary: async () => {
+        throw new Error("db down");
+      },
+      exportWaveSnapshots: async () => {
+        throw new Error("export failed");
+      },
+    }, "wave"),
+    null
+  );
+});
+
+test("report command falls back when dashboard summary is empty", async () => {
+  const replies = [];
+  const images = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({}),
+      exportWaveSnapshots: async (date) => {
+        if (!date) return [{ 日期: "2026-07-16", 音浪: 100 }];
+        return date === "2026-07-16" ? [{ 音浪: 100 }] : [];
+      },
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+        rows: [{ name: "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
+      }),
+    },
+    renderReportPng: async () => Buffer.from("PNG"),
+  });
+  await handler({
+    text: "每日报告",
+    items: [{ type: 1, text_item: { text: "每日报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+  });
+  assert.match(replies[0], /2026-07-16 男团每日报告/);
+  assert.equal(images[0].fileName, "2026-07-16_男团_每日报告.png");
+});
+
+test("anchor duration uses latestDurationDate when it diverges from wave", async () => {
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({
+        latestWaveDate: "2026-07-20",
+        latestDurationDate: "2026-07-08",
+        latestDataDate: "2026-07-20",
+      }),
+      getAnchors: async () => ([
+        { anchorId: "anchor-a", douyinNo: "dy-a", name: "小张", anchorName: "小张", gender: "male", aliasIds: [] },
+      ]),
+      exportDurationSnapshots: async (date) => {
+        assert.equal(date, "2026-07-08");
+        // handleAnchorDuration matches 抖音号 against anchorId/aliasIds
+        return [{ 抖音号: "anchor-a", 时长分钟: 125 }];
+      },
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+  await handler({
+    text: "小张时长",
+    items: [{ type: 1, text_item: { text: "小张时长" } }],
+    replyText: async (text) => { replies.push(text); },
+  });
+  assert.match(replies[0], /截至 2026-07-08/);
+  assert.match(replies[0], /125/);
+});
+
+test("command handler replies instead of throwing when summary fails hard", async () => {
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => {
+        throw new Error("summary boom");
+      },
+      // no export helpers → getLatestDate returns null → resolveDateSpec falls to yesterday
+      exportWaveSnapshots: async () => {
+        throw new Error("export boom");
+      },
+    },
+    renderReportPng: async () => Buffer.from("PNG"),
+  });
+  const result = await handler({
+    text: "每日报告",
+    items: [{ type: 1, text_item: { text: "每日报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async () => {},
+  });
+  assert.equal(result.handled, true);
+  // should not throw; either empty-data message or soft failure text
+  assert.ok(replies.length >= 1);
+  assert.match(replies[0], /没有音浪快照|处理失败/);
 });
