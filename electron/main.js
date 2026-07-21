@@ -24,6 +24,8 @@ const db = require("./db");
 const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const { WeixinBotService } = require("./weixin-bot");
+const { createWeixinCommandHandler } = require("./weixin-bot-commands");
+const { renderDailyReportPng } = require("./weixin-bot-report");
 const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
@@ -87,6 +89,7 @@ const weixinBot = new WeixinBotService({
     return safeStorage.decryptString(Buffer.from(String(encrypted), "base64"));
   },
 });
+weixinBot.setCommandHandler(createWeixinCommandHandler({ db, renderReportPng: renderDailyReportPng }));
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";

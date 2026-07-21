@@ -1,0 +1,219 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+const sharp = require("sharp");
+
+const {
+  buildImportMeta,
+  createWeixinCommandHandler,
+  matchImportRows,
+  parseBotCommand,
+  parseCsvText,
+  resolveDateSpec,
+} = require("./weixin-bot-commands");
+const {
+  buildMediaItem,
+  decryptAesEcb,
+  downloadInboundMedia,
+  encryptAesEcb,
+  uploadMediaBuffer,
+} = require("./weixin-bot-media");
+const { renderDailyReportPng } = require("./weixin-bot-report");
+
+function arrayBufferOf(buffer) {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
+  assert.deepEqual(parseBotCommand("每日报告"), {
+    type: "report",
+    gender: "male",
+    dateSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("女团每日报告18号"), {
+    type: "report",
+    gender: "female",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("18号音浪"), {
+    type: "report",
+    gender: "male",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("小张时长"), {
+    type: "anchor-duration",
+    query: "小张",
+  });
+  assert.deepEqual(parseBotCommand("小张多少日音浪"), {
+    type: "anchor-wave-days",
+    query: "小张",
+  });
+  assert.deepEqual(parseBotCommand("小张18号音浪"), {
+    type: "anchor-wave",
+    query: "小张",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("音浪文件18号"), {
+    type: "export-wave-file",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.equal(resolveDateSpec({ type: "day", day: 18 }, "2026-07-20"), "2026-07-18");
+});
+
+test("CSV parser matches account aliases and builds stable import metadata", () => {
+  const text = "\uFEFF主播ID,主播昵称,音浪,排名\nunknown-a,甲,12.5万,1\nalias-b,乙,1234,2\nanchor-c,丙,-1,3\n";
+  const parsed = parseCsvText(text, "wave");
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.skipped, 1);
+  assert.equal(parsed.rows[0].value, 125000);
+  const matched = matchImportRows(parsed.rows, [
+    { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+    { anchorId: "anchor-b", douyinNo: "", name: "乙", anchorName: "乙", aliasIds: ["alias-b"] },
+  ]);
+  assert.deepEqual(matched.rows.map((row) => row.anchorId), ["anchor-a", "alias-b"]);
+  assert.equal(matched.unmatched.length, 0);
+  const meta1 = buildImportMeta(Buffer.from(text), "2026-07-18_音浪.csv", "wave", matched.rows);
+  const meta2 = buildImportMeta(Buffer.from(text), "2026-07-18_音浪.csv", "wave", [...matched.rows].reverse());
+  assert.equal(meta1.fileHash, meta2.fileHash);
+  assert.equal(meta1.dataHash, meta2.dataHash);
+  assert.equal(meta1.rowCount, 2);
+});
+
+test("Weixin media upload and download use AES-128-ECB CDN fields", async () => {
+  const plaintext = Buffer.from("fixture media bytes", "utf8");
+  let uploadRequest;
+  let encryptedUpload;
+  const uploaded = await uploadMediaBuffer({
+    fetchImpl: async (url, options) => {
+      assert.match(url, /novac2c\.cdn\.weixin\.qq\.com\/c2c\/upload/);
+      assert.equal(options.method, "POST");
+      encryptedUpload = Buffer.from(options.body);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => name.toLowerCase() === "x-encrypted-param" ? "DOWNLOAD_PARAM" : null },
+      };
+    },
+    getUploadUrl: async (request) => {
+      uploadRequest = request;
+      return { ret: 0, upload_param: "UPLOAD_PARAM" };
+    },
+    buffer: plaintext,
+    toUserId: "sender@im.wechat",
+    mediaKind: "image",
+    fileName: "report.png",
+  });
+  assert.equal(uploadRequest.media_type, 1);
+  assert.equal(uploadRequest.rawsize, plaintext.length);
+  assert.equal(uploadRequest.filesize, encryptedUpload.length);
+  assert.equal(uploadRequest.no_need_thumb, true);
+  assert.deepEqual(decryptAesEcb(encryptedUpload, Buffer.from(uploaded.aeskey, "hex")), plaintext);
+
+  const item = buildMediaItem("image", uploaded);
+  assert.equal(item.type, 2);
+  assert.equal(item.image_item.media.encrypt_query_param, "DOWNLOAD_PARAM");
+  assert.equal(Buffer.from(item.image_item.media.aes_key, "base64").toString("utf8"), uploaded.aeskey);
+
+  const inboundKey = Buffer.from(uploaded.aeskey, "hex");
+  const encryptedInbound = encryptAesEcb(plaintext, inboundKey);
+  const downloaded = await downloadInboundMedia({
+    fetchImpl: async (url) => {
+      assert.match(url, /\/download\?encrypted_query_param=INBOUND_PARAM$/);
+      return { ok: true, status: 200, arrayBuffer: async () => arrayBufferOf(encryptedInbound) };
+    },
+    item: {
+      type: 4,
+      file_item: {
+        file_name: "音浪.csv",
+        media: {
+          encrypt_query_param: "INBOUND_PARAM",
+          aes_key: Buffer.from(uploaded.aeskey, "utf8").toString("base64"),
+        },
+      },
+    },
+  });
+  assert.equal(downloaded.fileName, "音浪.csv");
+  assert.deepEqual(downloaded.buffer, plaintext);
+});
+
+test("daily report renderer produces a real PNG", async () => {
+  const png = await renderDailyReportPng({
+    date: "2026-07-18",
+    gender: "male",
+    summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+    rows: [{
+      rank: 1,
+      name: "测试主播",
+      notLiveDays: 1,
+      dailyWave: 12345,
+      totalWave: 543210,
+      dailyDuration: 95,
+      tier: "A1",
+      isLive: true,
+    }],
+  });
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  const metadata = await sharp(png).metadata();
+  assert.equal(metadata.width, 1440);
+  assert.ok(metadata.height > 250);
+});
+
+test("command handler imports an inbound wave CSV using its filename date", async () => {
+  const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\nanchor-b,乙,800,2\n", "utf8");
+  let importCall;
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-20", latestDataDate: "2026-07-20" }),
+      getAnchors: async () => [
+        { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+        { anchorId: "anchor-b", douyinNo: "", name: "乙", anchorName: "乙", aliasIds: [] },
+      ],
+      importWaveSnapshots: async (date, rows, meta) => {
+        importCall = { date, rows, meta };
+        return { inserted: rows.length };
+      },
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+  const result = await handler({
+    text: "",
+    items: [{ type: 4, file_item: { file_name: "2026-07-18_音浪.csv" } }],
+    downloadMedia: async () => ({ buffer: csv, fileName: "2026-07-18_音浪.csv" }),
+    replyText: async (text) => { replies.push(text); },
+  });
+  assert.equal(result.handled, true);
+  assert.equal(importCall.date, "2026-07-18");
+  assert.deepEqual(importCall.rows, [
+    { anchorId: "anchor-a", waveValue: 1200, rank: 1 },
+    { anchorId: "anchor-b", waveValue: 800, rank: 2 },
+  ]);
+  assert.equal(importCall.meta.rowCount, 2);
+  assert.match(replies.at(-1), /已导入 2026-07-18 音浪数据/);
+});
+
+test("report command defaults to male and sends its generated image", async () => {
+  const replies = [];
+  const images = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+        rows: [{ name: "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
+      }),
+    },
+    renderReportPng: async () => Buffer.from("PNG"),
+  });
+  await handler({
+    text: "每日报告",
+    items: [{ type: 1, text_item: { text: "每日报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+  });
+  assert.match(replies[0], /2026-07-18 男团每日报告/);
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
+  assert.deepEqual(images[0].buffer, Buffer.from("PNG"));
+});

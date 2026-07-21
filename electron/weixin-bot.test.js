@@ -181,6 +181,94 @@ test("QR login, cursor polling, and replies keep secrets in the main process", a
   await restored.shutdown();
 });
 
+test("command handlers can reply with text and encrypted image media", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-media-command-"));
+  const storeFile = path.join(tempDir, "weixin-bot.v1.json");
+  const token = "BOT_MEDIA_TOKEN";
+  const sentRequests = [];
+  let updatesCalls = 0;
+
+  const fetchImpl = async (url, options = {}) => {
+    if (url.includes("get_bot_qrcode")) {
+      return jsonResponse({ qrcode: "QR_MEDIA", qrcode_img_content: "https://weixin.qq.com/x/media" });
+    }
+    if (url.includes("get_qrcode_status")) {
+      return jsonResponse({
+        status: "confirmed",
+        bot_token: token,
+        ilink_bot_id: "media@im.bot",
+        ilink_user_id: "owner@im.wechat",
+        baseurl: "https://ilinkai.weixin.qq.com",
+      });
+    }
+    if (url.includes("getupdates")) {
+      updatesCalls += 1;
+      if (updatesCalls === 1) {
+        return jsonResponse({
+          ret: 0,
+          get_updates_buf: "MEDIA_CURSOR",
+          msgs: [{
+            message_id: 202,
+            from_user_id: "sender@im.wechat",
+            message_type: 1,
+            context_token: "MEDIA_CONTEXT",
+            item_list: [{ type: 1, text_item: { text: "每日报告" } }],
+          }],
+        });
+      }
+      return waitForAbort(options.signal);
+    }
+    if (url.includes("getuploadurl")) {
+      const request = JSON.parse(options.body);
+      assert.equal(request.media_type, 1);
+      assert.equal(request.to_user_id, "sender@im.wechat");
+      return jsonResponse({ ret: 0, upload_param: "UPLOAD_MEDIA_PARAM" });
+    }
+    if (url.includes("novac2c.cdn.weixin.qq.com/c2c/upload")) {
+      assert.ok(Buffer.from(options.body).length > 3);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (name) => name.toLowerCase() === "x-encrypted-param" ? "DOWNLOAD_MEDIA_PARAM" : null },
+      };
+    }
+    if (url.includes("sendmessage")) {
+      sentRequests.push(JSON.parse(options.body));
+      return jsonResponse({ ret: 0 });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const service = new WeixinBotService({
+    fetchImpl,
+    storagePath: () => storeFile,
+    encryptToken: (value) => Buffer.from(`sealed:${value}`, "utf8").toString("base64"),
+    decryptToken: (value) => Buffer.from(value, "base64").toString("utf8").replace(/^sealed:/, ""),
+    generateQrDataUrl: async () => "data:image/png;base64,MEDIA",
+  });
+  service.setCommandHandler(async (args) => {
+    assert.equal(args.text, "每日报告");
+    await args.replyText("报告已生成");
+    await args.replyImage({ buffer: Buffer.from("PNG", "utf8"), fileName: "report.png" });
+    return { handled: true };
+  });
+  t.after(async () => {
+    await service.shutdown();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const textReply = waitForEvent(service, "message", (value) => value.direction === "outbound" && value.kind === "text");
+  const imageReply = waitForEvent(service, "message", (value) => value.direction === "outbound" && value.kind === "image");
+  await service.startLogin();
+  await Promise.all([textReply, imageReply]);
+
+  assert.equal(sentRequests.length, 2);
+  assert.equal(sentRequests[0].msg.item_list[0].type, 1);
+  assert.equal(sentRequests[1].msg.item_list[0].type, 2);
+  assert.equal(sentRequests[1].msg.context_token, "MEDIA_CONTEXT");
+  assert.equal(sentRequests[1].msg.item_list[0].image_item.media.encrypt_query_param, "DOWNLOAD_MEDIA_PARAM");
+});
+
 test("HTTP authentication failures move a restored bot to session_expired", async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-expired-"));
   const storeFile = path.join(tempDir, "weixin-bot.v1.json");

@@ -3,6 +3,12 @@ const fs = require("fs");
 const path = require("path");
 const { EventEmitter } = require("events");
 const QRCode = require("qrcode");
+const {
+  CDN_BASE_URL,
+  buildMediaItem,
+  downloadInboundMedia,
+  uploadMediaBuffer,
+} = require("./weixin-bot-media");
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const CHANNEL_VERSION = "1.0.2";
@@ -104,6 +110,14 @@ function extractMessagePreview(message) {
   };
 }
 
+function extractMessageText(message) {
+  return (Array.isArray(message?.item_list) ? message.item_list : [])
+    .filter((item) => item?.type === 1 && item.text_item?.text != null)
+    .map((item) => String(item.text_item.text))
+    .join("\n")
+    .trim();
+}
+
 class WeixinBotService extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -111,6 +125,8 @@ class WeixinBotService extends EventEmitter {
     this.storagePath = options.storagePath;
     this.encryptToken = options.encryptToken;
     this.decryptToken = options.decryptToken;
+    this.cdnBaseUrl = String(options.cdnBaseUrl || CDN_BASE_URL).replace(/\/$/, "");
+    this.commandHandler = null;
     this.generateQrDataUrl = options.generateQrDataUrl || ((content) => QRCode.toDataURL(content, {
       width: 256,
       margin: 2,
@@ -187,6 +203,13 @@ class WeixinBotService extends EventEmitter {
 
   getStatus() {
     return { ...this.status };
+  }
+
+  setCommandHandler(handler) {
+    if (handler !== null && typeof handler !== "function") {
+      throw new Error("微信机器人命令处理器必须是函数");
+    }
+    this.commandHandler = handler;
   }
 
   getMessages() {
@@ -586,13 +609,53 @@ class WeixinBotService extends EventEmitter {
       status: "received",
     });
 
-    if (this.settings.autoReplyEnabled && this.settings.autoReplyText && contextToken) {
+    const context = { contextToken, toUserId: fromUserId, groupId };
+    let commandHandled = false;
+    if (this.commandHandler && contextToken) {
       try {
-        await this._sendTextWithContext(conversationId, this.settings.autoReplyText, {
-          contextToken,
-          toUserId: fromUserId,
-          groupId,
+        const result = await this.commandHandler({
+          text: extractMessageText(rawMessage),
+          items: Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [],
+          rawMessage,
+          conversationId,
+          fromUserId,
+          groupId: groupId || null,
+          replyText: (text) => this._sendTextWithContext(conversationId, String(text).slice(0, 4000), context),
+          replyImage: (input) => this._sendMediaWithContext(
+            conversationId,
+            { ...input, mediaKind: "image" },
+            context
+          ),
+          replyFile: (input) => this._sendMediaWithContext(
+            conversationId,
+            { ...input, mediaKind: "file" },
+            context
+          ),
+          downloadMedia: (requestedItem) => {
+            const mediaItem = requestedItem || (Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [])
+              .find((item) => [2, 3, 4, 5].includes(Number(item?.type)));
+            return downloadInboundMedia({
+              fetchImpl: this.fetchImpl,
+              item: mediaItem,
+              cdnBaseUrl: this.cdnBaseUrl,
+            });
+          },
         });
+        commandHandled = Boolean(result?.handled);
+      } catch (error) {
+        commandHandled = true;
+        const message = `命令执行失败：${compactError(error)}`;
+        try {
+          await this._sendTextWithContext(conversationId, message, context);
+        } catch (sendError) {
+          this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
+        }
+      }
+    }
+
+    if (!commandHandled && this.settings.autoReplyEnabled && this.settings.autoReplyText && contextToken) {
+      try {
+        await this._sendTextWithContext(conversationId, this.settings.autoReplyText, context);
       } catch (error) {
         this._setStatus({ error: `自动回复失败: ${compactError(error)}` });
       }
@@ -665,6 +728,100 @@ class WeixinBotService extends EventEmitter {
         groupId: context.groupId || null,
         kind: "text",
         content: text,
+        createdAt: new Date().toISOString(),
+        status: "failed",
+      };
+      this._addMessage(failed);
+      throw error;
+    }
+  }
+
+  async _sendMediaWithContext(conversationId, input, context) {
+    if (!this.credentials?.token) throw new Error("微信尚未连接");
+    const mediaKind = input.mediaKind === "image" ? "image" : "file";
+    const buffer = Buffer.isBuffer(input.buffer) ? input.buffer : Buffer.from(input.buffer || []);
+    if (!buffer.length) throw new Error("待发送媒体内容为空");
+    const fileName = String(input.fileName || (mediaKind === "image" ? "report.png" : "data.csv"));
+    const clientId = `douyin-${crypto.randomUUID()}`;
+    const content = mediaKind === "image" ? `[图片] ${fileName}` : `[文件] ${fileName}`;
+
+    try {
+      const uploaded = await uploadMediaBuffer({
+        fetchImpl: this.fetchImpl,
+        buffer,
+        fileName,
+        mediaKind,
+        toUserId: context.toUserId,
+        cdnBaseUrl: this.cdnBaseUrl,
+        getUploadUrl: async (payload) => {
+          const response = await this._postJson(
+            this.credentials.baseUrl,
+            "ilink/bot/getuploadurl",
+            payload,
+            { token: this.credentials.token, timeoutMs: API_TIMEOUT_MS }
+          );
+          const code = Number(response?.errcode ?? response?.ret ?? 0);
+          if (code === SESSION_EXPIRED_CODE) {
+            this._markSessionExpired();
+            throw new Error("微信登录已过期，请重新扫码连接");
+          }
+          if (code !== 0) {
+            throw new Error(`微信获取上传地址失败 (${code}): ${String(response?.errmsg || "未知错误")}`);
+          }
+          return response;
+        },
+      });
+      const item = buildMediaItem(mediaKind, uploaded);
+      const msg = {
+        from_user_id: "",
+        to_user_id: context.toUserId,
+        client_id: clientId,
+        message_type: 2,
+        message_state: 2,
+        context_token: context.contextToken,
+        item_list: [item],
+        ...(context.groupId ? { group_id: context.groupId } : {}),
+      };
+      const response = await this._postJson(
+        this.credentials.baseUrl,
+        "ilink/bot/sendmessage",
+        { msg },
+        { token: this.credentials.token, timeoutMs: API_TIMEOUT_MS }
+      );
+      const code = Number(response?.errcode ?? response?.ret ?? 0);
+      if (code === SESSION_EXPIRED_CODE) {
+        this._markSessionExpired();
+        throw new Error("微信登录已过期，请重新扫码连接");
+      }
+      if (code !== 0) {
+        throw new Error(`微信发送媒体失败 (${code}): ${String(response?.errmsg || "未知错误")}`);
+      }
+
+      const sent = {
+        id: clientId,
+        direction: "outbound",
+        conversationId,
+        userId: context.toUserId,
+        groupId: context.groupId || null,
+        kind: mediaKind,
+        content,
+        createdAt: new Date().toISOString(),
+        status: "sent",
+      };
+      this._addMessage(sent);
+      return { ...sent };
+    } catch (error) {
+      if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
+        this._markSessionExpired();
+      }
+      const failed = {
+        id: clientId,
+        direction: "outbound",
+        conversationId,
+        userId: context.toUserId,
+        groupId: context.groupId || null,
+        kind: mediaKind,
+        content,
         createdAt: new Date().toISOString(),
         status: "failed",
       };
@@ -843,5 +1000,6 @@ module.exports = {
   DEFAULT_BASE_URL,
   WeixinBotService,
   extractMessagePreview,
+  extractMessageText,
   normalizeBaseUrl,
 };

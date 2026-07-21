@@ -10,7 +10,7 @@
     "start": "next start",
     "lint": "eslint src electron next.config.ts",
     "test:db-config": "node --test electron/db-config.test.js",
-    "test:weixin-bot": "node --test electron/weixin-bot.test.js",
+    "test:weixin-bot": "node --test electron/weixin-bot*.test.js",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "cross-env ELECTRON=true next build",
@@ -85,6 +85,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "3.8.0",
+    "sharp": "^0.34.5",
     "tailwind-merge": "^3.3.1",
     "ws": "^8.21.0"
   },
