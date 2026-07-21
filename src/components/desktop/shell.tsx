@@ -93,33 +93,55 @@ export function DesktopShell() {
     let dragDepth = 0;
     const hasFiles = (event: DragEvent) =>
       Array.from(event.dataTransfer?.types ?? []).includes("Files");
-    const isImportDropZone = (event: DragEvent) => {
+    const isLocalFileDropTarget = (event: DragEvent) => {
       const target = event.target;
-      return target instanceof Element && Boolean(target.closest("[data-import-drop-zone='true']"));
+      return target instanceof Element && Boolean(
+        target.closest("[data-file-drop-zone='true'], [data-import-drop-zone='true']")
+      );
     };
     const onDragEnter = (event: DragEvent) => {
       if (!hasFiles(event)) return;
+      if (isLocalFileDropTarget(event)) {
+        event.preventDefault();
+        dragDepth = 0;
+        setDraggingFile(false);
+        return;
+      }
       event.preventDefault();
       dragDepth += 1;
       setDraggingFile(true);
     };
     const onDragOver = (event: DragEvent) => {
       if (!hasFiles(event)) return;
+      if (isLocalFileDropTarget(event)) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       event.dataTransfer!.dropEffect = "copy";
     };
     const onDragLeave = (event: DragEvent) => {
       if (!hasFiles(event)) return;
+      if (isLocalFileDropTarget(event)) {
+        dragDepth = 0;
+        setDraggingFile(false);
+        return;
+      }
       event.preventDefault();
       dragDepth = Math.max(0, dragDepth - 1);
       if (dragDepth === 0) setDraggingFile(false);
     };
     const onDrop = (event: DragEvent) => {
       if (!hasFiles(event)) return;
+      if (isLocalFileDropTarget(event)) {
+        event.preventDefault();
+        dragDepth = 0;
+        setDraggingFile(false);
+        return;
+      }
       event.preventDefault();
       dragDepth = 0;
       setDraggingFile(false);
-      if (isImportDropZone(event)) return;
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       setDroppedImportFile({ id: Date.now(), file });

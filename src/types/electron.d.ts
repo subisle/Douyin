@@ -37,6 +37,12 @@ export interface DashboardSummary {
   avgWave: number;
   avgDuration: number;
   dataCount: number;
+  /** 音浪/时长快照中最近的导入日（YYYY-MM-DD） */
+  latestDataDate: string | null;
+  /** 音浪快照最近导入日 */
+  latestWaveDate: string | null;
+  /** 时长快照最近导入日 */
+  latestDurationDate: string | null;
 }
 
 export interface StartupHealthCheck {
@@ -112,6 +118,19 @@ export type WeixinBotPhase =
   | "session_expired"
   | "error";
 
+export interface WeixinBotAccountSummary {
+  accountId: string;
+  userId: string | null;
+  baseUrl: string;
+  savedAt: string | null;
+  phase: WeixinBotPhase;
+  monitoring: boolean;
+  lastPollAt: string | null;
+  error: string | null;
+  receivedCount: number;
+  sentCount: number;
+}
+
 export interface WeixinBotStatus {
   available: boolean;
   phase: WeixinBotPhase;
@@ -129,6 +148,7 @@ export interface WeixinBotStatus {
   error: string | null;
   receivedCount: number;
   sentCount: number;
+  accounts: WeixinBotAccountSummary[];
 }
 
 export interface WeixinBotMessage {
@@ -143,9 +163,71 @@ export interface WeixinBotMessage {
   status: "received" | "sent" | "failed";
 }
 
+export type WeixinBotAccessMode = "open" | "allowlist";
+
+export type WeixinBotCustomCommandAction =
+  | "reply"
+  | "daily_report"
+  | "male_report"
+  | "female_report"
+  | "wave_file"
+  | "help";
+
+export interface WeixinBotCustomCommand {
+  id: string;
+  trigger: string;
+  action: WeixinBotCustomCommandAction;
+  replyText: string;
+  enabled: boolean;
+}
+
+export interface WeixinBotContact {
+  id: string;
+  kind: "user" | "group";
+  conversationId: string;
+  groupId: string | null;
+  lastContent: string;
+  lastSeenAt: string;
+  allowed: boolean;
+}
+
+export interface WeixinBotAiSettings {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+  maxToolRounds: number;
+  hasApiKey: boolean;
+}
+
 export interface WeixinBotSettings {
   autoReplyEnabled: boolean;
   autoReplyText: string;
+  accessMode: WeixinBotAccessMode;
+  allowUserIds: string[];
+  allowGroupIds: string[];
+  customCommands: WeixinBotCustomCommand[];
+  ai: WeixinBotAiSettings;
+  contacts: WeixinBotContact[];
+}
+
+/** 写入设置的载荷：字段均可选；AI Key 只写不读 */
+export interface WeixinBotSettingsSavePayload {
+  autoReplyEnabled?: boolean;
+  autoReplyText?: string;
+  accessMode?: WeixinBotAccessMode;
+  allowUserIds?: string[];
+  allowGroupIds?: string[];
+  customCommands?: WeixinBotCustomCommand[];
+  ai?: {
+    enabled?: boolean;
+    baseUrl?: string;
+    model?: string;
+    timeoutMs?: number;
+    maxToolRounds?: number;
+    apiKey?: string;
+    clearApiKey?: boolean;
+  };
 }
 
 export interface LivePkRankItem {
@@ -690,15 +772,16 @@ declare global {
     getWeixinBotSettings: () => Promise<IpcResult<WeixinBotSettings>>;
     startWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
     cancelWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
-    startWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
-    stopWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
-    disconnectWeixinBot: () => Promise<IpcResult<WeixinBotStatus>>;
+    startWeixinBot: (accountId?: string) => Promise<IpcResult<WeixinBotStatus>>;
+    stopWeixinBot: (accountId?: string) => Promise<IpcResult<WeixinBotStatus>>;
+    disconnectWeixinBot: (accountId?: string) => Promise<IpcResult<WeixinBotStatus>>;
+    setActiveWeixinBotAccount: (accountId: string) => Promise<IpcResult<WeixinBotStatus>>;
     sendWeixinBotMessage: (payload: {
       conversationId: string;
       text: string;
     }) => Promise<IpcResult<WeixinBotMessage>>;
     saveWeixinBotSettings: (
-      payload: WeixinBotSettings
+      payload: WeixinBotSettingsSavePayload
     ) => Promise<IpcResult<WeixinBotSettings>>;
     clearWeixinBotMessages: () => Promise<IpcResult<{ cleared: boolean }>>;
     onWeixinBotStatus: (callback: (status: WeixinBotStatus) => void) => () => void;

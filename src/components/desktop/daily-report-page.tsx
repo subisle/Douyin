@@ -39,7 +39,9 @@ import { LoadingState, ErrorState, EmptyState } from "./states";
 type GenderView = "male" | "female";
 type ExportKind = "image" | "report" | "duration";
 
-const DEFAULT_REPORT_TITLE = "薇笑传媒主播数据统计";
+const DEFAULT_REPORT_TITLE_MALE = "星嗨艺创主播数据统计";
+const DEFAULT_REPORT_TITLE_FEMALE = "薇笑传媒主播数据统计";
+const DEFAULT_REPORT_TITLE = DEFAULT_REPORT_TITLE_MALE;
 const COLUMNS_STORAGE_KEY = "daily-report-visible-columns";
 const COLUMNS_STORAGE_VERSION_KEY = "daily-report-visible-columns-version";
 const COLUMNS_STORAGE_VERSION = "3";
@@ -123,7 +125,10 @@ function loadReportStyles(): Record<GenderView, ReportCanvasStyle> {
 }
 
 function loadReportTitles(): Record<GenderView, string> {
-  const defaults = { male: DEFAULT_REPORT_TITLE, female: DEFAULT_REPORT_TITLE };
+  const defaults = {
+    male: DEFAULT_REPORT_TITLE_MALE,
+    female: DEFAULT_REPORT_TITLE_FEMALE,
+  };
   if (typeof window === "undefined") return defaults;
   try {
     const parsed = JSON.parse(localStorage.getItem(REPORT_TITLES_STORAGE_KEY) || "{}");
@@ -149,10 +154,12 @@ function escapeCsvCell(value: unknown): string {
 }
 
 export function DailyReportPage() {
-  const [date, setDate] = useState(todayStr());
+  // 初始为空，挂载后优先填「最近有音浪数据的日期」
+  const [date, setDate] = useState("");
+  const [dateReady, setDateReady] = useState(false);
   const [gender, setGender] = useState<GenderView>("male");
   const [report, setReport] = useState<DailyReportData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
@@ -167,10 +174,10 @@ export function DailyReportPage() {
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>({});
   const [reportStyles, setReportStyles] = useState<Record<GenderView, ReportCanvasStyle>>(DEFAULT_REPORT_STYLES);
   const [reportTitles, setReportTitles] = useState<Record<GenderView, string>>({
-    male: DEFAULT_REPORT_TITLE,
-    female: DEFAULT_REPORT_TITLE,
+    male: DEFAULT_REPORT_TITLE_MALE,
+    female: DEFAULT_REPORT_TITLE_FEMALE,
   });
-  const [titleDraft, setTitleDraft] = useState(DEFAULT_REPORT_TITLE);
+  const [titleDraft, setTitleDraft] = useState(DEFAULT_REPORT_TITLE_MALE);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
@@ -325,9 +332,39 @@ export function DailyReportPage() {
     }
   }, []);
 
+  // 默认日期：库里最近有音浪数据的那天；没有则用今天
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const api = getDataApi();
+      if (!api) {
+        if (!cancelled) {
+          setDate(todayStr());
+          setDateReady(true);
+        }
+        return;
+      }
+      try {
+        const res = await api.getDashboardSummary();
+        if (cancelled) return;
+        const latest =
+          (res.success && (res.data.latestWaveDate || res.data.latestDataDate)) || null;
+        setDate(latest || todayStr());
+      } catch {
+        if (!cancelled) setDate(todayStr());
+      } finally {
+        if (!cancelled) setDateReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dateReady || !date) return;
     fetchReport(date, gender);
-  }, [date, gender, fetchReport]);
+  }, [date, gender, dateReady, fetchReport]);
 
   useEffect(() => {
     fetchTiers();

@@ -64,6 +64,22 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
     query: "小张",
     dateSpec: { type: "day", day: 18 },
   });
+  assert.deepEqual(parseBotCommand("小张"), {
+    type: "anchor-profile",
+    query: "小张",
+  });
+  assert.deepEqual(parseBotCommand("小张音浪"), {
+    type: "anchor-wave",
+    query: "小张",
+    dateSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("18号报告"), {
+    type: "report",
+    gender: "both",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("人工客服"), { type: "agent-enable" });
+  assert.deepEqual(parseBotCommand("退出客服"), { type: "agent-disable" });
   assert.deepEqual(parseBotCommand("音浪文件18号"), {
     type: "export-wave-file",
     dateSpec: { type: "day", day: 18 },
@@ -190,8 +206,10 @@ test("daily report style defaults to apple for male and classic for female", asy
       isLive: true,
     }],
   };
-  const maleSvg = renderAppleSvg({ ...sample, gender: "male" }, { title: "薇笑传媒主播数据统计" });
-  const femaleSvg = renderClassicSvg({ ...sample, gender: "female" }, { title: "薇笑传媒主播数据统计" });
+  const maleSvg = renderAppleSvg({ ...sample, gender: "male" }, {});
+  const femaleSvg = renderClassicSvg({ ...sample, gender: "female" }, {});
+  assert.match(maleSvg, /星嗨艺创主播数据统计/);
+  assert.match(femaleSvg, /薇笑传媒主播数据统计/);
   assert.match(maleSvg, /内部数据 · 请勿外传/);
   assert.match(maleSvg, /#007AFF/);
   assert.match(femaleSvg, /#1E293B/);

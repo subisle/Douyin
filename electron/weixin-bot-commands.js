@@ -2,16 +2,19 @@ const crypto = require("crypto");
 const Papa = require("papaparse");
 
 const HELP_TEXT = [
-  "可用命令：",
-  "每日报告：发送最新音浪日的男团、女队报告图片",
-  "男团每日报告 / 女团每日报告：只发送对应一队",
-  "18号音浪：发送指定日期男团报告图（也支持 2026-07-18音浪）",
-  "主播名时长：查询累计直播时长",
-  "主播名多少日音浪：查询本月有音浪天数与累计音浪",
-  "主播名18号音浪：查询指定日期的日音浪",
-  "音浪文件：发送指定日期音浪 CSV；直接发送 CSV 附件会自动解析导入",
-  "日期可写为 18号、18日、2026-07-18、昨日或今日。",
+  "用法很简单：",
+  "· 直接发艺名 → 查库内全部数据",
+  "· 每日报告 → 最新双团报告图",
+  "· 18号报告 / 18号音浪 → 指定日报告",
+  "· 艺名+时长 → 累计直播时长",
+  "· 艺名+音浪 → 最新音浪",
+  "· 音浪文件 → 导出 CSV（也可直接发 CSV 导入）",
+  "· 人工客服 → 开启智能助手",
+  "· 退出客服 → 关闭智能助手",
 ].join("\n");
+
+const AGENT_ENABLE_RE = /^(?:人工客服|智能客服|客服|开启客服|打开客服)$/i;
+const AGENT_DISABLE_RE = /^(?:退出客服|关闭客服|结束客服|取消客服)$/i;
 
 function normalizeText(value) {
   return String(value || "")
@@ -112,6 +115,9 @@ function parseBotCommand(input) {
   const fileMatch = withoutGender.match(/^(?:\/?(?:音浪文件|导出音浪(?:文件)?))(?:\s*(.+))?$/i);
   if (fileMatch) return { type: "export-wave-file", dateSpec: parseDateSpec(fileMatch[1] || "") };
 
+  if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
+  if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
+
   const reportMatch = withoutGender.match(/^(?:\/?(?:每日报告|日报|报告))(?:\s*(.+))?$/i);
   if (reportMatch) {
     return {
@@ -121,7 +127,17 @@ function parseBotCommand(input) {
     };
   }
 
-  // 「18号音浪」保留单团习惯，默认男团；可写女团18号音浪
+  // 「18号报告」→ 默认双团；可写 男团18号报告
+  const dateOnlyReport = withoutGender.match(/^(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|\d{1,2}\s*[日号])\s*报告$/);
+  if (dateOnlyReport) {
+    const hasGender = /(?:男团|男队|男性|女团|女队|女性)/.test(original);
+    return {
+      type: "report",
+      gender: hasGender ? parseSingleGender(original) : "both",
+      dateSpec: parseDateSpec(dateOnlyReport[1]),
+    };
+  }
+
   const dateOnlyWave = withoutGender.match(/^(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|\d{1,2}\s*[日号])\s*音浪$/);
   if (dateOnlyWave) {
     return {
@@ -144,6 +160,27 @@ function parseBotCommand(input) {
       query: namedWaveMatch[1].trim(),
       dateSpec: parseDateSpec(namedWaveMatch[2]),
     };
+  }
+
+  // 「艺名音浪」→ 最新日音浪
+  const simpleWaveMatch = withoutGender.match(/^(.+?)\s*音浪$/);
+  if (simpleWaveMatch?.[1]?.trim()
+    && !/^(今日|今天|昨日|昨天|最新|音浪文件|导出)/.test(simpleWaveMatch[1].trim())) {
+    return {
+      type: "anchor-wave",
+      query: simpleWaveMatch[1].trim(),
+      dateSpec: null,
+    };
+  }
+
+  // 直接输入主播名/抖音号/主播 ID：返回库内全部相关数据
+  if (
+    withoutGender.length >= 1
+    && withoutGender.length <= 40
+    && !/[，。！？、；：,.!?;:]/.test(withoutGender)
+    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能)/.test(withoutGender)
+  ) {
+    return { type: "anchor-profile", query: withoutGender };
   }
   return null;
 }
@@ -406,7 +443,8 @@ async function sendOneGenderReport(args, date, gender, db, renderReportPng) {
   const caption = `${date} ${label}每日报告：${report.rows.length} 人，开播 ${liveCount} 人，未播 ${report.summary?.notLiveCount || 0} 人。`;
   await args.replyText(caption);
   try {
-    const image = await renderReportPng(report, { title: `${label}每日报告` });
+    // 标题交给渲染层按性别默认（男团星嗨艺创 / 女队薇笑传媒），与软件日报一致
+    const image = await renderReportPng(report, {});
     await args.replyImage({ buffer: image, fileName: `${date}_${label}_每日报告.png` });
     return true;
   } catch (error) {
@@ -455,6 +493,160 @@ async function handleAnchorDuration(args, command, db) {
   }
   const best = matches.reduce((current, row) => Number(row.时长分钟) > Number(current.时长分钟) ? row : current);
   await args.replyText(`${anchor.name} 截至 ${date} 的累计直播时长：${formatDuration(best.时长分钟)}（${compactNumber(best.时长分钟)} 分钟）。`);
+}
+
+/**
+ * 直接输入名字：汇总该主播库内全部已有数据（基础信息 + 音浪/时长全量）。
+ */
+async function handleAnchorProfile(args, command, db) {
+  const anchor = await resolveAnchorOrReply(args, command.query, db);
+  if (!anchor) return;
+
+  const genderLabel = anchor.gender === "female" ? "女队" : "男团";
+  const accountIds = [anchor.anchorId, ...(anchor.aliasIds || [])]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const uniqueIds = [...new Set(accountIds)];
+
+  const waveByDate = new Map();
+  const durationByDate = new Map();
+  const hasWaveTrend = typeof db.getAnchorWaveTrend === "function";
+  const hasDurationTrend = typeof db.getAnchorDurationTrend === "function";
+
+  for (const accountId of uniqueIds) {
+    if (hasWaveTrend) {
+      const trend = await db.getAnchorWaveTrend(accountId);
+      for (const point of Array.isArray(trend) ? trend : []) {
+        const date = String(point.date || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        const total = Number(point.total) || 0;
+        const rank = Number(point.rank) || 0;
+        const prev = waveByDate.get(date);
+        if (!prev || total > prev.total) waveByDate.set(date, { date, total, rank });
+      }
+    }
+    if (hasDurationTrend) {
+      const trend = await db.getAnchorDurationTrend(accountId);
+      for (const point of Array.isArray(trend) ? trend : []) {
+        const date = String(point.date || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        const total = Number(point.total) || 0;
+        const prev = durationByDate.get(date);
+        if (!prev || total > prev.total) durationByDate.set(date, { date, total });
+      }
+    }
+  }
+
+  // 兼容无 trend API 时，从 export 全表过滤（测试/旧库）
+  if (!hasWaveTrend && typeof db.exportWaveSnapshots === "function") {
+    const rows = await db.exportWaveSnapshots();
+    const idSet = new Set(uniqueIds);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = String(row.抖音号 || row.anchorId || "").trim();
+      if (!idSet.has(id)) continue;
+      const date = String(row.日期 || row.date || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const total = Number(row.音浪 || row.wave || row.total || 0) || 0;
+      const rank = Number(row.排名 || row.rank || 0) || 0;
+      const prev = waveByDate.get(date);
+      if (!prev || total > prev.total) waveByDate.set(date, { date, total, rank });
+    }
+  }
+  if (!hasDurationTrend && typeof db.exportDurationSnapshots === "function") {
+    const rows = await db.exportDurationSnapshots();
+    const idSet = new Set(uniqueIds);
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const id = String(row.抖音号 || row.anchorId || "").trim();
+      if (!idSet.has(id)) continue;
+      const date = String(row.日期 || row.date || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const total = Number(row.时长分钟 || row.totalMinutes || row.total || 0) || 0;
+      const prev = durationByDate.get(date);
+      if (!prev || total > prev.total) durationByDate.set(date, { date, total });
+    }
+  }
+
+  const waveDates = [...waveByDate.keys()].sort();
+  const durationDates = [...durationByDate.keys()].sort();
+  const latestWave = waveDates.length ? waveByDate.get(waveDates[waveDates.length - 1]) : null;
+  const latestDuration = durationDates.length
+    ? durationByDate.get(durationDates[durationDates.length - 1])
+    : null;
+  const peakWave = waveDates.length
+    ? [...waveByDate.values()].reduce((best, item) => (item.total > best.total ? item : best))
+    : null;
+  const waveSum = [...waveByDate.values()].reduce((sum, item) => sum + item.total, 0);
+
+  const lines = [
+    `【${anchor.name}】库内全部数据`,
+    `队伍：${genderLabel}`,
+    `主播ID：${anchor.anchorId || "-"}`,
+    `抖音号：${anchor.douyinNo || "-"}`,
+    anchor.masterName ? `师父：${anchor.masterName}` : null,
+    uniqueIds.length > 1 ? `关联账号：${uniqueIds.join("、")}` : null,
+    "",
+    "—— 音浪 ——",
+    waveDates.length
+      ? `记录 ${waveDates.length} 天（${waveDates[0]} ~ ${waveDates[waveDates.length - 1]}）`
+      : "暂无音浪快照",
+    latestWave
+      ? `最新 ${latestWave.date}：日音浪 ${formatWave(latestWave.total)}${latestWave.rank ? ` · 排名 ${latestWave.rank}` : ""}`
+      : null,
+    peakWave
+      ? `峰值 ${peakWave.date}：${formatWave(peakWave.total)}${peakWave.rank ? ` · 排名 ${peakWave.rank}` : ""}`
+      : null,
+    waveDates.length ? `各日合计：${formatWave(waveSum)}` : null,
+    "",
+    "—— 时长 ——",
+    durationDates.length
+      ? `记录 ${durationDates.length} 次（${durationDates[0]} ~ ${durationDates[durationDates.length - 1]}）`
+      : "暂无时长快照",
+    latestDuration
+      ? `最新累计 ${latestDuration.date}：${formatDuration(latestDuration.total)}（${compactNumber(latestDuration.total)} 分钟）`
+      : null,
+  ].filter((line) => line !== null);
+
+  // 附上全部明细（控制长度，过长则只发最近一段 + 提示）
+  const detailLines = [];
+  if (waveDates.length) {
+    detailLines.push("", "音浪明细：");
+    for (const date of waveDates) {
+      const item = waveByDate.get(date);
+      detailLines.push(
+        `${date}  ${formatWave(item.total)}${item.rank ? `  #${item.rank}` : ""}`
+      );
+    }
+  }
+  if (durationDates.length) {
+    detailLines.push("", "时长明细（累计分钟）：");
+    for (const date of durationDates) {
+      const item = durationByDate.get(date);
+      detailLines.push(`${date}  ${formatDuration(item.total)}`);
+    }
+  }
+
+  const full = [...lines, ...detailLines].join("\n");
+  // 微信单条文本不宜过长，超过约 3500 字时拆成摘要 + 明细
+  if (full.length <= 3500) {
+    await args.replyText(full);
+    return;
+  }
+  await args.replyText(lines.join("\n"));
+  // 明细按块发送
+  const chunks = [];
+  let buf = "";
+  for (const line of detailLines) {
+    if ((buf + "\n" + line).length > 3200) {
+      chunks.push(buf);
+      buf = line;
+    } else {
+      buf = buf ? `${buf}\n${line}` : line;
+    }
+  }
+  if (buf) chunks.push(buf);
+  for (const chunk of chunks) {
+    if (chunk.trim()) await args.replyText(chunk);
+  }
 }
 
 async function handleAnchorWaveDays(args, command, db) {
@@ -527,7 +719,59 @@ async function handleInboundFile(args, db) {
   await args.replyText(`已导入 ${date} ${label}数据：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
 }
 
-function createWeixinCommandHandler({ db, renderReportPng }) {
+
+const CUSTOM_ACTIONS = new Set(["reply", "daily_report", "male_report", "female_report", "wave_file", "help"]);
+
+function matchCustomCommand(text, customCommands) {
+  const original = normalizeText(text);
+  if (!original) return null;
+  const list = Array.isArray(customCommands) ? customCommands : [];
+  const lower = original.toLowerCase();
+  for (const item of list) {
+    if (!item || item.enabled === false) continue;
+    const trigger = normalizeText(item.trigger);
+    if (!trigger) continue;
+    if (trigger.toLowerCase() !== lower) continue;
+    const action = String(item.action || "reply").trim();
+    if (!CUSTOM_ACTIONS.has(action)) continue;
+    return {
+      type: "custom",
+      action,
+      replyText: String(item.replyText || "").trim(),
+      trigger,
+    };
+  }
+  return null;
+}
+
+async function handleCustomCommand(args, command, db, renderReportPng) {
+  if (command.action === "reply") {
+    const text = command.replyText || "已收到。";
+    await args.replyText(text);
+    return;
+  }
+  if (command.action === "help") {
+    await args.replyText(HELP_TEXT);
+    return;
+  }
+  if (command.action === "daily_report") {
+    await sendReport(args, { type: "report", gender: "both", dateSpec: null }, db, renderReportPng);
+    return;
+  }
+  if (command.action === "male_report") {
+    await sendReport(args, { type: "report", gender: "male", dateSpec: null }, db, renderReportPng);
+    return;
+  }
+  if (command.action === "female_report") {
+    await sendReport(args, { type: "report", gender: "female", dateSpec: null }, db, renderReportPng);
+    return;
+  }
+  if (command.action === "wave_file") {
+    await handleExportWaveFile(args, { type: "export-wave-file", dateSpec: null }, db);
+  }
+}
+
+function createWeixinCommandHandler({ db, renderReportPng, agent = null }) {
   if (!db) throw new Error("微信机器人命令处理缺少数据库");
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
 
@@ -540,13 +784,51 @@ function createWeixinCommandHandler({ db, renderReportPng }) {
         return { handled: true };
       }
 
+      const custom = matchCustomCommand(args.text, args.settings?.customCommands);
+      if (custom) {
+        await handleCustomCommand(args, custom, db, renderReportPng);
+        return { handled: true };
+      }
+
       const command = parseBotCommand(args.text);
       if (!command) return { handled: false };
+
       if (command.type === "help") {
         await args.replyText(HELP_TEXT);
         return { handled: true };
       }
+
+      if (command.type === "agent-enable") {
+        if (!agent || typeof agent.enableSession !== "function") {
+          await args.replyText("智能客服暂不可用，请先在桌面端配置 AI。");
+          return { handled: true };
+        }
+        const status = typeof agent.getPublicStatus === "function" ? agent.getPublicStatus() : {};
+        if (!status.configured) {
+          await args.replyText("智能客服未配置：请管理员在桌面端填写 API Key 并启用 AI。");
+          return { handled: true };
+        }
+        if (!status.enabled) {
+          await args.replyText("智能客服已配置但未启用，请管理员在桌面端打开 AI 开关。");
+          return { handled: true };
+        }
+        agent.enableSession(args);
+        await args.replyText([
+          "已接入智能客服。",
+          "可直接说：查某艺名、每日报告、18号报告、对比两位主播、发音浪文件。",
+          "固定命令仍然可用；回复「退出客服」结束。",
+        ].join("\n"));
+        return { handled: true };
+      }
+
+      if (command.type === "agent-disable") {
+        if (agent && typeof agent.disableSession === "function") agent.disableSession(args);
+        await args.replyText("已退出智能客服。固定命令仍可用，发「帮助」查看。");
+        return { handled: true };
+      }
+
       if (command.type === "report") await sendReport(args, command, db, renderReportPng);
+      else if (command.type === "anchor-profile") await handleAnchorProfile(args, command, db);
       else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db);
       else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db);
       else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db);
@@ -564,12 +846,15 @@ function createWeixinCommandHandler({ db, renderReportPng }) {
 
 module.exports = {
   HELP_TEXT,
+  AGENT_ENABLE_RE,
+  AGENT_DISABLE_RE,
   normalizeText,
   parseDateSpec,
   resolveDateSpec,
   normalizeIsoDate,
   getLatestDate,
   parseBotCommand,
+  matchCustomCommand,
   parseWaveValue,
   parseDurationValue,
   inferImportKind,

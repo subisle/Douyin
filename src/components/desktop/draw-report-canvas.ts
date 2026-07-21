@@ -324,7 +324,7 @@ export function drawReportToCanvas(
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   const genderText = gender === "male" ? "男" : "女";
-  const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
+  const titleBase = customTitle.trim() || "星嗨艺创主播数据统计";
   const titleText = `${titleBase} ${formattedDate}`;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
@@ -672,7 +672,7 @@ export function drawAppleReportToCanvas(
   } = opts;
   const font = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif';
   const mono = '"SF Mono", "Menlo", "Consolas", monospace';
-  const titleBase = customTitle.trim() || "薇笑传媒主播数据统计";
+  const titleBase = customTitle.trim() || "薇笑传媒主播数据统计"; // classic / 女队默认
   const genderText = gender === "male" ? "男团" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);

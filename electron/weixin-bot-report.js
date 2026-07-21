@@ -131,11 +131,11 @@ function normalizeRows(report) {
 
 function getTitle(report, options, style) {
   const gender = report.gender === "female" ? "female" : "male";
-  const genderLabel = gender === "female" ? "女队" : "男团";
   const custom = String(options.title || "").trim();
   if (custom) return custom;
-  if (style === "classic") return "薇笑传媒主播数据统计";
-  return "薇笑传媒主播数据统计";
+  // 与桌面端日报导出标题一致：男团星嗨艺创 / 女队薇笑传媒
+  if (gender === "female" || style === "classic") return "薇笑传媒主播数据统计";
+  return "星嗨艺创主播数据统计";
 }
 
 function renderClassicSvg(report, options = {}) {

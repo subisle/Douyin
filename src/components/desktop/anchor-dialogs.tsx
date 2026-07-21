@@ -555,7 +555,11 @@ export function ImportAnchorsDialog({ open, onClose, onSuccess, anchors }: Impor
   };
 
   return (
-    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" onClick={handleClose}>
+    <div
+      data-file-drop-zone="true"
+      className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      onClick={handleClose}
+    >
       <div className="max-h-[85vh] w-full max-w-3xl overflow-auto" onClick={(e) => e.stopPropagation()}>
         <Card className="border border-border shadow-2xl">
           <CardHeader className="pb-4">

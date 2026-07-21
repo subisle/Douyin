@@ -611,6 +611,7 @@ export function ImportPage({
           }}
         />
         <div
+          data-file-drop-zone="true"
           data-import-drop-zone="true"
           onDragEnter={(e) => {
             e.preventDefault();
@@ -636,7 +637,7 @@ export function ImportPage({
             dragCounter.current = 0;
             setIsDragging(false);
             const f = e.dataTransfer.files?.[0];
-            if (f) onPickFile(f, "auto");
+            if (f) onPickFile(f, "current");
           }}
           onClick={() => !parsing && fileRef.current?.click()}
           className={cn(

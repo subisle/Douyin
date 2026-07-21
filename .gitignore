@@ -64,3 +64,6 @@ public/fonts/NotoSansSC-Bold.woff
 tmp-query.js
 tsc_out.txt
 references/
+
+# brainstorm visual companion
+.superpowers/

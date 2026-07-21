@@ -26,6 +26,8 @@ const { LivePkWatcher } = require("./live-pk-watcher");
 const { WeixinBotService } = require("./weixin-bot");
 const { createWeixinCommandHandler } = require("./weixin-bot-commands");
 const { renderDailyReportPng } = require("./weixin-bot-report");
+const { createWeixinBotSkills } = require("./weixin-bot-skills");
+const { WeixinBotAgent } = require("./weixin-bot-agent");
 const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
@@ -89,7 +91,17 @@ const weixinBot = new WeixinBotService({
     return safeStorage.decryptString(Buffer.from(String(encrypted), "base64"));
   },
 });
-weixinBot.setCommandHandler(createWeixinCommandHandler({ db, renderReportPng: renderDailyReportPng }));
+const weixinBotSkills = createWeixinBotSkills({ db, renderReportPng: renderDailyReportPng });
+const weixinBotAgent = new WeixinBotAgent({
+  skills: weixinBotSkills,
+  getConfig: () => weixinBot.getAiRuntimeConfig(),
+});
+weixinBot.setCommandHandler(createWeixinCommandHandler({
+  db,
+  renderReportPng: renderDailyReportPng,
+  agent: weixinBotAgent,
+}));
+weixinBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";
@@ -766,9 +778,10 @@ ipcMain.handle("weixin-bot:messages", wrap(() => weixinBot.getMessages()));
 ipcMain.handle("weixin-bot:settings", wrap(() => weixinBot.getSettings()));
 ipcMain.handle("weixin-bot:login", wrap(() => weixinBot.startLogin()));
 ipcMain.handle("weixin-bot:login-cancel", wrap(() => weixinBot.cancelLogin()));
-ipcMain.handle("weixin-bot:start", wrap(() => weixinBot.startMonitoring()));
-ipcMain.handle("weixin-bot:stop", wrap(() => weixinBot.stopMonitoring()));
-ipcMain.handle("weixin-bot:disconnect", wrap(() => weixinBot.disconnect()));
+ipcMain.handle("weixin-bot:start", wrap((accountId) => weixinBot.startMonitoring(accountId)));
+ipcMain.handle("weixin-bot:stop", wrap((accountId) => weixinBot.stopMonitoring(accountId)));
+ipcMain.handle("weixin-bot:disconnect", wrap((accountId) => weixinBot.disconnect(accountId)));
+ipcMain.handle("weixin-bot:set-active-account", wrap((accountId) => weixinBot.setActiveAccount(accountId)));
 ipcMain.handle("weixin-bot:send", wrap((payload) => weixinBot.sendText(payload)));
 ipcMain.handle("weixin-bot:save-settings", wrap((payload) => weixinBot.saveSettings(payload)));
 ipcMain.handle("weixin-bot:clear-messages", wrap(() => weixinBot.clearMessages()));

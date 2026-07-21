@@ -91,11 +91,25 @@ const WEB_WEIXIN_STATUS = {
   error: null,
   receivedCount: 0,
   sentCount: 0,
+  accounts: [] as [],
 };
 
 const WEB_WEIXIN_SETTINGS = {
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
+  accessMode: "open" as const,
+  allowUserIds: [] as string[],
+  allowGroupIds: [] as string[],
+  customCommands: [] as [],
+  ai: {
+    enabled: false,
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    timeoutMs: 45_000,
+    maxToolRounds: 4,
+    hasApiKey: false,
+  },
+  contacts: [] as [],
 };
 
 export function createHttpElectronApi(): ElectronAPI {
@@ -196,9 +210,31 @@ export function createHttpElectronApi(): ElectronAPI {
       Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
     stopWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
     disconnectWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
+    setActiveWeixinBotAccount: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
     sendWeixinBotMessage: () =>
       Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
-    saveWeixinBotSettings: (payload) => Promise.resolve({ success: true, data: payload }),
+    saveWeixinBotSettings: (payload) =>
+      Promise.resolve({
+        success: true,
+        data: {
+          ...WEB_WEIXIN_SETTINGS,
+          ...payload,
+          customCommands: payload.customCommands ?? WEB_WEIXIN_SETTINGS.customCommands,
+          allowUserIds: payload.allowUserIds ?? WEB_WEIXIN_SETTINGS.allowUserIds,
+          allowGroupIds: payload.allowGroupIds ?? WEB_WEIXIN_SETTINGS.allowGroupIds,
+          ai: {
+            ...WEB_WEIXIN_SETTINGS.ai,
+            ...(payload.ai || {}),
+            hasApiKey: Boolean(
+              (payload.ai && "apiKey" in payload.ai && payload.ai.apiKey)
+                || (payload.ai?.clearApiKey ? false : WEB_WEIXIN_SETTINGS.ai.hasApiKey)
+            ),
+            apiKey: undefined,
+            clearApiKey: undefined,
+          },
+          contacts: WEB_WEIXIN_SETTINGS.contacts,
+        },
+      }),
     clearWeixinBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),
     onWeixinBotStatus: () => () => undefined,
     onWeixinBotMessage: () => () => undefined,

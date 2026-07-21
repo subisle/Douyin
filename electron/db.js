@@ -264,8 +264,15 @@ async function getDashboardSummary() {
   const totalDuration = latestDurationTotal;
   const waveRows = Number(waveAgg.rows_count) || 0;
   const durationRows = Number(durationAgg.rows_count) || 0;
-  const normalizeDate = (value) =>
-    value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  // DATE 列优先按本地年月日格式化，避免 toISOString 把东八区午夜推前一天
+  const normalizeDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    }
+    const text = String(value).trim();
+    return text ? text.slice(0, 10) : null;
+  };
   const latestDataDate = latestDataDateRow?.latest_date
     ? normalizeDate(latestDataDateRow.latest_date)
     : null;
@@ -286,6 +293,19 @@ async function getDashboardSummary() {
     notLiveCount = liveRows.filter((row) => Number(row.is_live) !== 1).length;
   }
 
+  const [[latestWaveRow]] = await db.query(
+    "SELECT MAX(import_date) AS latest FROM wave_snapshots"
+  );
+  const [[latestDurationRow]] = await db.query(
+    "SELECT MAX(import_date) AS latest FROM duration_snapshots"
+  );
+  const latestWaveDate = latestWaveRow?.latest
+    ? normalizeDate(latestWaveRow.latest)
+    : null;
+  const latestDurationDate = latestDurationRow?.latest
+    ? normalizeDate(latestDurationRow.latest)
+    : null;
+
   return {
     totalAnchors,
     totalAccounts: Number(accountCount.c) || 0,
@@ -295,6 +315,10 @@ async function getDashboardSummary() {
     avgWave: totalAnchors ? totalWave / totalAnchors : 0,
     avgDuration: totalAnchors ? totalDuration / totalAnchors : 0,
     dataCount: waveRows + durationRows,
+    // 最近有数据的导入日（导出/报告默认日期用）
+    latestDataDate,
+    latestWaveDate,
+    latestDurationDate,
   };
 }
 
@@ -1545,6 +1569,27 @@ async function getAnchorWaveTrend(anchorId) {
 }
 
 /**
+ * 单个主播时长趋势：按账号查询每个导入日的累计时长（分钟）。
+ */
+async function getAnchorDurationTrend(anchorId) {
+  if (!anchorId) return [];
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT import_date AS date, total_minutes AS total
+       FROM duration_snapshots
+      WHERE anchor_id = ?
+      ORDER BY import_date ASC`,
+    [String(anchorId)]
+  );
+  const fmt = (d) =>
+    d instanceof Date ? d.toISOString().split("T")[0] : String(d).split("T")[0];
+  return rows.map((r) => ({
+    date: fmt(r.date),
+    total: Number(r.total) || 0,
+  }));
+}
+
+/**
  * 多个主播音浪趋势：按 anchor_id 列表查询每个导入日每个主播的音浪值。
  * 返回 [{ anchorId, name, data: [{date, total, rank}] }]
  */
@@ -2662,6 +2707,7 @@ module.exports = {
   getAnchorDailySnapshot,
   saveAnchorDailySnapshot,
   getAnchorWaveTrend,
+  getAnchorDurationTrend,
   getAnchorsWaveTrend,
   getFlowingFlag,
   settleFlagScores,

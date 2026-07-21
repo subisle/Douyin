@@ -1,7 +1,7 @@
 "use client";
 
 import { getDataApi } from "@/client/http-electron-api";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Download, Loader2, Waves, Clock, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -40,13 +40,39 @@ export function ExportPage() {
   const [busy, setBusy] = useState<ExportKind | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [asOfDate, setAsOfDate] = useState(todayIsoDate);
+  // 默认填最近有时长/数据的导入日
+  const [asOfDate, setAsOfDate] = useState("");
 
   const unavailable = typeof window !== "undefined" && !getDataApi();
   const durationHint = useMemo(
     () => `导出截至 ${asOfDate || "最新"} 的累计时长`,
     [asOfDate]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const api = getDataApi();
+      if (!api) {
+        if (!cancelled) setAsOfDate(todayIsoDate());
+        return;
+      }
+      try {
+        const res = await api.getDashboardSummary();
+        if (cancelled) return;
+        const latest =
+          (res.success &&
+            (res.data.latestDurationDate || res.data.latestDataDate || res.data.latestWaveDate)) ||
+          null;
+        setAsOfDate(latest || todayIsoDate());
+      } catch {
+        if (!cancelled) setAsOfDate(todayIsoDate());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (unavailable) {
     return (
