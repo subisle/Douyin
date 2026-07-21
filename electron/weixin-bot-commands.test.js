@@ -28,7 +28,7 @@ function arrayBufferOf(buffer) {
 test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
   assert.deepEqual(parseBotCommand("每日报告"), {
     type: "report",
-    gender: "male",
+    gender: "both",
     dateSpec: null,
   });
   assert.deepEqual(parseBotCommand("女团每日报告18号"), {
@@ -36,9 +36,19 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
     gender: "female",
     dateSpec: { type: "day", day: 18 },
   });
+  assert.deepEqual(parseBotCommand("男团每日报告"), {
+    type: "report",
+    gender: "male",
+    dateSpec: null,
+  });
   assert.deepEqual(parseBotCommand("18号音浪"), {
     type: "report",
     gender: "male",
+    dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("女团18号音浪"), {
+    type: "report",
+    gender: "female",
     dateSpec: { type: "day", day: 18 },
   });
   assert.deepEqual(parseBotCommand("小张时长"), {
@@ -193,21 +203,25 @@ test("command handler imports an inbound wave CSV using its filename date", asyn
   assert.match(replies.at(-1), /已导入 2026-07-18 音浪数据/);
 });
 
-test("report command defaults to male and sends its generated image", async () => {
+test("report command without gender sends male then female images", async () => {
   const replies = [];
   const images = [];
+  const genders = [];
   const handler = createWeixinCommandHandler({
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
       exportWaveSnapshots: async () => [{ 音浪: 100 }],
-      getDailyWaveReport: async (date, gender) => ({
-        date,
-        gender,
-        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
-        rows: [{ name: "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
-      }),
+      getDailyWaveReport: async (date, gender) => {
+        genders.push(gender);
+        return {
+          date,
+          gender,
+          summary: { total: 1, notLiveCount: gender === "female" ? 1 : 0, notLiveDays: 0 },
+          rows: [{ name: gender === "female" ? "乙" : "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
+        };
+      },
     },
-    renderReportPng: async () => Buffer.from("PNG"),
+    renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
   });
   await handler({
     text: "每日报告",
@@ -215,9 +229,46 @@ test("report command defaults to male and sends its generated image", async () =
     replyText: async (text) => { replies.push(text); },
     replyImage: async (image) => { images.push(image); },
   });
-  assert.match(replies[0], /2026-07-18 男团每日报告/);
+  assert.deepEqual(genders, ["male", "female"]);
+  assert.match(replies[0], /2026-07-18 每日报告：依次发送男团、女队/);
+  assert.match(replies[1], /2026-07-18 男团每日报告/);
+  assert.match(replies[2], /2026-07-18 女队每日报告/);
   assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
-  assert.deepEqual(images[0].buffer, Buffer.from("PNG"));
+  assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
+  assert.deepEqual(images[0].buffer, Buffer.from("PNG-male"));
+  assert.deepEqual(images[1].buffer, Buffer.from("PNG-female"));
+});
+
+test("report command with explicit gender still sends only one team", async () => {
+  const replies = [];
+  const images = [];
+  const genders = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async (date, gender) => {
+        genders.push(gender);
+        return {
+          date,
+          gender,
+          summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+          rows: [{ name: "乙", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
+        };
+      },
+    },
+    renderReportPng: async () => Buffer.from("PNG"),
+  });
+  await handler({
+    text: "女团每日报告",
+    items: [{ type: 1, text_item: { text: "女团每日报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+  });
+  assert.deepEqual(genders, ["female"]);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /2026-07-18 女队每日报告/);
+  assert.equal(images[0].fileName, "2026-07-18_女队_每日报告.png");
 });
 
 
@@ -308,8 +359,11 @@ test("report command falls back when dashboard summary is empty", async () => {
     replyText: async (text) => { replies.push(text); },
     replyImage: async (image) => { images.push(image); },
   });
-  assert.match(replies[0], /2026-07-16 男团每日报告/);
+  assert.match(replies[0], /2026-07-16 每日报告：依次发送男团、女队/);
+  assert.match(replies[1], /2026-07-16 男团每日报告/);
+  assert.match(replies[2], /2026-07-16 女队每日报告/);
   assert.equal(images[0].fileName, "2026-07-16_男团_每日报告.png");
+  assert.equal(images[1].fileName, "2026-07-16_女队_每日报告.png");
 });
 
 test("anchor duration uses latestDurationDate when it diverges from wave", async () => {

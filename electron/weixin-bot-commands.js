@@ -3,8 +3,9 @@ const Papa = require("papaparse");
 
 const HELP_TEXT = [
   "可用命令：",
-  "每日报告 / 18号音浪：发送男团报告图片（也支持 2026-07-18音浪）",
-  "女团每日报告：发送女队报告图片",
+  "每日报告：发送最新音浪日的男团、女队报告图片",
+  "男团每日报告 / 女团每日报告：只发送对应一队",
+  "18号音浪：发送指定日期男团报告图（也支持 2026-07-18音浪）",
   "主播名时长：查询累计直播时长",
   "主播名多少日音浪：查询本月有音浪天数与累计音浪",
   "主播名18号音浪：查询指定日期的日音浪",
@@ -87,22 +88,48 @@ function extractDateFromText(text, fallbackDate) {
   return resolveDateSpec(parseDateSpec(text), fallbackDate);
 }
 
+function parseReportGender(original) {
+  const hasFemale = /(?:女团|女队|女性)/.test(original);
+  const hasMale = /(?:男团|男队|男性)/.test(original);
+  if (hasFemale && !hasMale) return "female";
+  if (hasMale && !hasFemale) return "male";
+  // 未写性别的「每日报告」默认双团；写了男女两边则也按双团
+  if (hasFemale && hasMale) return "both";
+  return "both";
+}
+
+function parseSingleGender(original) {
+  return /(?:女团|女队|女性)/.test(original) ? "female" : "male";
+}
+
 function parseBotCommand(input) {
   const original = normalizeText(input);
   if (!original) return null;
   if (/^(?:\/?help|帮助|菜单|命令|指令)$/i.test(original)) return { type: "help" };
 
-  const gender = /(?:女团|女队|女性)/.test(original) ? "female" : "male";
   const withoutGender = original.replace(/(?:男团|男队|男性|女团|女队|女性)/g, "").trim();
 
   const fileMatch = withoutGender.match(/^(?:\/?(?:音浪文件|导出音浪(?:文件)?))(?:\s*(.+))?$/i);
   if (fileMatch) return { type: "export-wave-file", dateSpec: parseDateSpec(fileMatch[1] || "") };
 
   const reportMatch = withoutGender.match(/^(?:\/?(?:每日报告|日报|报告))(?:\s*(.+))?$/i);
-  if (reportMatch) return { type: "report", gender, dateSpec: parseDateSpec(reportMatch[1] || "") };
+  if (reportMatch) {
+    return {
+      type: "report",
+      gender: parseReportGender(original),
+      dateSpec: parseDateSpec(reportMatch[1] || ""),
+    };
+  }
 
+  // 「18号音浪」保留单团习惯，默认男团；可写女团18号音浪
   const dateOnlyWave = withoutGender.match(/^(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|\d{1,2}\s*[日号])\s*音浪$/);
-  if (dateOnlyWave) return { type: "report", gender, dateSpec: parseDateSpec(dateOnlyWave[1]) };
+  if (dateOnlyWave) {
+    return {
+      type: "report",
+      gender: parseSingleGender(original),
+      dateSpec: parseDateSpec(dateOnlyWave[1]),
+    };
+  }
 
   const daysMatch = withoutGender.match(/^(.+?)\s*(?:多少日|多少天)音浪$/);
   if (daysMatch?.[1]?.trim()) return { type: "anchor-wave-days", query: daysMatch[1].trim() };
@@ -364,6 +391,30 @@ async function resolveReportDate(db, spec, kind = "wave") {
   return resolveDateSpec(spec, await getLatestDate(db, kind));
 }
 
+function genderLabel(gender) {
+  return gender === "female" ? "女队" : "男团";
+}
+
+async function sendOneGenderReport(args, date, gender, db, renderReportPng) {
+  const label = genderLabel(gender);
+  const report = await db.getDailyWaveReport(date, gender);
+  if (!report?.rows?.length) {
+    await args.replyText(`${date} 没有${label}主播数据。`);
+    return false;
+  }
+  const liveCount = report.rows.filter((row) => row.isLive).length;
+  const caption = `${date} ${label}每日报告：${report.rows.length} 人，开播 ${liveCount} 人，未播 ${report.summary?.notLiveCount || 0} 人。`;
+  await args.replyText(caption);
+  try {
+    const image = await renderReportPng(report, { title: `${label}每日报告` });
+    await args.replyImage({ buffer: image, fileName: `${date}_${label}_每日报告.png` });
+    return true;
+  } catch (error) {
+    await args.replyText(`${label}报告图片生成失败：${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 async function sendReport(args, command, db, renderReportPng) {
   const date = await resolveReportDate(db, command.dateSpec, "wave");
   const available = await db.exportWaveSnapshots(date);
@@ -371,19 +422,13 @@ async function sendReport(args, command, db, renderReportPng) {
     await args.replyText(`${date} 没有音浪快照，暂时没有可发送的报告。`);
     return;
   }
-  const report = await db.getDailyWaveReport(date, command.gender);
-  if (!report?.rows?.length) {
-    await args.replyText(`${date} 没有${command.gender === "female" ? "女队" : "男团"}主播数据。`);
-    return;
+
+  const genders = command.gender === "both" ? ["male", "female"] : [command.gender === "female" ? "female" : "male"];
+  if (genders.length > 1) {
+    await args.replyText(`${date} 每日报告：依次发送男团、女队。`);
   }
-  const liveCount = report.rows.filter((row) => row.isLive).length;
-  const caption = `${date} ${command.gender === "female" ? "女队" : "男团"}每日报告：${report.rows.length} 人，开播 ${liveCount} 人，未播 ${report.summary.notLiveCount} 人。`;
-  await args.replyText(caption);
-  try {
-    const image = await renderReportPng(report, { title: `${command.gender === "female" ? "女队" : "男团"}每日报告` });
-    await args.replyImage({ buffer: image, fileName: `${date}_${command.gender === "female" ? "女队" : "男团"}_每日报告.png` });
-  } catch (error) {
-    await args.replyText(`报告图片生成失败：${error instanceof Error ? error.message : String(error)}`);
+  for (const gender of genders) {
+    await sendOneGenderReport(args, date, gender, db, renderReportPng);
   }
 }
 
