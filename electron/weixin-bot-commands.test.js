@@ -169,6 +169,45 @@ test("daily report renderer produces a real PNG", async () => {
   assert.ok(metadata.height > 250);
 });
 
+test("daily report style defaults to apple for male and classic for female", async () => {
+  const { resolveReportStyle, renderClassicSvg, renderAppleSvg } = require("./weixin-bot-report");
+  assert.equal(resolveReportStyle("male"), "apple");
+  assert.equal(resolveReportStyle("female"), "classic");
+  assert.equal(resolveReportStyle("male", { style: "classic" }), "classic");
+  assert.equal(resolveReportStyle("female", { style: "apple" }), "apple");
+
+  const sample = {
+    date: "2026-07-18",
+    summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+    rows: [{
+      rank: 1,
+      name: "测试主播",
+      notLiveDays: 1,
+      dailyWave: 12345,
+      totalWave: 543210,
+      dailyDuration: 95,
+      tier: "A1",
+      isLive: true,
+    }],
+  };
+  const maleSvg = renderAppleSvg({ ...sample, gender: "male" }, { title: "薇笑传媒主播数据统计" });
+  const femaleSvg = renderClassicSvg({ ...sample, gender: "female" }, { title: "薇笑传媒主播数据统计" });
+  assert.match(maleSvg, /内部数据 · 请勿外传/);
+  assert.match(maleSvg, /#007AFF/);
+  assert.match(femaleSvg, /#1E293B/);
+  assert.match(femaleSvg, /女主播 1 人/);
+
+  const malePng = await renderDailyReportPng({ ...sample, gender: "male" });
+  const femalePng = await renderDailyReportPng({ ...sample, gender: "female" });
+  assert.equal(malePng.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(femalePng.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  const maleMeta = await sharp(malePng).metadata();
+  const femaleMeta = await sharp(femalePng).metadata();
+  assert.equal(maleMeta.width, 1440);
+  assert.equal(femaleMeta.width, 1440);
+  assert.notEqual(maleMeta.height, femaleMeta.height);
+});
+
 test("command handler imports an inbound wave CSV using its filename date", async () => {
   const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\nanchor-b,乙,800,2\n", "utf8");
   let importCall;
