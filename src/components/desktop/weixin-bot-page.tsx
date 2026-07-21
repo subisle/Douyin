@@ -9,6 +9,9 @@ import {
   CirclePause,
   CirclePlay,
   Clock3,
+  FileSpreadsheet,
+  HelpCircle,
+  ImageIcon,
   Inbox,
   Loader2,
   LogOut,
@@ -16,9 +19,12 @@ import {
   QrCode,
   Save,
   Send,
+  Sparkles,
+  Timer,
   Trash2,
   UserRound,
   UsersRound,
+  Waves,
   Wifi,
   WifiOff,
   X,
@@ -64,6 +70,45 @@ const DEFAULT_SETTINGS: WeixinBotSettings = {
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
 };
+
+const COMMAND_GROUPS: {
+  title: string;
+  items: { example: string; desc: string; icon: LucideIcon }[];
+}[] = [
+  {
+    title: "报告图片",
+    items: [
+      { example: "每日报告", desc: "最新音浪日 · 男团 + 女队两张图", icon: ImageIcon },
+      { example: "男团每日报告", desc: "只发男团报告图", icon: ImageIcon },
+      { example: "女团每日报告", desc: "只发女队报告图", icon: ImageIcon },
+      { example: "18号音浪", desc: "指定日男团报告图", icon: Waves },
+    ],
+  },
+  {
+    title: "主播查询",
+    items: [
+      { example: "小张时长", desc: "累计直播时长（最近时长日）", icon: Timer },
+      { example: "小张多少日音浪", desc: "本月有音浪天数与累计", icon: Waves },
+      { example: "小张18号音浪", desc: "指定日日音浪与累计", icon: Waves },
+    ],
+  },
+  {
+    title: "文件",
+    items: [
+      { example: "音浪文件", desc: "发送最新日音浪 CSV", icon: FileSpreadsheet },
+      { example: "音浪文件18号", desc: "发送指定日音浪 CSV", icon: FileSpreadsheet },
+      { example: "发送 CSV 附件", desc: "自动识别音浪/时长并导入", icon: FileSpreadsheet },
+    ],
+  },
+];
+
+const QUICK_COMMANDS = [
+  "每日报告",
+  "女团每日报告",
+  "18号音浪",
+  "音浪文件",
+  "帮助",
+] as const;
 
 const PHASE_LABEL: Record<WeixinBotPhase, string> = {
   disconnected: "未连接",
@@ -280,7 +325,10 @@ export function WeixinBotPage() {
                 <h2 className="text-xl font-semibold">微信机器人</h2>
                 <PhaseBadge phase={status.phase} />
               </div>
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">{status.statusText}</p>
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                {status.statusText}
+                {status.connected && status.monitoring ? " · 命令：每日报告 / 主播查询 / CSV" : ""}
+              </p>
             </div>
           </div>
 
@@ -342,6 +390,7 @@ export function WeixinBotPage() {
         ) : (
           <>
             <StatusStrip status={status} />
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_300px]">
             <section className="grid min-h-[548px] overflow-hidden rounded-lg border border-border/70 bg-card/70 lg:grid-cols-[270px_minmax(0,1fr)]">
               <aside className="flex min-h-0 flex-col border-b border-border/70 lg:border-b-0 lg:border-r">
                 <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/70 px-3">
@@ -417,43 +466,129 @@ export function WeixinBotPage() {
                       </div>
                     </div>
 
-                    <form className="flex shrink-0 items-end gap-2 border-t border-border/70 p-3" onSubmit={handleSend}>
-                      <textarea
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" && !event.shiftKey) {
-                            event.preventDefault();
-                            event.currentTarget.form?.requestSubmit();
-                          }
-                        }}
-                        rows={2}
-                        maxLength={4000}
-                        className="min-h-16 flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
-                        aria-label="回复内容"
-                      />
-                      <IconAction
-                        label="发送消息"
-                        icon={busyAction === "send" ? Loader2 : Send}
-                        loading={busyAction === "send"}
-                        className="size-10"
-                        disabled={!draft.trim() || busyAction !== null}
-                        type="submit"
-                      />
-                    </form>
+                    <div className="shrink-0 border-t border-border/70">
+                      <div className="flex flex-wrap gap-1.5 border-b border-border/60 px-3 py-2">
+                        {QUICK_COMMANDS.map((item) => (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setDraft(item)}
+                            className="rounded-full border border-border/70 bg-background px-2.5 py-0.5 text-[11px] text-muted-foreground transition hover:border-[#07c160]/40 hover:bg-[#07c160]/8 hover:text-foreground"
+                          >
+                            {item}
+                          </button>
+                        ))}
+                      </div>
+                      <form className="flex items-end gap-2 p-3" onSubmit={handleSend}>
+                        <textarea
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              event.preventDefault();
+                              event.currentTarget.form?.requestSubmit();
+                            }
+                          }}
+                          rows={2}
+                          maxLength={4000}
+                          placeholder="输入回复，或点上方命令试发"
+                          className="min-h-16 flex-1 resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
+                          aria-label="回复内容"
+                        />
+                        <IconAction
+                          label="发送消息"
+                          icon={busyAction === "send" ? Loader2 : Send}
+                          loading={busyAction === "send"}
+                          className="size-10"
+                          disabled={!draft.trim() || busyAction !== null}
+                          type="submit"
+                        />
+                      </form>
+                    </div>
                   </>
                 ) : (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+                  <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-muted-foreground">
                     <MessageCircle className="size-9 opacity-50" />
-                    <span className="text-sm">等待微信消息</span>
+                    <div className="text-center">
+                      <div className="text-sm font-medium text-foreground">等待微信消息</div>
+                      <p className="mt-1 max-w-xs text-xs leading-5">
+                        用户可在微信发送下方命令；也可先从右侧能力卡复制示例到输入框手动试发。
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-1.5">
+                      {QUICK_COMMANDS.map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => setDraft(item)}
+                          className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[11px] text-foreground transition hover:border-[#07c160]/40 hover:bg-[#07c160]/8"
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
             </section>
+            <CommandGuide onPick={(example) => {
+              setDraft(example);
+              if (!selectedConversationId && conversations[0]) {
+                setSelectedConversationId(conversations[0].id);
+              }
+            }} />
+            </div>
           </>
         )}
       </div>
     </TooltipProvider>
+  );
+}
+
+function CommandGuide({ onPick }: { onPick: (example: string) => void }) {
+  return (
+    <aside className="flex min-h-[548px] flex-col overflow-hidden rounded-lg border border-border/70 bg-card/70">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border/70 px-3">
+        <HelpCircle className="size-4 text-[#07c160]" />
+        <span className="text-sm font-semibold">命令速查</span>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+        <p className="text-[11px] leading-5 text-muted-foreground">
+          用户在微信发送这些中文命令即可。点示例可填入左侧输入框试发。
+        </p>
+        {COMMAND_GROUPS.map((group) => (
+          <div key={group.title} className="space-y-1.5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {group.title}
+            </div>
+            <div className="space-y-1">
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.example}
+                    type="button"
+                    onClick={() => onPick(item.example)}
+                    className="flex w-full items-start gap-2.5 rounded-lg border border-transparent px-2 py-2 text-left transition hover:border-[#07c160]/25 hover:bg-[#07c160]/8"
+                  >
+                    <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background">
+                      <Icon className="size-3.5 text-[#07c160]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold text-foreground">{item.example}</div>
+                      <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{item.desc}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        <div className="rounded-lg border border-dashed border-border/80 bg-muted/20 px-3 py-2.5 text-[11px] leading-5 text-muted-foreground">
+          日期可写：今日、昨日、18号、7月18日、2026-07-18。未写日期时取库内最新音浪/时长日。
+        </div>
+      </div>
+    </aside>
   );
 }
 
@@ -484,6 +619,17 @@ function ConnectionPanel({
             <ConnectionRow label="接口" value="微信 iLink" />
             <ConnectionRow label="凭据" value="系统加密存储" />
             <ConnectionRow label="状态" value={PHASE_LABEL[status.phase]} />
+          </div>
+          <div className="rounded-lg border border-border/70 bg-background/50 p-3">
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Sparkles className="size-3.5 text-[#07c160]" />
+              连接后可用
+            </div>
+            <ul className="space-y-1.5 text-xs leading-5 text-muted-foreground">
+              <li>· 每日报告：男团 + 女队两张图</li>
+              <li>· 主播时长 / 日音浪查询</li>
+              <li>· 音浪 CSV 导出与附件导入</li>
+            </ul>
           </div>
         </div>
 
@@ -560,8 +706,8 @@ function ConnectionRow({ label, value }: { label: string; value: string }) {
 function StatusStrip({ status }: { status: WeixinBotStatus }) {
   const values = [
     { label: "Bot ID", value: compactId(status.accountId) },
-    { label: "收到", value: String(status.receivedCount) },
-    { label: "发送", value: String(status.sentCount) },
+    { label: "收到 / 发送", value: `${status.receivedCount} / ${status.sentCount}` },
+    { label: "最近消息", value: formatRelative(status.lastMessageAt) },
     { label: "最近轮询", value: formatRelative(status.lastPollAt) },
   ];
   return (
@@ -649,9 +795,13 @@ function AutoReplySettings({
         maxLength={1000}
         value={settings.autoReplyText}
         onChange={(event) => onChange({ ...settings, autoReplyText: event.target.value })}
+        placeholder="未命中命令时的固定回复"
         className="min-h-14 w-full resize-none rounded-lg border border-input bg-background px-2.5 py-2 text-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:opacity-50"
         aria-label="自动回复内容"
       />
+      <p className="text-[10px] leading-4 text-muted-foreground">
+        仅在未识别为命令/导入时触发；报告与查询命令优先。
+      </p>
     </div>
   );
 }
