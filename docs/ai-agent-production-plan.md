@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | **v1.0.0** |
+| 版本 | **v1.1.0** |
 | 最后核对 | 2026-07-22 |
 | 状态 | **执行中：桌面与 Web MVP 已有，尚未达到生产发布门槛** |
 | 适用范围 | 微信 iLink 单通道机器人、Web 管理后台、知识库、服务器 Bot Worker |
 | 本文职责 | 产品边界、架构决策、实施顺序、验收标准、上线与回滚 |
 
-> 本文是 AI Agent 能力的唯一计划源。iLink 服务器化专项见 `ilink-server-agent-design.md`；部署命令见 `server-deployment.md`，数据 REST 见 `api-design.md`，本地存储见 `local-storage-plan.md`，落地命令与运维清单见 `LANDING.md`。旧版 `weixin-ai-agent-plan.md` 已废弃，不再恢复。
+> 本文是 AI Agent 能力的唯一计划源。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`，数据 REST 见 `api-design.md`，本地存储见 `local-storage-plan.md`，落地命令与运维清单见 `LANDING.md`。旧版 `weixin-ai-agent-plan.md` 已废弃，不再恢复。
 
 ---
 
@@ -19,13 +19,13 @@
 1. Electron 微信机器人支持指令模式、智能模式、FastRoute、11 个受控工具、CSV 导入、报告图片与会话串行。
 2. Web 已有 `/agent`、`/knowledge`、`/bot` 页面，以及 Agent、RAG、Bot 状态 API 的 MVP。
 
-但当前状态只能定义为 **内部 MVP**，不能定义为生产可用。主要原因是：
+当前状态应定义为 **内部 MVP**，尚未达到生产可用门槛。主要原因是：
 
 - Web Agent 仍直接加载 `electron/*.js`，桌面与服务器没有真正共用一个独立 Core。
 - RAG 有 Electron 与 Next 两套实现，自定义文档在不同检索入口中的行为不一致。
-- Web 会话使用本地 JSON 文件，无法支持多实例、并发写、权限隔离和可靠审计。
+- Web 会话使用本地 JSON 文件，不适合多实例、并发写、权限隔离和可靠审计。
 - API 在未配置 Token 时默认放行，前端还存在读取 `NEXT_PUBLIC_API_TOKEN` 的方式，不符合生产密钥边界。
-- 当前 Runner 锁是本机文件租约，不能可靠协调桌面与服务器两台主机，也没有按微信账号隔离。
+- 当前 Runner 锁是本机文件租约，仅适用于单机，缺少桌面与服务器跨主机协调和微信账号隔离。
 - 服务器 Bot Worker 和抖音画像均为占位实现。
 
 **下一目标不是继续增加 Tool，而是完成生产基础层并把 iLink Worker 做成真实服务器通道：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计、真实收发与回归测试。**
@@ -45,14 +45,14 @@
 | 微信 iLink 通道 | 已实现 | `electron/weixin-bot.js` | 仍需真实账号连续运行验收与脱敏日志 |
 | ModeRouter / FastRoute | 已实现 | `weixin-bot-mode.js`、命令回归测试 | 需迁入共享 Core，并补桌面/Web 契约测试 |
 | 数据 Analytics | 已实现 | `weixin-bot-analytics.js` | 位置仍属于 Electron，Web 通过 CJS 间接复用 |
-| 桌面 Agent Tools | 已实现 | `weixin-bot-skills.js`，共 11 个工具 | 工具权限、超时和审计需统一 |
+| 桌面 Agent Tools | 部分实现 | `weixin-bot-skills.js`，当前共 11 个工具 | 只覆盖部分查询/报告/导出；全项目能力矩阵见 `agent-framework-reference-and-extension-plan.md` |
 | Web Agent API | 部分实现 | `POST /api/agent/chat` | 直接依赖 Electron 模块；本地文件会话；生产鉴权不足 |
 | Web 对话页 | 部分实现 | `/agent` | 无稳定用户身份、会话列表、历史恢复、取消与重试 |
 | RAG 检索 | 部分实现 | JSON 种子 + 关键词评分 | 不是严格 BM25；两套实现；缺统一索引与质量评测 |
 | 知识库页 | 部分实现 | `/knowledge`、`/api/rag/documents` | 缺完整 CRUD、版本、权限、索引一致性和大小限制闭环 |
 | 本地运行目录 | 已实现 | `electron/local-paths.js` | 打包环境必须显式配置持久路径并做启动检查 |
 | 会话持久化 | 部分实现 | `weixin-bot-session-store.js` | JSON 仅适合单机开发，服务器必须迁 MySQL |
-| Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 文件锁不能跨主机；需账号级 DB 租约和 fencing token |
+| Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 文件锁仅适用于本机；需账号级 DB 租约和 fencing token |
 | Bot 状态页 | 未实现 | `/bot` 只展示固定状态 | 需真实心跳、账号、租约和最近错误 |
 | 服务器微信 Worker | 未实现 | `scripts/bot-worker.js` 只持锁保活 | 未接 iLink 长轮询、发消息、重连与凭据管理；这是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
@@ -74,7 +74,7 @@
 
 ### 3.1 目标产品
 
-交付一个以微信 iLink 为唯一用户会话通道的内部数据客服。用户从微信完成：
+交付一个以微信 iLink 为唯一用户会话通道的内部数据客服。用户从微信完成项目能力目录中的查询、Artifact 和经确认的写入动作：
 
 - 查询主播档案、音浪、时长、未播天数、排名和对比。
 - 生成男团、女队或双团日报图片，导出受控 CSV。
@@ -83,6 +83,8 @@
 - 在 Agent 不可用时立即回到固定指令模式。
 
 Web 只承担登录后的管理、知识库、会话审计、Bot 状态和内部诊断，不对最终用户提供第二个聊天通道。
+
+“支持项目所有功能”以 `agent-framework-reference-and-extension-plan.md` 的 Capability Catalog 为准，必须覆盖仪表盘、主播、数据、红旗、PK、监控、争霸、奖励、族谱、海报、机器人和设置；每项均需标注权限、执行类型和 iLink E2E 证据。
 
 ### 3.2 成功标准
 
@@ -98,8 +100,8 @@ Web 只承担登录后的管理、知识库、会话审计、Bot 状态和内部
 
 ### 3.3 非目标
 
-- 不嵌入 Dify、LobeHub、LangChain/LangGraph 整站或完整运行时。
-- 不允许模型执行自由 SQL、Shell、任意文件读写、删除或修改业务数据。
+- 首期不嵌入 Dify、LangChain/LangGraph、CrewAI、AutoGen、MetaGPT 整站或完整运行时；只按专项设计吸收状态机、Flow、SOP、评测和控制面模式。
+- 自由 SQL、Shell、任意文件读写、删除或修改业务数据不在模型直接执行范围内；受控写入先生成 Action Proposal，经管理员确认后由确定性 Executor 执行。
 - 不用 RAG 代替 SQL 回答音浪、时长、排名、对比和报告数据。
 - 不默认引入向量数据库；关键词检索满足质量门槛前不增加复杂度。
 - 不在同步请求中批量爬抖音主页、作品或下载视频。
@@ -270,7 +272,7 @@ type AgentResult = {
 | ID | 任务 | 完成定义 |
 | --- | --- | --- |
 | B2.1 | 建表与迁移脚本 | 五张生产表可重复迁移并可回滚 |
-| B2.2 | MySQL Session Store | 重启后恢复；用户不能读取他人会话 |
+| B2.2 | MySQL Session Store | 重启后恢复；用户会话严格相互隔离 |
 | B2.3 | 统一登录与 API 授权 | 生产缺少配置时 fail closed；无公开 Token |
 | B2.4 | 知识库 Repository | CRUD、版本、启停、大小上限、索引一致 |
 | B2.5 | 账号级 Runner Lease | 两台主机并发启动时只有一个获得租约 |

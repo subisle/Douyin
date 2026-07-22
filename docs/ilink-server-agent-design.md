@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.0 |
+| 版本 | v1.1 |
 | 核对日期 | 2026-07-22 |
 | 结论 | **可落地，但当前代码尚未达到服务器生产条件** |
 | 通道约束 | **只使用微信 iLink；不引入公众号、企业微信、Webhook 或其他 IM 通道** |
 | 适用范围 | 抖音数据查询、CSV 导入、日报图片、CSV 导出、帮助/RAG、Agent、账号管理、服务器部署 |
 
-> 本文是 iLink 单通道服务器化的专项设计。产品路线、通用 Agent 门槛仍以 `ai-agent-production-plan.md` 为准；部署参数和命令以 `server-deployment.md` 为准。
+> 本文是 iLink 单通道服务器化的专项设计。产品路线、通用 Agent 门槛仍以 `ai-agent-production-plan.md` 为准；框架借鉴和扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署参数和命令以 `server-deployment.md` 为准。
 
 ## 1. 可行性结论
 
@@ -30,7 +30,7 @@
 | 服务器字体/文件 | 依赖桌面环境 | 镜像固定字体、临时目录、大小上限和清理策略 |
 | 真实运维证据 | 无连续运行记录 | 单账号 72 小时、断网/重启/抢占演练通过 |
 
-因此，目标是**工程上可实现**，但不能把当前占位 Worker 宣布为已完成。
+因此，目标是**工程上可实现**，但当前占位 Worker 尚未达到完成标准。
 
 ## 2. 产品边界与“全部功能”定义
 
@@ -47,6 +47,8 @@
 5. 帮助、字段口径、业务日规则和知识库检索。
 6. Agent 的受控 Tool 调用、来源标注、超时和固定命令降级。
 7. 多微信账号配置，但每个账号同一时刻只能由一个 runner 持有。
+
+以上是当前主链能力，不代表完整项目功能。仪表盘、主播维护、红旗、PK、监控、争霸、奖励、族谱、海报、机器人和设置的逐项覆盖，以 `agent-framework-reference-and-extension-plan.md` 的 Capability Catalog 为验收源。
 
 抖音主页/作品等需要桌面签名的补充数据仍是独立可选能力；服务器版本必须明确返回缓存状态，不得伪装为实时抓取。
 
@@ -73,7 +75,7 @@
 
 ### 4.1 `shared/bot-core`
 
-包含 ModeRouter、Agent Loop、Tool Registry、RAG Policy、Analytics、日期规则、Session Port 和 Artifact Port。只接受接口注入，不读取环境变量，不写本地文件，不调用 iLink HTTP。
+包含 ModeRouter、Agent Loop、Tool Registry、RAG Policy、Analytics、日期规则、Session Port 和 Artifact Port。依赖只通过接口注入；环境变量、本地文件和 iLink HTTP 均由 Adapter 负责。
 
 ### 4.2 `ilink-adapter`
 
@@ -95,23 +97,27 @@
 ## 5. 消息与文件生命周期
 
 ```text
-iLink update
-  -> 幂等键(accountId, messageId)
+iLink getupdates batch
+  -> MySQL 事务写入 Inbox(accountId, messageId, envelope) 与 next cursor
+  -> Session Dispatcher 按会话串行取 Inbox
   -> 下载入站媒体到临时目录
   -> Core 路由/工具执行
   -> 生成 AgentResult + Artifact
-  -> iLink 上传并发送
-  -> 持久化消息、结果、游标和审计
+  -> 事务写入 Effect Ledger 与 Outbox
+  -> Outbox Dispatcher 上传并发送 iLink
+  -> 持久发送结果和审计
 ```
 
 - 文本最大 4,000 字；图片、CSV、入站文件分别限制大小和 MIME 类型。
 - 媒体文件使用随机临时名，发送成功后删除；异常文件按 TTL 清理。
-- 先持久化幂等键再执行业务，重复 update 只返回已发送结果，不重复写库或发消息。
+- Poller 不等待 LLM。先在同一事务持久化批次消息和 next cursor，再由 Dispatcher 异步执行业务；重复 update 命中 Inbox 唯一键后跳过。
+- Outbox 创建时只生成一次稳定 `client_id`，所有重试复用该值；请求超时且上游结果未知时进入 `unknown/reconcile`，不立即生成新消息。
+- 目标语义是 effectively-once 和可抑制重复，不宣称分布式严格 exactly-once。
 - 报告生成失败时发送文字错误；文件上传失败时不声称已发送。
 
 ## 6. 数据与安全
 
-新增或落实以下表：`ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`agent_sessions`、`agent_messages`、`agent_audit_logs`、`rag_documents`、`idempotency_keys`。
+新增或落实以下表：`ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、`outbox_messages`、`effect_ledger`、`agent_sessions`、`agent_messages`、`agent_audit_logs`、`rag_documents`、`idempotency_keys`。
 
 - 凭据使用服务器密钥加密，密钥来自 Secret Manager 或受限环境变量；数据库备份不包含明文 Token。
 - 管理员接口必须登录并按角色授权；未配置生产认证时启动失败。
@@ -172,3 +178,10 @@ iLink update
 - [ ] 统一 `AgentResult` 与 Artifact 发送契约。
 - [ ] 完成真实微信账号的文字、图片、CSV E2E 与 72 小时记录。
 - [ ] 更新 `server-deployment.md` 的服务编排、持久卷、Secret 和健康检查。
+
+## 11. 扩展前置约束
+
+- 参考 LangChain/LangGraph、CrewAI、AutoGen、MetaGPT 和 Dify 时只吸收状态机、Flow、SOP、评测和控制面模式，首期不引入整套运行时。
+- 任何扩展功能都通过共享 Core、Workflow 和 Tool Policy 接入，iLink 仍是唯一最终用户通道。
+- 定时报表、异常预警、审批、知识治理和多 Agent 的具体顺序以 `agent-framework-reference-and-extension-plan.md` 为准。
+- 真实 Worker、Inbox/Outbox、幂等、租约和恢复测试未完成前，不上线多 Agent 或可视化编排。
