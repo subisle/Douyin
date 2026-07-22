@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.0 |
-| 核对日期 | 2026-07-22 |
+| 版本 | v1.1 |
+| 核对日期 | 2026-07-23 |
 | 适用范围 | 微信 iLink 单通道、Node.js Agent Core、服务器 Worker、Web 管理后台 |
 | 参考项目 | LangChain/LangGraph、CrewAI、AutoGen、MetaGPT、Dify |
 | 冻结结论 | **借鉴成熟机制，首期不直接引入任一整套运行时** |
 
-> iLink 仍是唯一用户会话通道。本文件只扩展 Agent 编排、管理、评测和业务能力，不增加公众号、企业微信、Webhook 或其他 IM 通道。
+> iLink 仍是唯一最终用户会话通道。本文件只扩展 Agent 编排、管理、评测和业务能力，不增加公众号、企业微信、Webhook 或其他 IM 通道。跨文档运行契约与实施顺序以 `docs/adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构只以 `migrations/` 为准。
 
 ## 1. 执行结论
 
@@ -39,8 +39,8 @@
 | iLink 批次处理完成后才推进游标，去重主要在内存 | `electron/weixin-bot.js` | Inbox + cursor 同事务、异步 Session Dispatcher、稳定 Outbox |
 | Web 会话写本地 JSON | `electron/weixin-bot-session-store.js` | MySQL 会话、租户隔离、并发控制和 TTL |
 | 模型和 Prompt 内嵌在模块中 | `electron/weixin-bot-agent.js` | Model Port、Prompt Version、降级和预算 |
-| RAG 有 Electron 与 Next 两套实现 | `electron/weixin-bot-rag.js`、`src/server/bot-core/rag.js` | 单一 Repository、分块、ACL、索引版本和评测 |
-| Worker 和 Bot 状态仍是桩 | `scripts/bot-worker.js`、`src/app/api/bot/status/route.ts` | 真实 iLink 收发、心跳、积压和恢复 |
+| Electron 与 Next 已共用一份 RAG 加载/评分实现，但所有权仍在 Electron | `electron/weixin-bot-rag.js`、薄适配 `src/server/bot-core/rag.js` | 迁入共享 Core，补 Repository、分块、ACL、索引版本和评测 |
+| Worker 已有文件租约、续租退出和状态心跳，Bot API 可读该状态 | `scripts/bot-worker.js`、`src/app/api/bot/status/route.ts` | 迁 DB lease，接真实 iLink 收发、账号、Inbox/Outbox 积压和恢复 |
 | 没有可执行评测数据模型 | 当前只有测试与文档用例清单 | Dataset、Runner、Scorer、Baseline 和发布门禁 |
 
 ## 2. 五个参考项目的取舍
@@ -92,19 +92,17 @@ Web Control Plane
 
 **控制面**只由登录后的 Web 管理后台访问，负责配置、测试、发布、权限、观察和回滚。
 
-**执行面**由 iLink Worker、Workflow Worker 和 Scheduler 组成，只读取已发布的不可变版本。一次运行开始后固定 `runtimeVersion`，中途不热切换 Prompt、模型、Tool 或知识库策略。
+**执行面**首期由 `ilink-worker` 内的 Poller、Workflow 和 Scheduler 模块组成，只读取已发布的不可变版本。一次运行开始后固定 `runtimeVersion`，中途不热切换 Prompt、模型、Tool 或知识库策略。只有故障隔离或容量数据证明有必要时，才把 Workflow/Scheduler 拆成独立进程。
 
 ### 3.2 推荐进程
 
 | 进程 | 职责 | 首期部署 |
 | --- | --- | --- |
-| `next-web` | 管理后台和受保护 API | 独立进程 |
-| `ilink-worker` | 长轮询、入站归一化、出站发送、账号租约 | 独立进程 |
-| `workflow-worker` | Agent、工具、导入、报告和异步任务 | 低负载可与 iLink Worker 同机，进程独立 |
-| `scheduler` | 定时报表、预警、清理和评测 | 可先单实例 |
-| MySQL | 状态、租约、会话、工作流、Outbox、审计 | 必须持久化 |
+| `next-web` | 登录后的管理控制面和受保护 API | 独立进程 |
+| `ilink-worker` | 账号租约、长轮询、Inbox、工作流、定时任务、Artifact 和 Outbox | 独立进程；首期承载 Workflow/Scheduler 模块 |
+| MySQL | 状态、租约、会话、工作流、Outbox、审计 | 持久化服务 |
 
-首期用 MySQL 队列和 `SKIP LOCKED`/租约即可。只有队列吞吐或延迟证明确有需要时再引入 Redis。
+首期最低使用支持 `SKIP LOCKED` 的 MySQL 8.0，并以数据库条件更新和租约实现 claim。只有队列吞吐、延迟或故障隔离证明确有需要时，再拆独立 Worker 或引入 Redis。
 
 ## 4. 可恢复工作流内核
 
@@ -118,7 +116,7 @@ RECEIVED
   -> SUCCEEDED | FAILED | CANCELLED | EXPIRED
 ```
 
-Tool、文件写入、数据库写入、Artifact、Outbox 和 iLink Send 都是副作用边界。每个边界前后写 checkpoint 和 effect ledger，进程恢复后不得重复导入或重复发送。
+Tool、文件写入、数据库写入、Artifact、Outbox 和 iLink Send 都是副作用边界。checkpoint 本身不构成幂等保证：数据库业务写、Run/Step 状态和 effect ledger 必须在同一事务提交；外部发送只能由该事务创建 Outbox，再由 Dispatcher 执行。上游结果不确定时进入 `unknown/reconcile`，禁止盲目重发。
 
 ### 4.2 统一事件包络
 
@@ -177,25 +175,7 @@ type WorkflowDefinition = {
 
 ### 4.5 统一运行结果
 
-现有 `AgentResult` 扩展为：
-
-```ts
-type AgentResult = {
-  runId: string;
-  workflowId: string;
-  workflowVersion: number;
-  runtimeVersion: string;
-  status: "succeeded" | "waiting_input" | "waiting_approval" | "failed";
-  reply: string;
-  route: string;
-  artifacts: ArtifactRef[];
-  sources: SourceRef[];
-  usage: { modelCalls: number; toolCalls: number; inputTokens?: number; outputTokens?: number };
-  pendingApproval?: { actionId: string; expiresAt: string };
-  errorCode?: string;
-  traceId: string;
-};
-```
+`AgentResult` 的完整规范只定义在 `docs/adr/0001-agent-runtime-contract.md`。本文件不复制第二份类型；MVP Adapter 可以在外部边界省略字段，新内部代码和持久化 Run 必须使用 ADR 的完整契约。
 
 Artifact 使用持久引用，包含 `artifactId/ownerId/checksum/mime/size/ttl/deliveryState`；模型上下文只接收元数据或受控摘要，不接收大 Buffer。
 
@@ -292,15 +272,15 @@ upload
 以下操作进入 `WAITING_APPROVAL`：
 
 - 会覆盖或批量写入业务数据的 CSV 导入
-- 修改订阅、规则、Prompt、Tool Policy 或模型配置
+- 修改订阅、业务规则或批量任务
 - 批量推送、跨群发送或高成本长任务
 - 任何 `riskLevel=admin` 的 Tool
 
-iLink 返回预览和短审批号；审批命令绑定 `accountId + approverId + runId`，设置 TTL 和一次性 nonce。批准后从 checkpoint 继续，拒绝或过期后结束，不重新执行前序副作用。
+iLink 返回业务动作预览、短审批号和当前步骤的一次性 challenge；确认命令绑定 `workspaceId + accountId + approverId + runId + actionId + challengeId`。单次确认成功后 challenge 立即消费；两步确认必须生成新的 challenge，不能重放第一步。批准后从 checkpoint 继续，拒绝或过期后结束，不重新执行前序副作用。Prompt、模型、Workflow、Tool Policy、凭据、账号登录、runner 切换和回滚只允许在 step-up 登录后的 Web 控制面完成；iLink 只可发起申请、批准策略明确允许的业务动作或查看状态。
 
 ## 8. 可靠收发与数据表
 
-在 iLink 设计已有表基础上新增：
+数据库结构只由 `migrations/` 定义。`001_ilink_runtime` 已建立账号、Cursor、租约、Inbox、Outbox、Artifact 和导入记录的 transport foundation，但当前 Poller/Dispatcher 尚未接线。后续 migration 按依赖增加以下逻辑能力：
 
 | 表 | 用途 |
 | --- | --- |
@@ -308,8 +288,6 @@ iLink 返回预览和短审批号；审批命令绑定 `accountId + approverId +
 | `agent_runs` | 运行状态、版本、预算和最终结果 |
 | `agent_run_steps` | 节点、attempt、输入输出引用和耗时 |
 | `effect_ledger` | 已提交副作用，防恢复后重复执行 |
-| `inbox_messages` | iLink 入站幂等和处理状态 |
-| `outbox_messages` | 待发送文字/图片/文件及重试状态 |
 | `tool_policies` | Tool 权限、风险、超时和版本 |
 | `prompt_versions` | Prompt 草稿、发布和回滚 |
 | `model_profiles` | 模型路由、预算和降级策略 |
@@ -317,12 +295,7 @@ iLink 返回预览和短审批号；审批命令绑定 `accountId + approverId +
 | `schedules` / `subscriptions` | 定时任务和微信订阅 |
 | `evaluation_cases` / `evaluation_runs` | 黄金用例、结果和回归差异 |
 
-关键唯一键：
-
-- `agent_run_steps(run_id, node_id, attempt)`
-- `effect_ledger(run_id, effect_key)`
-- `inbox_messages(account_id, ilink_message_id)`
-- `outbox_messages(account_id, client_id)`
+Run Step、effect、approval 和 evaluation 的唯一约束、索引与字段必须在对应 migration 中评审和测试，不在本计划维护平行 schema。
 
 发送采用 Outbox Dispatcher。业务事务只提交 Outbox，不直接声明发送成功；Dispatcher 收到 iLink 成功响应后再标记 `sent`。
 
@@ -370,26 +343,72 @@ Outbox 状态统一为 `prepared/sending/sent/retry_wait/unknown/reconcile/dead_
 | 奖励 | 奖励报表、计算明细 | 调整受控计算配置 | 文字、报表图、CSV | Read + Confirmed Config + Artifact |
 | 族谱 | 关系树、师徒查询 | 关系修改复用主播“设师傅” | 族谱图、CSV | Read + Confirmed Write + Artifact |
 | 海报 | 海报数据和预览信息 | 生成指定模板 | PNG/文件 | Artifact |
-| 机器人 | 账号、租约、游标、积压、最近错误 | 登录、启停、断开、切换 runner | 管理员文字状态、登录二维码 | Admin Only |
-| 设置 | 数据库健康、版本、容量、Agent 配置状态 | 发布 Prompt/Workflow/Tool Policy；桌面自动更新仍留在 UI | 管理员文字状态 | Control Plane / Admin Only |
+| 机器人 | 账号、租约、游标、积压、最近错误 | iLink 仅发起启停申请；登录、断开、凭据轮换和切换 runner 由 Web step-up 执行 | 管理员文字状态；登录二维码由 Web/Electron 控制面展示 | Control Plane / Admin Only |
+| 设置 | 数据库健康、版本、容量、Agent 配置状态 | Web 发布 Prompt/Workflow/Tool Policy；桌面自动更新仍留在 UI | 管理员文字状态 | Control Plane / Admin Only |
 
 ### 10.1 两阶段写入协议
 
-模型仅可创建 Action Proposal，写 Tool 由确认后的确定性 Executor 调用：
+模型只可输出动作意图，不能决定身份、角色、审批策略、nonce、数据版本或幂等键。服务端规范化参数、计算预览并创建不可变 Action Proposal，写 Tool 由确认后的确定性 Executor 调用。
+
+以下是待写入后续 ADR 和 migration 的逻辑模型，不是第二份可执行 schema。Proposal 内容不可变；生命周期、challenge 和审批凭证分别保存，避免把可变 `state` 塞进 `Readonly` Proposal：
 
 ```ts
-type ActionProposal = {
-  actionId: string;
+type ActionIntent = {
   actionType: string;
+  requestedArgs: unknown;
+  rationale?: string;
+};
+
+type ActionProposal = Readonly<{
+  actionId: string;
+  runId: string;
+  workspaceId: string;
+  accountId: string;
+  actionType: string;
+  canonicalArgs: unknown;
   argsHash: string;
   impactPreview: string;
   requestedBy: string;
   requiredRole: string;
+  approvalPolicy: "ilink_once" | "ilink_twice" | "web_step_up";
+  requiredConfirmations: 1 | 2;
+  requireDistinctApprovers: boolean;
+  dataVersion: string;
+  idempotencyKey: string;
+  createdAt: string;
   expiresAt: string;
+}>;
+
+type ApprovalProgress = {
+  actionId: string;
+  state: "pending" | "awaiting_next" | "approved" | "rejected" | "expired" | "consumed";
+  confirmationCount: number;
+  version: number;
 };
+
+type ApprovalChallenge = Readonly<{
+  challengeId: string;
+  actionId: string;
+  sequence: 1 | 2;
+  channel: "ilink" | "web";
+  issuedTo: string;
+  nonceHash: string;
+  expiresAt: string;
+}>;
+
+type ApprovalReceipt = Readonly<{
+  challengeId: string;
+  approverId: string;
+  authContextId: string;
+  confirmedAt: string;
+}>;
 ```
 
-管理员在微信回复 `确认 ACTION_ID` 后，由确定性 Executor 校验主体、角色、nonce、TTL、数据版本和幂等键再执行。主播删除、合并、批量覆盖等高影响动作要求二次确认或 Web 审批。拒绝、过期和数据版本变化都终止 Proposal。
+`canonicalArgs` 按敏感级别加密保存，模型只接收受控摘要。iLink 命令格式为 `确认 ACTION_ID CHALLENGE_CODE`；服务端只保存 code hash，明文不进日志。每次确认以 `challengeId + nonceHash + ApprovalProgress.version` 条件更新，写入 Receipt 后立即使 challenge 失效。
+
+`ilink_twice` 默认表示同一合格管理员的两步确认：第一步成功后状态进入 `awaiting_next`，再次展示最终预览并签发不同 nonce 的第二个 challenge；策略要求职责分离时设置 `requireDistinctApprovers=true`，第二个 Receipt 必须来自另一主体。主播删除、合并、批量覆盖默认使用两步确认或 `web_step_up`，凭据和控制面发布只能使用 `web_step_up`。
+
+达到确认数后状态进入 `approved`。Executor 必须在一个数据库事务内重新校验主体、角色、TTL、数据版本和幂等键，以条件更新把状态从 `approved` 变为 `consumed`，并同时提交业务写、Run/Step、effect ledger 和 Outbox；任一失败全部回滚。拒绝、任一 challenge/Proposal 过期、数据版本变化和幂等冲突都终止 Proposal。
 
 ### 10.2 抖音监控服务器化
 
@@ -444,21 +463,30 @@ Capability Catalog 必须落为机器可读清单。每项记录 `capabilityId/m
 
 ## 12. 实施批次
 
-### F0：生产前置
+### F0：运输与安全底座
 
-完成 `ilink-server-agent-design.md` 的 P0-P3。没有真实 Worker 和可靠收发时，不实施高级 Agent。
+- 完成安全基线、ADR 运行契约和 migration runner；`001_ilink_runtime` 是当前数据库 transport foundation。
+- 接通账号级 DB lease/fencing、加密 Inbox/Cursor、媒体 Artifact staging 和事务 Outbox；业务写、游标和幂等状态不得依赖本机文件锁。
+- 建立共享 Core Ports，抽出纯 Node iLink Adapter，完成文字、图片、文件、精确网络 allowlist 和二维码控制通道协议测试；不把登录二维码当作已连接账号的 iLink 出站能力。
 
-### F1：工作流内核
+**退出条件：** ADR 实施顺序 1-3 和 iLink P0 完成；DB transport 集成测试通过。F0 不引用“P1 的一部分”作为门槛，也不要求真实账号 P3 灰度。
 
-- Event Envelope、Run/Step、状态机、预算、checkpoint、effect ledger。
-- Tool Manifest、Policy Middleware、输出 schema 和统一错误分类。
-- Inbox/Outbox Dispatcher 与恢复测试。
+### F1：可恢复运行时与服务器收发闭环
 
-### F2：控制面与评测
+- Event Envelope、Run/Step、状态机、预算、checkpoint、Session mailbox 和 approval/resume。
+- Tool Manifest、Policy Middleware、输出 schema、统一错误分类和 effect ledger；数据库副作用共事务，外部发送走 Outbox。
+- Inbox/Outbox Dispatcher、崩溃点恢复、`unknown/reconcile` 和真实账号 E2E。
 
-- Prompt/Model/Workflow 版本发布和回滚。
-- Trace、OpenTelemetry、用量、黄金集和版本对比。
-- 知识摄取、ACL、全文检索和评测。
+**退出条件：** iLink P1 完成；文字、图片、CSV、租约抢占、媒体重放和每个副作用崩溃点测试通过。此阶段不提前执行依赖 P2 的 P3。
+
+### F2：生产基础设施、控制面与灰度
+
+- 完成 iLink P2：会话、知识、审计、鉴权、限流、指标、告警、部署、备份恢复和临时文件治理。
+- Prompt/Model/Workflow 版本发布和回滚；Trace、OpenTelemetry、用量、黄金集和版本对比。
+- 知识摄取、ACL、全文检索和评测；Bot 运维与二维码控制面完成 step-up、RBAC 和审计。
+- P0-P2 通过后执行 P3：单账号灰度、72 小时观察、断网/重启/抢占和回切演练。
+
+**退出条件：** iLink P0-P3 全部通过；每条不确定出站都有已记录的核对状态和处置责任人，不要求上游结果在进入灰度前凭空变成确定值。只有此后才进入 F3 业务扩展。
 
 ### F3：首批扩展
 
@@ -476,7 +504,7 @@ Capability Catalog 必须落为机器可读清单。每项记录 `capabilityId/m
 
 | 能力 | 发布标准 |
 | --- | --- |
-| 工作流恢复 | 在每个副作用点杀进程，恢复后无重复导入和重复发送 |
+| 工作流恢复 | 在每个副作用点杀进程；数据库业务副作用无重复提交，未知出站全部进入 `unknown/reconcile`，不宣称分布式 exactly-once |
 | 版本一致性 | 单次运行所有节点使用同一 `runtimeVersion` |
 | Tool 权限 | 越权、Prompt 注入和动态工具暴露测试全部阻断 |
 | 评测 | 数据黄金用例 100%，知识用例达到设定门槛且保留来源 |
@@ -502,4 +530,4 @@ Capability Catalog 必须落为机器可读清单。每项记录 `capabilityId/m
 - MetaGPT: <https://github.com/geekan/MetaGPT>
 - Dify: <https://github.com/langgenius/dify>
 
-资料核对日期为 2026-07-22。AutoGen 官方仓库当前标注为 Maintenance Mode，并推荐新项目使用 Microsoft Agent Framework；本设计因此仅参考 AutoGen 的模式，不把它列为依赖候选。
+资料核对日期为 2026-07-23。AutoGen 官方仓库当前标注为 Maintenance Mode，并推荐新项目使用 Microsoft Agent Framework；本设计因此仅参考 AutoGen 的模式，不把它列为依赖候选。

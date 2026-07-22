@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | **v1.1.0** |
-| 最后核对 | 2026-07-22 |
+| 版本 | **v1.2.0** |
+| 最后核对 | 2026-07-23 |
 | 状态 | **执行中：桌面与 Web MVP 已有，尚未达到生产发布门槛** |
 | 适用范围 | 微信 iLink 单通道机器人、Web 管理后台、知识库、服务器 Bot Worker |
 | 本文职责 | 产品边界、架构决策、实施顺序、验收标准、上线与回滚 |
 
-> 本文是 AI Agent 能力的唯一计划源。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`，数据 REST 见 `api-design.md`，本地存储见 `local-storage-plan.md`，落地命令与运维清单见 `LANDING.md`。旧版 `weixin-ai-agent-plan.md` 已废弃，不再恢复。
+> 本文是产品范围与里程碑来源。跨文档运行契约、拓扑和实施顺序以 `adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构以 `migrations/` 为准。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`。旧版 `weixin-ai-agent-plan.md` 已废弃。
 
 ---
 
@@ -22,11 +22,12 @@
 当前状态应定义为 **内部 MVP**，尚未达到生产可用门槛。主要原因是：
 
 - Web Agent 仍直接加载 `electron/*.js`，桌面与服务器没有真正共用一个独立 Core。
-- RAG 有 Electron 与 Next 两套实现，自定义文档在不同检索入口中的行为不一致。
+- Electron 与 Next 已共用 `electron/weixin-bot-rag.js` 的加载和评分逻辑；实现所有权仍在 Electron，文件 Repository、并发写、ACL、版本和评测尚未生产化。
 - Web 会话使用本地 JSON 文件，不适合多实例、并发写、权限隔离和可靠审计。
-- API 在未配置 Token 时默认放行，前端还存在读取 `NEXT_PUBLIC_API_TOKEN` 的方式，不符合生产密钥边界。
-- 当前 Runner 锁是本机文件租约，仅适用于单机，缺少桌面与服务器跨主机协调和微信账号隔离。
-- 服务器 Bot Worker 和抖音画像均为占位实现。
+- Agent/RAG API 已统一为登录会话或服务端 API Token，浏览器不再读取公开 Token；仍需限流、角色和多实例会话。
+- 当前 Runner 锁已具备进程所有者、续租和丢租停止，但仍是本机文件租约，跨主机必须迁 DB fencing。
+- 已增加可执行 migration runner 和 iLink runtime 首迁移；Inbox/Outbox 尚未接入当前 Poller。
+- 服务器 Bot Worker 已有文件租约、续租失败退出和状态心跳，但尚未接 iLink、DB lease、Inbox/Outbox；抖音画像仍为占位实现。
 
 **下一目标不是继续增加 Tool，而是完成生产基础层并把 iLink Worker 做成真实服务器通道：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计、真实收发与回归测试。**
 
@@ -46,18 +47,19 @@
 | ModeRouter / FastRoute | 已实现 | `weixin-bot-mode.js`、命令回归测试 | 需迁入共享 Core，并补桌面/Web 契约测试 |
 | 数据 Analytics | 已实现 | `weixin-bot-analytics.js` | 位置仍属于 Electron，Web 通过 CJS 间接复用 |
 | 桌面 Agent Tools | 部分实现 | `weixin-bot-skills.js`，当前共 11 个工具 | 只覆盖部分查询/报告/导出；全项目能力矩阵见 `agent-framework-reference-and-extension-plan.md` |
-| Web Agent API | 部分实现 | `POST /api/agent/chat` | 直接依赖 Electron 模块；本地文件会话；生产鉴权不足 |
+| Web Agent API | 部分实现 | `POST /api/agent/chat` | 已强制鉴权并按主体隔离 session；仍直接依赖 Electron 模块和本地文件会话 |
 | Web 对话页 | 部分实现 | `/agent` | 无稳定用户身份、会话列表、历史恢复、取消与重试 |
-| RAG 检索 | 部分实现 | JSON 种子 + 关键词评分 | 不是严格 BM25；两套实现；缺统一索引与质量评测 |
-| 知识库页 | 部分实现 | `/knowledge`、`/api/rag/documents` | 缺完整 CRUD、版本、权限、索引一致性和大小限制闭环 |
+| RAG 检索 | 部分实现 | Electron/Next 共用 `weixin-bot-rag.js` 的 JSON 种子 + 关键词评分 | 仍由 Electron 模块持有；不是严格 BM25，缺 Repository、ACL、索引版本和质量评测 |
+| 知识库页 | 部分实现 | `/knowledge`、`/api/rag/documents`；POST 有容量上限和原子文件替换 | 缺完整 CRUD、角色权限、版本、并发写和索引一致性闭环 |
 | 本地运行目录 | 已实现 | `electron/local-paths.js` | 打包环境必须显式配置持久路径并做启动检查 |
 | 会话持久化 | 部分实现 | `weixin-bot-session-store.js` | JSON 仅适合单机开发，服务器必须迁 MySQL |
-| Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 文件锁仅适用于本机；需账号级 DB 租约和 fencing token |
-| Bot 状态页 | 未实现 | `/bot` 只展示固定状态 | 需真实心跳、账号、租约和最近错误 |
-| 服务器微信 Worker | 未实现 | `scripts/bot-worker.js` 只持锁保活 | 未接 iLink 长轮询、发消息、重连与凭据管理；这是服务器上线阻塞项 |
+| Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 已有 owner/heartbeat/丢租停止；文件锁仅适用于本机，仍需账号级 DB fencing |
+| 数据迁移 | 部分实现 | `scripts/migrate.js`、`migrations/001_ilink_runtime.js` | 已建 transport foundation；尚未接入 Poller/Dispatcher，后续表按 migration 增量增加 |
+| Bot 状态页 | 部分实现 | `/api/bot/status` 可读 Worker 文件租约、心跳、过期和最近错误 | 仍是单机状态文件，缺 DB 账号、fencing、Inbox/Outbox 积压和真实连接状态 |
+| 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` 有文件租约、owner、续租丢失退出和状态文件 | 未接 DB lease、iLink 长轮询、Inbox/Outbox、重连与凭据管理；这是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
-本次基线核对结果：`npm run test:weixin-bot` 为 **27/27 通过**；`npm run build` 生产构建通过；`npm run storage:doctor` 确认开发默认目录为 `data/runtime`，同时提示生产环境仍应显式配置 `BOT_STORAGE_DIR`。
+最新本地基线为 `npm test` **70/70 通过**（DB/运行环境 8、导入事务 6、迁移 10、Worker 3、微信/Agent 43），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
 
 ### 2.1 当前已验证的产品规则
 
@@ -182,30 +184,17 @@ Core 必须满足：
 - 数据库、会话、LLM、RAG 存储、图片和文件发送全部通过接口注入。
 - Electron、Web 和 Worker 只做通道适配、鉴权和响应转换。
 - Tool schema、执行器、格式化和权限策略只有一份实现。
-- 删除 `electron/weixin-bot-rag.js` 与 `src/server/bot-core/rag.js` 的重复逻辑。
+- 将 RAG 引擎从 `electron/weixin-bot-rag.js` 迁入共享 Core；`src/server/bot-core/rag.js` 只保留薄适配，不再新增长期平行实现。
 
-统一返回契约：
-
-```ts
-type AgentResult = {
-  reply: string;
-  sessionId: string;
-  artifacts: Array<{ kind: "image" | "file"; name: string; ref: string }>;
-  sources: Array<{ kind: "data" | "knowledge"; title: string; asOf?: string }>;
-  traceId: string;
-  route: "system" | "command" | "fast-route" | "agent" | "fallback";
-};
-```
+统一返回契约见 `docs/adr/0001-agent-runtime-contract.md`。本文件不再复制一份
+`AgentResult`，Electron/Web/Worker 只允许通过适配器转换外部响应。
 
 ### 5.2 生产数据表
 
-| 表 | 用途 | 最小关键字段 |
-| --- | --- | --- |
-| `agent_sessions` | 会话状态与摘要 | `id, channel, subject_id, mode, updated_at, expires_at` |
-| `agent_messages` | 对话和工具结果 | `session_id, role, content, tool_name, trace_id, created_at` |
-| `rag_documents` | 知识文档 | `id, collection, title, body, version, enabled, updated_at` |
-| `bot_runner_leases` | 跨主机账号租约 | `account_id, owner_id, runner_type, fencing_token, lease_until` |
-| `agent_audit_logs` | 安全和排障 | `trace_id, actor_id, action, status, duration_ms, created_at` |
+数据库结构以 `migrations/` 为唯一真源。首个 migration 建立
+`ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、
+`outbox_messages`、`artifacts` 和 `import_records`；会话、运行、审批、审计、知识
+版本和评测表必须通过后续 migration 增量增加，不再在计划中维护第二份字段清单。
 
 不把微信 Token、AI Key、原始文件内容或完整模型上下文写入审计日志。
 
@@ -219,14 +208,14 @@ type AgentResult = {
 
 - [ ] Electron 与 Web 使用同一 Router、Tool Registry、Analytics 和 RAG Policy。
 - [ ] `src/app/api/**` 不再直接引用 `electron/**`。
-- [ ] 只保留一个 RAG 文档加载与评分实现。
+- [x] Electron 与 Next 只使用一个 RAG 文档加载与评分实现；后续仍需迁移其模块所有权和 Repository。
 - [ ] 桌面与 Web 对同一输入的文本结果通过契约测试。
 - [ ] Web 不支持的图片/文件能力返回明确 capability 错误，不伪造成功。
 
 ### G2. 安全与持久化
 
-- [ ] 生产环境未配置鉴权密钥时启动失败，而不是匿名放行。
-- [ ] 删除 `NEXT_PUBLIC_API_TOKEN` 方案，Web 使用登录会话或服务端转发。
+- [x] Agent、RAG 和 Bot 状态 API 缺少有效登录会话/API Token 时 fail closed，不因服务端 Token 未配置而匿名放行。
+- [x] 删除 `NEXT_PUBLIC_API_TOKEN` 方案，Web 使用 HttpOnly 登录会话。
 - [ ] Agent、RAG 写接口和 Bot 管理接口按角色授权。
 - [ ] Web 会话迁入 MySQL，支持用户隔离、TTL、清理和并发写。
 - [ ] 知识库写入、列表与检索使用同一数据源，新增文档可立即检索。
@@ -245,14 +234,14 @@ type AgentResult = {
 - [ ] 黄金评测集通过，且不存在 RAG 回答实时数字的用例。
 - [ ] Electron 实机主路径通过：帮助、艺名、日报、CSV、人工客服、退出客服。
 - [ ] Web 管理主路径通过：登录、会话审计、来源、Bot 状态和知识库权限。
-- [ ] 内部账号连续运行 24 小时，无重复回复、串话、错误接管或会话丢失。
+- [ ] 内部账号连续运行 24 小时，无已确认重复回复、串话、错误接管或会话丢失；不确定发送全部可核对。
 - [ ] 回滚演练在 5 分钟内完成。
 
 ---
 
 ## 7. 实施批次
 
-批次按依赖顺序执行。服务器微信 Worker 和抖音能力不得插队到生产基础层之前。
+本节按工作流分组描述交付范围，实际依赖顺序以 ADR 和第 12 节为准；B1-B3 可在不违反门禁时并行，服务器微信 Worker 灰度和抖音能力不得插队到生产基础层之前。
 
 ### B1. Core 收敛与正确性
 
@@ -271,7 +260,7 @@ type AgentResult = {
 
 | ID | 任务 | 完成定义 |
 | --- | --- | --- |
-| B2.1 | 建表与迁移脚本 | 五张生产表可重复迁移并可回滚 |
+| B2.1 | 建表与迁移脚本 | `db:migrate:status/up` 可重复执行；checksum、锁和恢复演练通过 |
 | B2.2 | MySQL Session Store | 重启后恢复；用户会话严格相互隔离 |
 | B2.3 | 统一登录与 API 授权 | 生产缺少配置时 fail closed；无公开 Token |
 | B2.4 | 知识库 Repository | CRUD、版本、启停、大小上限、索引一致 |
@@ -293,28 +282,29 @@ type AgentResult = {
 
 **退出条件：** G3 全部完成。
 
-### B4. 内部发布
-
-| ID | 任务 | 完成定义 |
-| --- | --- | --- |
-| B4.1 | 建立黄金评测集 | 覆盖数据、日期、歧义、RAG、越权和失败降级 |
-| B4.2 | 实机 E2E | 微信与 Web 主路径留有测试记录 |
-| B4.3 | 24 小时观察 | 无 P0/P1 故障，指标满足第 9 节 |
-| B4.4 | 回滚演练 | 关闭 Agent 后固定指令正常；数据无破坏 |
-
-**退出条件：** G4 全部完成，Web Agent 可标记为生产可用。
-
-### B5. 服务器微信 iLink Worker（必选）
+### B4. 服务器微信 iLink Worker（必选）
 
 这是“服务器部署且覆盖全部 iLink 功能”的发布阻塞批次，不再作为可选项。
 
 - 将 iLink 长轮询、回复和重连抽成无 `BrowserWindow` 的通道 Adapter。
+- 先接入 DB fencing、Inbox/Cursor、媒体 Artifact staging 和 Outbox，再开放真实账号。
 - 微信凭据加密落盘，扫码登录与 Worker 运行解耦。
 - 使用 B2 的账号级 DB 租约，不复用本机文件锁作为跨主机锁。
 - 服务器安装中文字体并验证图片、CSV 上传。
 - 灰度期间一次只迁一个微信账号，桌面端保持可回切。
 
-**验收：** 连续运行 72 小时；断网和进程重启可恢复；桌面与服务器抢同一账号时只有一个成功；无重复收发。
+**验收：** 连续运行 72 小时；断网和进程重启可恢复；桌面与服务器抢同一账号时只有一个成功；Inbox 和业务副作用故障注入全部被幂等约束抑制，出站不确定结果全部进入 `unknown/reconcile` 且不盲目重发。目标语义为 effectively-once，不宣称分布式 exactly-once。
+
+### B5. 内部发布
+
+| ID | 任务 | 完成定义 |
+| --- | --- | --- |
+| B5.1 | 建立黄金评测集 | 覆盖数据、日期、歧义、RAG、越权和失败降级 |
+| B5.2 | 实机 E2E | 微信与 Web 主路径留有测试记录 |
+| B5.3 | 24 小时观察 | 无 P0/P1 故障，指标满足第 9 节 |
+| B5.4 | 回滚演练 | 关闭 Agent 后固定指令正常；数据无破坏 |
+
+**退出条件：** G4 全部完成，服务器 iLink Agent 才可标记为生产可用。
 
 ### B6. 可选抖音缓存能力
 
@@ -337,7 +327,7 @@ type AgentResult = {
 | `GET /api/rag/documents` | 已有 MVP | 分页、角色授权、版本和启停状态 |
 | `POST/PATCH/DELETE /api/rag/documents` | 仅 POST | 管理员 CRUD，写后立即可检索 |
 | `POST /api/rag/search` | 已有 MVP | 管理员试检索或 Core 内部调用 |
-| `GET /api/bot/status` | 桩 | 真实租约、心跳和错误状态 |
+| `GET /api/bot/status` | 文件租约/心跳 MVP | DB 账号、真实 lease/fencing、连接、Inbox/Outbox 积压和错误状态 |
 | `POST /api/bot/start`、`POST /api/bot/stop` | 缺失 | 可选，仅管理员且受 Runner 租约保护 |
 
 Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，业务错误不得一律返回 500。
@@ -351,11 +341,11 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 | 层级 | 必测内容 |
 | --- | --- |
 | 单元 | 日期解析、ModeRouter、FastRoute、Tool schema、RAG 边界、租约状态机 |
-| 契约 | Electron 与 Web 对同一输入返回一致业务结果 |
-| 集成 | MySQL 会话、知识库、租约、权限、清理和恢复 |
-| E2E | Web 登录到对话；微信入站到文字/图片/CSV 回复 |
-| 安全 | 未登录、越权 session、Prompt 注入、超大文档、密钥回显 |
-| 故障 | LLM 超时、DB 短断、RAG 空结果、图片失败、Worker 重启 |
+| 契约 | Electron、Web 与 Worker 对同一输入返回一致 `AgentResult`；RAG、日期和 Artifact 语义一致 |
+| 集成 | MySQL 会话、知识库、DB lease/fencing、Inbox/Cursor、Outbox、Artifact staging/GC、权限、清理和恢复 |
+| E2E | Web step-up 到二维码控制通道；微信入站到文字/图片/CSV 回复；不确定出站核对闭环 |
+| 安全 | 未登录、越权 session、Prompt 注入、超大文档、密钥回显、API/CDN 精确 allowlist、redirect 和二维码 no-store |
+| 故障 | LLM 超时、DB 短断、RAG 空结果、图片失败、Worker 重启/丢租、媒体重放先去重、staging 事务回滚和孤儿 GC |
 | 观察 | 24 小时 Web 内测；Worker 上线前单独做 72 小时观察 |
 
 ### 9.2 黄金评测最小集合
@@ -409,8 +399,8 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 1. 本地单元、契约和集成测试。
 2. 内网 Web Agent，仅开放给管理员和运营测试账号。
 3. Electron 微信单账号完成回归，验证服务器迁移前基线。
-4. B5 完成后把单个灰度账号迁到服务器 Worker，Electron 释放该账号租约。
-5. 服务器 Worker 达标后扩大内部用户范围。
+4. 完成 B4 工程门槛后，把单个灰度账号迁到服务器 Worker，Electron 释放该账号租约，并完成 72 小时恢复与收发验收。
+5. B4 通过后执行 B5 内部发布、黄金集、全链路观察和回滚演练，再扩大内部用户范围。
 6. 抖音能力最后独立开启，不与 Agent 主链路同时首发。
 
 ### 11.2 上线前必须提供的开关
@@ -434,18 +424,22 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 
 ## 12. 下一步执行清单
 
-严格按以下顺序开工：
+状态只按当前代码和自动化证据填写；数据库结构只通过 `migrations/` 演进，计划文档不再维护平行 schema。
 
-1. 定义 `AgentResult`、Tool、Session、RAG、Artifact 五类接口。
-2. 建立 `shared/bot-core`，先迁 Router、RAG 和 Tool Registry。
-3. 为 Electron 与 Web 建同输入契约测试，消除两套实现。
-4. 新增 MySQL 会话、知识库、Runner 租约和审计迁移。
-5. 收紧生产鉴权，删除浏览器公开 API Token 方案。
-6. 完成知识库 CRUD 与写后可检索闭环。
-7. 接入 trace、指标、限流、超时和脱敏日志。
-8. 建黄金评测集并完成 Web/微信 E2E。
-9. 做 24 小时内部灰度和回滚演练。
-10. 完成并验收服务器微信 iLink Worker；抖音能力保持后置。
+| 顺序 | 当前状态 | 任务 | 当前证据或下一退出条件 |
+| --- | --- | --- | --- |
+| 1 | 已验证 | 完成安全基线：数据库配置 fail closed、移除源码凭据、Agent/RAG 强制鉴权、浏览器使用登录 cookie | DB 配置与安全回归通过；浏览器代码不再读取 `NEXT_PUBLIC_API_TOKEN` |
+| 2 | 已验证 | 冻结运行契约和真源 | `docs/adr/0001-agent-runtime-contract.md` 管运行契约与顺序，`migrations/` 是唯一数据库真源 |
+| 3 | 部分完成 | 完成 B2.1 migration 基础设施 | runner、checksum、MySQL advisory lock、连续历史校验和 `001_ilink_runtime` 已有 10 项单测；仍需在集成 MySQL 执行 `status/up`、备份和恢复演练 |
+| 4 | 未完成 | 把 `001_ilink_runtime` 接入运行链路 | 实现账号级 DB lease/fencing、加密 Inbox/Cursor 同事务、dedupe-before-stage、幂等媒体 staging/短 TTL/GC 和 Outbox Dispatcher；不得用本机文件锁代替跨主机租约 |
+| 5 | 未完成 | 收敛共享 Core 并抽出纯 Node iLink Adapter | Router、RAG、Tool Registry 和 Analytics 只有一份实现；完成 Electron/Web/Worker 契约、精确 API/CDN allowlist、redirect 与真实文字/媒体协议测试；二维码走受 step-up/RBAC 保护的 Web -> MySQL -> Worker 控制通道 |
+| 6 | 未完成 | 增加会话与可恢复工作流 migration | Session/Run/Step/effect/approval/audit 通过后续 migration 增量增加；业务写、step 和 effect ledger 共事务，等待审批时释放 worker claim |
+| 7 | 未完成 | 完成知识库、运维和观测闭环 | CRUD 写后可检索；trace、指标、限流、预算、脱敏日志、DB 账号/租约/积压/真实连接状态和备份恢复可验证；当前文件心跳只作为过渡证据 |
+| 8 | 未完成 | 完成 B4 服务器 iLink Worker | 占位 Worker 替换为真实 Poller/Dispatcher；单账号迁移、文字/图片/CSV E2E、故障注入和 72 小时记录全部通过 |
+| 9 | 未完成 | B4 通过后执行 B5 内部发布 | 黄金集、Web/微信 E2E、24 小时全链路观察和 5 分钟回滚演练通过，才标记生产可用 |
+| 10 | 后置 | 扩展全功能与可选抖音缓存 | 按 Read、Artifact、Confirmed Write、Collector 分批验收；B6 和多 Agent 均不得早于 B5 |
+
+当前自动化基线为 `npm test` **70/70 通过**，`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。该结果不代表真实 MySQL migration、真实 iLink Worker、72 小时灰度或生产恢复已经验收。
 
 ---
 
@@ -454,5 +448,4 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 - 本文只保留**当前事实、冻结决策、未完成任务和验收结果**，不累积历史审计过程。
 - 状态改为“已实现”时，必须同时给出代码路径、自动化测试和必要的运行证据。
 - 环境地址、账号、数据库密码和服务器操作记录只放部署文档，不进入本计划。
-- `LANDING.md` 只维护当前执行命令，不重复定义产品或架构。
 - 每次改变路由、数据日期、RAG 边界、Runner 策略或发布门槛时，先更新本文再实现。
