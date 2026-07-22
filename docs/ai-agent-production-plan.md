@@ -5,10 +5,10 @@
 | 版本 | **v1.0.0** |
 | 最后核对 | 2026-07-22 |
 | 状态 | **执行中：桌面与 Web MVP 已有，尚未达到生产发布门槛** |
-| 适用范围 | Electron 微信机器人、Web 智能客服、知识库、可选服务器 Bot Worker |
+| 适用范围 | 微信 iLink 单通道机器人、Web 管理后台、知识库、服务器 Bot Worker |
 | 本文职责 | 产品边界、架构决策、实施顺序、验收标准、上线与回滚 |
 
-> 本文是 AI Agent 能力的唯一计划源。部署命令见 `server-deployment.md`，数据 REST 见 `api-design.md`，本地存储见 `local-storage-plan.md`，落地命令与运维清单见 `LANDING.md`。旧版 `weixin-ai-agent-plan.md` 已废弃，不再恢复。
+> 本文是 AI Agent 能力的唯一计划源。iLink 服务器化专项见 `ilink-server-agent-design.md`；部署命令见 `server-deployment.md`，数据 REST 见 `api-design.md`，本地存储见 `local-storage-plan.md`，落地命令与运维清单见 `LANDING.md`。旧版 `weixin-ai-agent-plan.md` 已废弃，不再恢复。
 
 ---
 
@@ -28,7 +28,7 @@
 - 当前 Runner 锁是本机文件租约，不能可靠协调桌面与服务器两台主机，也没有按微信账号隔离。
 - 服务器 Bot Worker 和抖音画像均为占位实现。
 
-**下一目标不是继续增加 Tool，而是完成生产基础层：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计与回归测试。**
+**下一目标不是继续增加 Tool，而是完成生产基础层并把 iLink Worker 做成真实服务器通道：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计、真实收发与回归测试。**
 
 ---
 
@@ -54,7 +54,7 @@
 | 会话持久化 | 部分实现 | `weixin-bot-session-store.js` | JSON 仅适合单机开发，服务器必须迁 MySQL |
 | Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 文件锁不能跨主机；需账号级 DB 租约和 fencing token |
 | Bot 状态页 | 未实现 | `/bot` 只展示固定状态 | 需真实心跳、账号、租约和最近错误 |
-| 服务器微信 Worker | 未实现 | `scripts/bot-worker.js` 只持锁保活 | 未接 iLink 长轮询、发消息、重连与凭据管理 |
+| 服务器微信 Worker | 未实现 | `scripts/bot-worker.js` 只持锁保活 | 未接 iLink 长轮询、发消息、重连与凭据管理；这是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
 本次基线核对结果：`npm run test:weixin-bot` 为 **27/27 通过**；`npm run build` 生产构建通过；`npm run storage:doctor` 确认开发默认目录为 `data/runtime`，同时提示生产环境仍应显式配置 `BOT_STORAGE_DIR`。
@@ -74,13 +74,15 @@
 
 ### 3.1 目标产品
 
-交付一个内部数据客服，允许用户从微信或 Web：
+交付一个以微信 iLink 为唯一用户会话通道的内部数据客服。用户从微信完成：
 
 - 查询主播档案、音浪、时长、未播天数、排名和对比。
 - 生成男团、女队或双团日报图片，导出受控 CSV。
 - 询问导入方法、字段口径、运营规则和使用帮助。
 - 查看答案的数据日期、工具来源或知识来源。
 - 在 Agent 不可用时立即回到固定指令模式。
+
+Web 只承担登录后的管理、知识库、会话审计、Bot 状态和内部诊断，不对最终用户提供第二个聊天通道。
 
 ### 3.2 成功标准
 
@@ -102,7 +104,7 @@
 - 不默认引入向量数据库；关键词检索满足质量门槛前不增加复杂度。
 - 不在同步请求中批量爬抖音主页、作品或下载视频。
 - 不允许桌面和服务器同时运行同一微信账号。
-- 首个生产版本不承诺服务器微信 Worker 和抖音画像能力。
+- 首个服务器生产版本必须承诺 iLink Worker 的文字、图片、文件收发；抖音画像仍作为独立可选缓存能力，不得冒充实时数据。
 
 ---
 
@@ -137,7 +139,7 @@ LLM 不是业务命令的前置分类器。确定性路径能完成的请求不�
 | --- | --- |
 | 微信私聊 | `wx:dm:{accountId}:{fromUserId}` |
 | 微信群 | `wx:group:{accountId}:{groupId}:{fromUserId}` |
-| Web | `web:{userId}:{sessionId}` |
+| Web 内部诊断 | `web:{userId}:{sessionId}` |
 
 所有会话必须绑定用户或通道主体。生产接口不接受可覆盖其他用户会话的裸 `sessionId`。
 
@@ -145,9 +147,9 @@ LLM 不是业务命令的前置分类器。确定性路径能完成的请求不�
 
 | 进程 | 职责 | 首个生产版本 |
 | --- | --- | --- |
-| Electron | 微信通道、桌面设置、图片渲染、Core Adapter | 保留并作为微信主 Runner |
+| Electron | 桌面设置、扫码辅助、应急回切、Core Adapter | 保留，但生产账号默认不长期运行 |
 | Next Web | 页面、鉴权、Agent/RAG API | 必须上线 |
-| Bot Worker | 可选的服务器微信长轮询 | 后置，不阻塞 Web Agent 上线 |
+| Bot Worker | 服务器微信 iLink 长轮询、收发和重连 | 必须上线；与 Web 共享 Core |
 | MySQL | 业务数据、会话、知识库元数据、租约、审计 | 必须上线 |
 
 ---
@@ -157,7 +159,7 @@ LLM 不是业务命令的前置分类器。确定性路径能完成的请求不�
 ```text
 Electron Weixin Adapter ----\
                              \
-Web Route Adapter ------------> shared/bot-core
+Web Admin/Test Adapter -------> shared/bot-core
                               Router / Agent Loop / Tool Registry
 Server Worker Adapter -------/ Analytics / RAG Policy / Contracts
                                       |
@@ -240,7 +242,7 @@ type AgentResult = {
 
 - [ ] 黄金评测集通过，且不存在 RAG 回答实时数字的用例。
 - [ ] Electron 实机主路径通过：帮助、艺名、日报、CSV、人工客服、退出客服。
-- [ ] Web 浏览器主路径通过：登录、对话、历史、来源、知识库权限。
+- [ ] Web 管理主路径通过：登录、会话审计、来源、Bot 状态和知识库权限。
 - [ ] 内部账号连续运行 24 小时，无重复回复、串话、错误接管或会话丢失。
 - [ ] 回滚演练在 5 分钟内完成。
 
@@ -300,9 +302,9 @@ type AgentResult = {
 
 **退出条件：** G4 全部完成，Web Agent 可标记为生产可用。
 
-### B5. 可选服务器微信 Worker
+### B5. 服务器微信 iLink Worker（必选）
 
-只有在明确需要“桌面关机后微信仍在线”时才启动本批次。
+这是“服务器部署且覆盖全部 iLink 功能”的发布阻塞批次，不再作为可选项。
 
 - 将 iLink 长轮询、回复和重连抽成无 `BrowserWindow` 的通道 Adapter。
 - 微信凭据加密落盘，扫码登录与 Worker 运行解耦。
@@ -404,9 +406,9 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 
 1. 本地单元、契约和集成测试。
 2. 内网 Web Agent，仅开放给管理员和运营测试账号。
-3. Electron 微信单账号灰度，Runner 保持 `desktop`。
-4. Web Agent 达标后扩大内部用户范围。
-5. 只有 B5 验收完成后，才把指定账号从桌面迁到服务器 Worker。
+3. Electron 微信单账号完成回归，验证服务器迁移前基线。
+4. B5 完成后把单个灰度账号迁到服务器 Worker，Electron 释放该账号租约。
+5. 服务器 Worker 达标后扩大内部用户范围。
 6. 抖音能力最后独立开启，不与 Agent 主链路同时首发。
 
 ### 11.2 上线前必须提供的开关
@@ -441,7 +443,7 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 7. 接入 trace、指标、限流、超时和脱敏日志。
 8. 建黄金评测集并完成 Web/微信 E2E。
 9. 做 24 小时内部灰度和回滚演练。
-10. 再决定是否实施服务器微信 Worker；抖音能力保持后置。
+10. 完成并验收服务器微信 iLink Worker；抖音能力保持后置。
 
 ---
 

@@ -3,6 +3,12 @@
 > 版本：v0.1
 > 日期：2026-07-06
 
+> **【文档关系 · 2026-07-22】**
+> 本文为 Next/pm2/nginx **部署基线**。
+> 生产目标只使用微信 iLink 通道，服务端 Worker 是必选进程。专项架构、游标、幂等和验收见 `docs/ilink-server-agent-design.md`；实施门槛见 `docs/ai-agent-production-plan.md`。同一微信账号严禁由桌面 Electron 与服务器 Worker 同时运行。
+
+> 当前 `scripts/bot-worker.js` 仍是租约占位进程，尚未接入完整 iLink 长轮询和媒体收发。完成专项设计 P0-P3 前，不应把它标记为生产可用。
+
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。
