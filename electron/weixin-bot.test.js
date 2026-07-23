@@ -1207,3 +1207,46 @@ test("HTTP authentication failures move a restored bot to session_expired", asyn
   assert.equal(status.monitoring, false);
   assert.equal(status.error, "请重新扫码连接");
 });
+
+test("typed iLink session expiry stops polling and marks the account expired", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-typed-expired-"));
+  const service = new WeixinBotService({
+    fetchImpl: async () => jsonResponse({ ret: -14, errmsg: "expired" }),
+    storagePath: () => path.join(tempDir, "weixin-bot.v1.json"),
+    encryptToken: (value) => `sealed:${value}`,
+    decryptToken: (value) => String(value).replace(/^sealed:/, ""),
+  });
+  const accountId = "typed-expired@im.bot";
+  service.accounts.set(accountId, {
+    accountId,
+    credentials: {
+      token: "EXPIRED_TOKEN",
+      accountId,
+      userId: "owner@im.wechat",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      savedAt: new Date().toISOString(),
+    },
+    encryptedToken: "sealed:EXPIRED_TOKEN",
+    updatesBuf: "",
+    monitorController: null,
+    monitorPromise: null,
+    phase: "stopped",
+    lastPollAt: null,
+    error: null,
+    receivedCount: 0,
+    sentCount: 0,
+  });
+  service.activeAccountId = accountId;
+  t.after(async () => {
+    await service.shutdown();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const expired = waitForEvent(service, "status", (value) => value.phase === "session_expired");
+  await service.startMonitoring(accountId);
+  const status = await expired;
+
+  assert.equal(status.monitoring, false);
+  assert.equal(status.error, "请重新扫码连接");
+  assert.equal(status.accounts[0].phase, "session_expired");
+});

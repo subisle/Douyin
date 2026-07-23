@@ -16,9 +16,14 @@ const {
   renewRunnerLock,
   releaseRunnerLock,
 } = require("./weixin-bot-runner-lock");
+const {
+  DEFAULT_BASE_URL,
+  IlinkAdapter,
+  IlinkSessionExpiredError,
+  SESSION_EXPIRED_CODE,
+  normalizeBaseUrl,
+} = require("../shared/ilink-adapter");
 
-const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
-const CHANNEL_VERSION = "1.0.2";
 const BOT_TYPE = "3";
 const LOGIN_TTL_MS = 5 * 60_000;
 const QR_POLL_TIMEOUT_MS = 38_000;
@@ -26,12 +31,7 @@ const API_TIMEOUT_MS = 15_000;
 const LONG_POLL_TIMEOUT_MS = 38_000;
 const HISTORY_LIMIT = 200;
 const SEEN_MESSAGE_LIMIT = 500;
-const SESSION_EXPIRED_CODE = -14;
 const RUNNER_LEASE_TTL_MS = 120_000;
-const TRUSTED_ILINK_API_HOSTS = new Set([
-  "ilinkai.weixin.qq.com",
-  "edge.weixin.qq.com",
-]);
 
 const DEFAULT_AI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_AI_MODEL = "gpt-4o-mini";
@@ -85,6 +85,11 @@ function isAbortError(error) {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function isSessionExpiredError(error) {
+  return error instanceof IlinkSessionExpiredError
+    || Number(error?.code) === SESSION_EXPIRED_CODE;
+}
+
 function createAbortError() {
   const error = new Error("aborted");
   error.name = "AbortError";
@@ -107,23 +112,6 @@ function sleep(ms, signal) {
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function normalizeBaseUrl(value) {
-  const url = new URL(String(value || DEFAULT_BASE_URL));
-  if (url.protocol !== "https:") throw new Error("微信接口地址必须使用 HTTPS");
-  if (!TRUSTED_ILINK_API_HOSTS.has(url.hostname)) {
-    throw new Error("微信接口返回了非受信任地址");
-  }
-  if (url.port || url.username || url.password || url.search || url.hash) {
-    throw new Error("微信接口地址包含不受支持的端口、凭据或参数");
-  }
-  return url.toString().replace(/\/$/, "");
-}
-
-function randomWechatUin() {
-  const value = crypto.randomBytes(4).readUInt32BE(0);
-  return Buffer.from(String(value), "utf8").toString("base64");
 }
 
 function messageTimestamp(value) {
@@ -272,6 +260,18 @@ class WeixinBotService extends EventEmitter {
     if (typeof this.storagePath !== "function") throw new Error("微信机器人缺少存储路径");
     if (typeof this.encryptToken !== "function" || typeof this.decryptToken !== "function") {
       throw new Error("微信机器人缺少安全存储实现");
+    }
+    this.ilinkAdapter = options.ilinkAdapter || new IlinkAdapter({
+      fetchImpl: this.fetchImpl,
+      timeoutMs: API_TIMEOUT_MS,
+      randomUin: options.randomUin,
+    });
+    if (
+      typeof this.ilinkAdapter.getJson !== "function"
+      || typeof this.ilinkAdapter.postJson !== "function"
+      || typeof this.ilinkAdapter.fetchJson !== "function"
+    ) {
+      throw new Error("微信机器人缺少有效的 iLink Adapter");
     }
 
     /** @type {Map<string, {
@@ -1211,7 +1211,10 @@ class WeixinBotService extends EventEmitter {
         this._refreshAggregateStatus({ error: null });
       } catch (error) {
         if (signal.aborted || isAbortError(error)) return;
-        if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
+        if (
+          isSessionExpiredError(error)
+          || /微信接口 HTTP (401|403)/.test(String(error?.message || ""))
+        ) {
           this._markSessionExpired(account.accountId);
           return;
         }
@@ -1546,7 +1549,10 @@ class WeixinBotService extends EventEmitter {
       this._addMessage(sent);
       return { ...sent };
     } catch (error) {
-      if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
+      if (
+        isSessionExpiredError(error)
+        || /微信接口 HTTP (401|403)/.test(String(error?.message || ""))
+      ) {
         this._markSessionExpired(accountId);
       }
       const failed = {
@@ -1656,7 +1662,10 @@ class WeixinBotService extends EventEmitter {
       this._addMessage(sent);
       return { ...sent };
     } catch (error) {
-      if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
+      if (
+        isSessionExpiredError(error)
+        || /微信接口 HTTP (401|403)/.test(String(error?.message || ""))
+      ) {
         this._markSessionExpired(accountId);
       }
       const failed = {
@@ -1762,72 +1771,15 @@ class WeixinBotService extends EventEmitter {
   }
 
   async _getJson(url, options = {}) {
-    return this._fetchJson(url, {
-      method: "GET",
-      headers: options.headers,
-      signal: options.signal,
-      timeoutMs: options.timeoutMs,
-      allowTimeout: options.allowTimeout,
-    });
+    return this.ilinkAdapter.getJson(url, options);
   }
 
   async _postJson(baseUrl, endpoint, body, options = {}) {
-    const payload = { ...body, base_info: { channel_version: CHANNEL_VERSION } };
-    const bodyText = JSON.stringify(payload);
-    const headers = {
-      "Content-Type": "application/json",
-      "Content-Length": String(Buffer.byteLength(bodyText, "utf8")),
-      AuthorizationType: "ilink_bot_token",
-      "X-WECHAT-UIN": randomWechatUin(),
-    };
-    if (options.token) headers.Authorization = `Bearer ${options.token}`;
-    const url = `${normalizeBaseUrl(baseUrl)}/${endpoint.replace(/^\//, "")}`;
-    return this._fetchJson(url, {
-      method: "POST",
-      headers,
-      body: bodyText,
-      signal: options.signal,
-      timeoutMs: options.timeoutMs,
-      allowTimeout: options.allowTimeout,
-    });
+    return this.ilinkAdapter.postJson(baseUrl, endpoint, body, options);
   }
 
   async _fetchJson(url, options = {}) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const onAbort = () => controller.abort();
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    if (options.signal?.aborted) controller.abort();
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, Math.max(1000, Number(options.timeoutMs) || API_TIMEOUT_MS));
-
-    try {
-      const response = await this.fetchImpl(url, {
-        method: options.method || "GET",
-        headers: options.headers,
-        body: options.body,
-        signal: controller.signal,
-        redirect: "manual",
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(`微信接口 HTTP ${response.status}`);
-      }
-      if (!text.trim()) return {};
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error("微信接口返回了无效 JSON");
-      }
-    } catch (error) {
-      if (timedOut && options.allowTimeout && isAbortError(error)) return null;
-      throw error;
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-    }
+    return this.ilinkAdapter.fetchJson(url, options);
   }
 
   _loadStore() {

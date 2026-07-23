@@ -43,7 +43,7 @@
 
 | 能力 | 状态 | 当前证据 | 生产缺口 |
 | --- | --- | --- | --- |
-| 微信 iLink 通道 | 已实现 | `electron/weixin-bot.js` | 仍需真实账号连续运行验收与脱敏日志 |
+| 微信 iLink 通道 | 已实现 | `shared/ilink-adapter.js`、`electron/weixin-bot.js` | 仍需服务器 Worker 接线、真实账号连续运行验收与脱敏日志 |
 | ModeRouter / FastRoute | 已实现 | `weixin-bot-mode.js`、命令回归测试 | 需迁入共享 Core，并补桌面/Web 契约测试 |
 | 数据 Analytics | 已实现 | `weixin-bot-analytics.js` | 位置仍属于 Electron，Web 通过 CJS 间接复用 |
 | 桌面 Agent Tools | 部分实现 | `weixin-bot-skills.js`，当前共 11 个工具 | 只覆盖部分查询/报告/导出；全项目能力矩阵见 `agent-framework-reference-and-extension-plan.md` |
@@ -59,7 +59,7 @@
 | 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` 有文件租约、owner、续租丢失退出和状态文件 | 未接 DB lease、iLink 长轮询、Inbox/Outbox、重连与凭据管理；这是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
-最新本地基线为 `npm test` **104/104 通过**（DB/运行环境 8、登录限流/CSRF 8、导入事务 6、迁移 15、Worker 4、微信/Agent 63），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
+最新本地基线为 `npm test` **117/117 通过**（DB/运行环境 8、登录限流/CSRF 8、导入事务 6、迁移 15、iLink Adapter 12、Worker 4、微信/Agent 64），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
 
 ### 2.1 当前已验证的产品规则
 
@@ -432,14 +432,14 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 | 2 | 已验证 | 冻结运行契约和真源 | `docs/adr/0001-agent-runtime-contract.md` 管运行契约与顺序，`migrations/` 是唯一数据库真源 |
 | 3 | 部分完成 | 完成 B2.1 migration 基础设施 | runner、checksum、MySQL advisory lock、连续历史校验和 `001_ilink_runtime` 已有 10 项单测；仍需在集成 MySQL 执行 `status/up`、备份和恢复演练 |
 | 4 | 未完成 | 把 `001_ilink_runtime` 接入运行链路 | 实现账号级 DB lease/fencing、加密 Inbox/Cursor 同事务、dedupe-before-stage、幂等媒体 staging/短 TTL/GC 和 Outbox Dispatcher；不得用本机文件锁代替跨主机租约 |
-| 5 | 未完成 | 收敛共享 Core 并抽出纯 Node iLink Adapter | Router、RAG、Tool Registry 和 Analytics 只有一份实现；完成 Electron/Web/Worker 契约、精确 API/CDN allowlist、redirect 与真实文字/媒体协议测试；二维码走受 step-up/RBAC 保护的 Web -> MySQL -> Worker 控制通道 |
+| 5 | 部分完成 | 收敛共享 Core，并抽出纯 Node iLink Adapter 协议层 | `shared/ilink-adapter.js` 已完成 API 路由/方法/query allowlist、redirect、超时、响应上限和 typed session-expired 测试；仍需共享 Core、媒体 Artifact 契约、真实账号 E2E，以及受 step-up/RBAC 保护的 Web -> MySQL -> Worker 二维码控制通道 |
 | 6 | 未完成 | 增加会话与可恢复工作流 migration | Session/Run/Step/effect/approval/audit 通过后续 migration 增量增加；业务写、step 和 effect ledger 共事务，等待审批时释放 worker claim |
 | 7 | 未完成 | 完成知识库、运维和观测闭环 | CRUD 写后可检索；trace、指标、限流、预算、脱敏日志、DB 账号/租约/积压/真实连接状态和备份恢复可验证；当前文件心跳只作为过渡证据 |
 | 8 | 未完成 | 完成 B4 服务器 iLink Worker | 占位 Worker 替换为真实 Poller/Dispatcher；单账号迁移、文字/图片/CSV E2E、故障注入和 72 小时记录全部通过 |
 | 9 | 未完成 | B4 通过后执行 B5 内部发布 | 黄金集、Web/微信 E2E、24 小时全链路观察和 5 分钟回滚演练通过，才标记生产可用 |
 | 10 | 后置 | 扩展全功能与可选抖音缓存 | 按 Read、Artifact、Confirmed Write、Collector 分批验收；B6 和多 Agent 均不得早于 B5 |
 
-当前自动化基线为 `npm test` **104/104 通过**，`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。该结果不代表真实 MySQL migration、真实 iLink Worker、72 小时灰度或生产恢复已经验收。
+当前自动化基线为 `npm test` **117/117 通过**，`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。该结果不代表真实 MySQL migration、真实 iLink Worker、72 小时灰度或生产恢复已经验收。
 
 ---
 

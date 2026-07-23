@@ -22,7 +22,7 @@ export default [
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    files: ["electron/**/*.js"],
+    files: ["electron/**/*.js", "shared/**/*.js"],
     languageOptions: {
       globals: {
         __dirname: "readonly",

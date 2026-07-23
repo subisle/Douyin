@@ -15,6 +15,7 @@
 ### 1.1 已具备的基础
 
 - `electron/weixin-bot.js` 已实现 iLink 二维码登录、`getupdates` 长轮询、文本发送、媒体上传和图片/文件发送。
+- `shared/ilink-adapter.js` 已抽出无 Electron 的 iLink HTTP 协议层，覆盖二维码、状态、长轮询、上传地址和消息发送，并对 API origin、路径、方法、query、redirect、超时和响应大小做白名单校验。
 - 业务路由、FastRoute、Agent Tool、CSV 解析、日报生成、会话串行已有可复用实现。
 - Next.js、MySQL、Node.js 运行环境适合拆出无窗口的服务器进程。
 
@@ -22,7 +23,7 @@
 
 | 阻塞项 | 当前状态 | 完成条件 |
 | --- | --- | --- |
-| 服务器 iLink Worker | `scripts/bot-worker.js` 仍只保活锁 | Worker 直接调用 iLink Adapter，能登录、收发、重连、优雅退出 |
+| 服务器 iLink Worker | `scripts/bot-worker.js` 仍只保活锁；协议 Adapter 已存在但尚未接线 | Worker 直接调用 iLink Adapter，能登录、收发、重连、优雅退出 |
 | Core 解耦 | Web 通过 `electron/*.js` 间接加载 | `shared/bot-core` 不依赖 Electron、Next、BrowserWindow |
 | 凭据与游标 | 凭据本地 JSON，游标跟随账号进程 | 加密凭据库 + 持久 `cursor_ciphertext`；重启后由 Inbox/effect 约束抑制重复业务副作用 |
 | 单账号互斥 | 本机文件锁 | MySQL 账号租约 + fencing token，跨主机只有一个 runner |
@@ -206,7 +207,8 @@ iLink getupdates batch
 - [x] 建立 migration runner 和 `001_ilink_runtime` transport schema，并通过 checksum、锁和历史校验单测。
 - [x] 在 `docs/adr/0001-agent-runtime-contract.md` 冻结 `AgentResult`、拓扑、可靠性语义和实施顺序。
 - [ ] 在集成 MySQL 执行 migration、备份和恢复演练，并把 lease/fencing、Inbox/Cursor、Artifact、Outbox 接入运行链路。
-- [ ] 从 `electron/weixin-bot.js` 抽出无 Electron 的 iLink Adapter；完成精确 API/CDN allowlist 与 redirect 协议测试。
+- [x] 从 `electron/weixin-bot.js` 抽出无 Electron 的 iLink HTTP Adapter；完成精确 API origin/路径/方法/query allowlist、redirect、超时、响应上限和 typed session-expired 协议测试。
+- [ ] 将媒体加密、CDN 收发和 Artifact 生命周期收敛到服务器可复用的 Artifact Adapter，并完成真实文字/图片/CSV E2E。
 - [ ] 建立受 step-up/RBAC 保护的 Web -> MySQL -> Worker 二维码控制通道；二维码、challenge 和结果均短 TTL、no-store、可审计。
 - [ ] 实现 dedupe-before-stage、幂等 staging、事务绑定和孤儿 Artifact GC，并完成崩溃点测试。
 - [ ] 把 `scripts/bot-worker.js` 从占位进程改为真实 Poller/Workflow/Outbox 进程。
