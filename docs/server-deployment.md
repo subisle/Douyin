@@ -23,16 +23,15 @@ Web / iOS App / Desktop
 ## 2. 环境要求
 
 - Node.js 22 LTS 或兼容版本
-- MySQL 8.x 或兼容版本（项目默认使用内置远程数据库）
+- MySQL 8.x 或兼容版本
 - Nginx/Caddy/宝塔反代均可
 - 推荐使用 PM2 或 systemd 保活
 
 ## 3. 数据库配置
 
-数据库连接已集中内置在 `electron/db-config.js`。从 GitHub 拉取代码后，即使未设置
-`DB_HOST`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`，桌面端和网站 API 也会使用内置数据库。
-
-需要切换数据库时，可通过网站服务器 `.env` 覆盖任意 `DB_*` 配置：
+数据库连接统一由 `electron/db-config.js` 校验。`DB_HOST`、`DB_PORT`、`DB_USER`、
+`DB_PASSWORD`、`DB_NAME` 必须全部通过服务器环境或未提交 Git 的 `.env` 显式注入；
+缺少任一项或端口不在 `1-65535` 范围时，应用会拒绝创建数据库连接。
 
 ```env
 NODE_ENV=production
@@ -44,28 +43,41 @@ DB_USER=douyin_app
 DB_PASSWORD=change_me
 DB_NAME=douyin
 
-# 写接口保护：设置后 POST/PUT/PATCH/DELETE 必须携带 Bearer Token 或 x-api-token
+# iOS App、自动化脚本等非浏览器客户端使用
 API_TOKENS=change_me_token
 
-# 后续登录鉴权使用
+# Web 登录账号和 HttpOnly 会话签名
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=change_me_to_a_strong_password
 SESSION_SECRET=change_me_to_long_random_string
-JWT_SECRET=change_me_to_long_random_string
 ```
 
 注意：
 
-- `.env` 仅用于覆盖内置配置，不是启动必需项。
+- 数据库环境变量是启动必需项，不存在源码内置凭据或远程数据库 fallback。
 - 自定义 `.env` 只放在服务器，不提交 Git。
-- iOS App 和浏览器仍通过网站 API 访问数据，不直接连接数据库。
+- 浏览器使用登录后签发的 HttpOnly cookie；不要将 API Token 写入 `NEXT_PUBLIC_*`。
+- iOS App 和自动化脚本使用 `Authorization: Bearer <token>` 或 `x-api-token`，不直接连接数据库。
 - MySQL 用户建议只授权业务库，不使用 root。
+
+Electron 安装包不内置 `.env` 或数据库密钥。安装后将 `.env.example` 中需要的变量
+写入应用用户数据目录的 `douyin.env`，或通过 `DOUYIN_ENV_PATH` 指向受限权限的绝对
+路径；进程环境变量优先于文件值。缺少完整 `DB_*` 时安装包保持拒绝启动。
 
 ## 4. 构建与启动
 
 ```bash
 npm ci
+npm run db:migrate:status
+npm run db:migrate
+npm test
 npm run build
 npm run start
 ```
+
+`db:migrate` 必须在每次发布前执行；迁移使用 MySQL advisory lock，发现 checksum
+不一致或本地缺失迁移文件时会终止。当前 `bot-worker.js` 仍是占位租约进程，部署阶段
+只启动 Web，不得把它当作服务器微信收发已完成的证明。
 
 当前 `next.config.ts` 已调整：
 
@@ -105,8 +117,10 @@ server {
 
 ```bash
 curl https://your-domain.com/api/v1/health
-curl https://your-domain.com/api/v1/startup-health
-curl https://your-domain.com/api/v1/dashboard/summary
+curl https://your-domain.com/api/v1/startup-health \
+  -H 'authorization: Bearer change_me_token'
+curl https://your-domain.com/api/v1/dashboard/summary \
+  -H 'authorization: Bearer change_me_token'
 curl -X POST https://your-domain.com/api/v1/flags/settle \
   -H 'content-type: application/json' \
   -H 'authorization: Bearer change_me_token' \

@@ -10,8 +10,10 @@ const {
   normalizeIsoDate,
   parseBotCommand,
   parseCsvText,
+  pendingImportKey,
   resolveDateSpec,
 } = require("./weixin-bot-commands");
+const { threadKeyFromContext } = require("./weixin-bot-agent");
 const {
   buildMediaItem,
   decryptAesEcb,
@@ -163,6 +165,89 @@ test("Weixin media upload and download use AES-128-ECB CDN fields", async () => 
   assert.deepEqual(downloaded.buffer, plaintext);
 });
 
+test("Weixin media download timeout covers a stalled response body", async () => {
+  await assert.rejects(
+    downloadInboundMedia({
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Promise(() => {}),
+      }),
+      item: {
+        type: 4,
+        file_item: {
+          file_name: "stalled.csv",
+          media: { encrypt_query_param: "STALLED_PARAM" },
+        },
+      },
+      timeoutMs: 20,
+    }),
+    /请求超时/
+  );
+});
+
+test("Weixin media download aborts a stalled body when runner work is cancelled", async () => {
+  const controller = new AbortController();
+  const pending = downloadInboundMedia({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new Promise(() => {}),
+    }),
+    item: {
+      type: 4,
+      file_item: {
+        file_name: "cancelled.csv",
+        media: { encrypt_query_param: "CANCELLED_PARAM" },
+      },
+    },
+    timeoutMs: 1_000,
+    signal: controller.signal,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+
+  await assert.rejects(pending, (error) => error?.name === "AbortError");
+});
+
+test("Weixin media download enforces its byte limit while streaming", async () => {
+  let reads = 0;
+  let cancelled = false;
+  const reader = {
+    async read() {
+      reads += 1;
+      return { done: false, value: Buffer.alloc(4, reads) };
+    },
+    async cancel() {
+      cancelled = true;
+    },
+    releaseLock() {},
+  };
+
+  await assert.rejects(
+    downloadInboundMedia({
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        body: { getReader: () => reader },
+      }),
+      item: {
+        type: 4,
+        file_item: {
+          file_name: "large.csv",
+          media: { encrypt_query_param: "LARGE_PARAM" },
+        },
+      },
+      maxBytes: 6,
+      timeoutMs: 500,
+    }),
+    /文件过大/
+  );
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+});
+
 test("daily report renderer produces a real PNG", async () => {
   const png = await renderDailyReportPng({
     date: "2026-07-18",
@@ -226,7 +311,7 @@ test("daily report style defaults to apple for male and classic for female", asy
   assert.notEqual(maleMeta.height, femaleMeta.height);
 });
 
-test("command handler imports an inbound wave CSV using its filename date", async () => {
+test("command handler ignores a filename date and imports to yesterday by default", async () => {
   const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\nanchor-b,乙,800,2\n", "utf8");
   let importCall;
   const replies = [];
@@ -246,18 +331,102 @@ test("command handler imports an inbound wave CSV using its filename date", asyn
   });
   const result = await handler({
     text: "",
+    fromUserId: "tester",
     items: [{ type: 4, file_item: { file_name: "2026-07-18_音浪.csv" } }],
     downloadMedia: async () => ({ buffer: csv, fileName: "2026-07-18_音浪.csv" }),
     replyText: async (text) => { replies.push(text); },
   });
   assert.equal(result.handled, true);
-  assert.equal(importCall.date, "2026-07-18");
+  // 文件名日期不再作为导入日；默认昨天
+  const yesterday = (() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 1);
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  })();
+  assert.equal(importCall.date, yesterday);
   assert.deepEqual(importCall.rows, [
     { anchorId: "anchor-a", waveValue: 1200, rank: 1 },
     { anchorId: "anchor-b", waveValue: 800, rank: 2 },
   ]);
   assert.equal(importCall.meta.rowCount, 2);
-  assert.match(replies.at(-1), /已导入 2026-07-18 音浪数据/);
+  assert.match(replies.at(-1), new RegExp(`已导入 ${yesterday} 音浪数据`));
+});
+
+test("CSV import checks the runner lease after media staging and before the DB write", async () => {
+  const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\n", "utf8");
+  let leaseValid = true;
+  let importCalls = 0;
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getAnchors: async () => [
+        { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+      ],
+      importWaveSnapshots: async () => {
+        importCalls += 1;
+      },
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+
+  const result = await handler({
+    text: "",
+    fromUserId: "lease-import-user",
+    items: [{ type: 4, file_item: { file_name: "data.csv" } }],
+    assertLease: () => {
+      if (!leaseValid) throw new Error("runner lease lost");
+    },
+    downloadMedia: async () => {
+      leaseValid = false;
+      return { buffer: csv, fileName: "data.csv" };
+    },
+    replyText: async (text) => replies.push(text),
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(importCalls, 0);
+  assert.match(replies.at(-1), /runner lease lost/);
+});
+
+test("pending explicit date then CSV imports to that date", async () => {
+  const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\n", "utf8");
+  let importCall;
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getAnchors: async () => [
+        { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+      ],
+      importWaveSnapshots: async (date, rows, meta) => {
+        importCall = { date, rows, meta };
+        return { inserted: rows.length };
+      },
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+  const ctx = { fromUserId: "tester-2", conversationId: "tester-2" };
+  const remember = await handler({
+    ...ctx,
+    text: "24号数据",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+  });
+  assert.equal(remember.handled, true);
+  assert.match(replies.at(-1), /已记住导入日期/);
+  const result = await handler({
+    ...ctx,
+    text: "",
+    items: [{ type: 4, file_item: { file_name: "主播榜.csv" } }],
+    downloadMedia: async () => ({ buffer: csv, fileName: "主播榜.csv" }),
+    replyText: async (text) => { replies.push(text); },
+  });
+  assert.equal(result.handled, true);
+  const expected = (() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 1);
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-24`;
+  })();
+  assert.equal(importCall.date, expected);
 });
 
 test("report command without gender sends male then female images", async () => {
@@ -476,4 +645,143 @@ test("command handler replies instead of throwing when summary fails hard", asyn
   // should not throw; either empty-data message or soft failure text
   assert.ok(replies.length >= 1);
   assert.match(replies[0], /没有音浪快照|处理失败/);
+});
+
+test("mode store + matchFastRoute unit", () => {
+  const {
+    createModeStore,
+    matchFastRoute,
+    matchSystemToken,
+  } = require("./weixin-bot-mode");
+  const store = createModeStore();
+  const ctx = { fromUserId: "u1", conversationId: "u1" };
+  assert.equal(store.getMode(ctx), "instruction");
+  store.setMode(ctx, "agent");
+  assert.equal(store.isAgent(ctx), true);
+  store.setMode(ctx, "instruction");
+  assert.equal(store.isAgent(ctx), false);
+
+  assert.equal(matchSystemToken("人工客服"), "enable");
+  assert.equal(matchSystemToken("退出客服"), "disable");
+  assert.equal(matchSystemToken("帮助"), "help");
+  assert.equal(matchSystemToken("每日报告"), null);
+
+  assert.deepEqual(matchFastRoute("每日报告", { parseBotCommand }), {
+    type: "report",
+    gender: "both",
+    dateSpec: null,
+  });
+  assert.deepEqual(matchFastRoute("小张", { parseBotCommand }), {
+    type: "anchor-profile",
+    query: "小张",
+  });
+  // 口语问句不进 FastRoute
+  assert.equal(matchFastRoute("帮我对比一下最近谁音浪好", { parseBotCommand }), null);
+  assert.equal(matchFastRoute("对比一下小张和小李", { parseBotCommand }), null);
+});
+
+test("mode, AI thread, and pending import keys isolate bot accounts", () => {
+  const { createModeStore, sessionKeyFromContext } = require("./weixin-bot-mode");
+  const accountA = {
+    accountId: "account-a@im.bot",
+    fromUserId: "shared-user@im.wechat",
+    conversationId: "shared-user@im.wechat",
+  };
+  const accountB = { ...accountA, accountId: "account-b@im.bot" };
+  const store = createModeStore();
+
+  store.setMode(accountA, "agent");
+  assert.equal(store.getMode(accountA), "agent");
+  assert.equal(store.getMode(accountB), "instruction");
+  assert.notEqual(sessionKeyFromContext(accountA), sessionKeyFromContext(accountB));
+  assert.notEqual(threadKeyFromContext(accountA), threadKeyFromContext(accountB));
+  assert.notEqual(pendingImportKey(accountA), pendingImportKey(accountB));
+});
+
+test("agent mode: after 人工客服, 每日报告 still handled via FastRoute", async () => {
+  const replies = [];
+  const images = [];
+  const genders = [];
+  const mockAgent = {
+    enableSession() {},
+    disableSession() {},
+    getPublicStatus() {
+      return { enabled: true, configured: true };
+    },
+  };
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async (date, gender) => {
+        genders.push(gender);
+        return {
+          date,
+          gender,
+          summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+          rows: [{ name: "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
+        };
+      },
+    },
+    renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
+    agent: mockAgent,
+  });
+  const ctx = { fromUserId: "agent-user", conversationId: "agent-user" };
+  const enable = await handler({
+    ...ctx,
+    text: "人工客服",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+  });
+  assert.equal(enable.handled, true);
+  assert.equal(handler.modeStore.isAgent(ctx), true);
+  assert.match(replies.at(-1), /智能客服/);
+
+  const report = await handler({
+    ...ctx,
+    text: "每日报告",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+  });
+  assert.equal(report.handled, true);
+  assert.equal(report.via, "fast-route");
+  assert.deepEqual(genders, ["male", "female"]);
+  assert.ok(images.length >= 2);
+});
+
+test("agent mode: free text not matched returns handled false for agent fallback", async () => {
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18" }),
+      getAnchors: async () => [],
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+    agent: {
+      enableSession() {},
+      disableSession() {},
+      getPublicStatus() { return { enabled: true, configured: true }; },
+    },
+  });
+  const ctx = { fromUserId: "agent-user-2", conversationId: "agent-user-2" };
+  await handler({
+    ...ctx,
+    text: "人工客服",
+    items: [],
+    replyText: async () => {},
+  });
+  const free = await handler({
+    ...ctx,
+    text: "帮我对比一下最近谁音浪好",
+    items: [],
+    replyText: async () => {},
+  });
+  assert.equal(free.handled, false);
+});
+
+
+test("CSV怎么导入 not fast-route as anchor profile", () => {
+  const { matchFastRoute, parseBotCommand } = require("./weixin-bot-commands");
+  assert.equal(matchFastRoute("CSV怎么导入", { parseBotCommand }), null);
+  assert.equal(matchFastRoute("业务日是什么", { parseBotCommand }), null);
 });

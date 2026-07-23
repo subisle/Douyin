@@ -1,20 +1,18 @@
 const crypto = require("crypto");
 const Papa = require("papaparse");
+const { createWeixinAnalytics } = require("./weixin-bot-analytics");
+const {
+  createModeStore,
+  matchSystemToken,
+  matchFastRoute,
+  INSTRUCTION_HELP,
+  AGENT_HELP,
+  SYSTEM_ENABLE_RE: AGENT_ENABLE_RE,
+  SYSTEM_DISABLE_RE: AGENT_DISABLE_RE,
+} = require("./weixin-bot-mode");
 
-const HELP_TEXT = [
-  "用法很简单：",
-  "· 直接发艺名 → 查库内全部数据",
-  "· 每日报告 → 最新双团报告图",
-  "· 18号报告 / 18号音浪 → 指定日报告",
-  "· 艺名+时长 → 累计直播时长",
-  "· 艺名+音浪 → 最新音浪",
-  "· 音浪文件 → 导出 CSV（也可直接发 CSV 导入）",
-  "· 人工客服 → 开启智能助手",
-  "· 退出客服 → 关闭智能助手",
-].join("\n");
-
-const AGENT_ENABLE_RE = /^(?:人工客服|智能客服|客服|开启客服|打开客服)$/i;
-const AGENT_DISABLE_RE = /^(?:退出客服|关闭客服|结束客服|取消客服)$/i;
+const HELP_TEXT = INSTRUCTION_HELP;
+const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
 
 function normalizeText(value) {
   return String(value || "")
@@ -45,9 +43,41 @@ function parseDateSpec(value) {
   if (compact) return { type: "date", year: Number(compact[1]), month: Number(compact[2]), day: Number(compact[3]) };
   const monthDay = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/);
   if (monthDay) return { type: "month-day", month: Number(monthDay[1]), day: Number(monthDay[2]) };
-  const day = text.match(/(?:^|\s)(\d{1,2})\s*[日号](?=$|\s|音浪|文件|日报|报告|_|\.)/);
+  const day = text.match(/(?:^|\s)(\d{1,2})\s*[日号](?=$|\s|音浪|文件|日报|报告|数据|_|\.)/);
   if (day) return { type: "day", day: Number(day[1]) };
+  // normalizeText 去空格后：24号数据 / 24号音浪
+  const dayCompact = text.match(/^(\d{1,2})[日号](?:数据|音浪|文件|日报|报告)?$/);
+  if (dayCompact) return { type: "day", day: Number(dayCompact[1]) };
   return null;
+}
+
+/** 仅从用户文字解析导入日期；不读文件名，避免误把 22 号发的文件落到 22 */
+function parseExplicitImportDateFromText(text) {
+  const original = normalizeText(text);
+  if (!original) return null;
+  // 优先识别「24号数据 / 24号音浪数据 / 数据24号」
+  const labeled = original.match(/(\d{1,2})[日号](?:音浪|时长)?数据/)
+    || original.match(/(?:音浪|时长)?数据(\d{1,2})[日号]/)
+    || original.match(/(20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?)(?:音浪|时长)?数据/);
+  if (labeled) {
+    const raw = labeled[1] || labeled[0];
+    const spec = parseDateSpec(String(raw).includes("数据") ? String(raw).replace(/数据/g, "") : raw);
+    if (spec) return resolveDateSpec(spec, localYesterdayIso());
+  }
+  const spec = parseDateSpec(original);
+  if (!spec) return null;
+  // 仅当文案明显在指定导入日时才采纳（避免闲聊里的数字误触发）
+  if (!/(?:数据|音浪|时长|导入|文件)/.test(original) && spec.type === "day") return null;
+  return resolveDateSpec(spec, localYesterdayIso());
+}
+
+function localTodayIso() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function localYesterdayIso() {
+  return shiftDate(localTodayIso(), -1);
 }
 
 function isValidDateParts(year, month, day) {
@@ -85,10 +115,6 @@ function resolveDateSpec(spec, fallbackDate = null) {
   if (spec.type === "month-day") return toIsoDate(Number(fallback.slice(0, 4)), spec.month, spec.day);
   if (spec.type === "day") return toIsoDate(Number(fallback.slice(0, 4)), Number(fallback.slice(5, 7)), spec.day);
   return fallback;
-}
-
-function extractDateFromText(text, fallbackDate) {
-  return resolveDateSpec(parseDateSpec(text), fallbackDate);
 }
 
 function parseReportGender(original) {
@@ -480,7 +506,24 @@ async function resolveAnchorOrReply(args, query, db) {
   return anchor;
 }
 
-async function handleAnchorDuration(args, command, db) {
+async function handleAnchorDuration(args, command, db, analytics) {
+  if (analytics) {
+    const result = await analytics.getAnchorDuration({ query: command.query });
+    if (!result.ok) {
+      if (result.candidates?.length) {
+        await args.replyText(`没有找到唯一主播“${command.query}”，请使用主播姓名、抖音号或主播 ID。`);
+      } else {
+        await args.replyText(result.error || `没有找到唯一主播“${command.query}”，请使用主播姓名、抖音号或主播 ID。`);
+      }
+      return;
+    }
+    if (!result.found) {
+      await args.replyText(result.message || `${command.query} 没有时长快照。`);
+      return;
+    }
+    await args.replyText(result.text);
+    return;
+  }
   const anchor = await resolveAnchorOrReply(args, command.query, db);
   if (!anchor) return;
   const date = await resolveReportDate(db, null, "duration");
@@ -498,158 +541,38 @@ async function handleAnchorDuration(args, command, db) {
 /**
  * 直接输入名字：汇总该主播库内全部已有数据（基础信息 + 音浪/时长全量）。
  */
-async function handleAnchorProfile(args, command, db) {
-  const anchor = await resolveAnchorOrReply(args, command.query, db);
-  if (!anchor) return;
-
-  const genderLabel = anchor.gender === "female" ? "女队" : "男团";
-  const accountIds = [anchor.anchorId, ...(anchor.aliasIds || [])]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  const uniqueIds = [...new Set(accountIds)];
-
-  const waveByDate = new Map();
-  const durationByDate = new Map();
-  const hasWaveTrend = typeof db.getAnchorWaveTrend === "function";
-  const hasDurationTrend = typeof db.getAnchorDurationTrend === "function";
-
-  for (const accountId of uniqueIds) {
-    if (hasWaveTrend) {
-      const trend = await db.getAnchorWaveTrend(accountId);
-      for (const point of Array.isArray(trend) ? trend : []) {
-        const date = String(point.date || "").slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-        const total = Number(point.total) || 0;
-        const rank = Number(point.rank) || 0;
-        const prev = waveByDate.get(date);
-        if (!prev || total > prev.total) waveByDate.set(date, { date, total, rank });
-      }
+async function handleAnchorProfile(args, command, db, analytics) {
+  if (analytics) {
+    const result = await analytics.getAnchorFullProfile({ query: command.query });
+    if (!result.ok) {
+      await args.replyText(`没有找到唯一主播“${command.query}”，请使用主播姓名、抖音号或主播 ID。`);
+      return;
     }
-    if (hasDurationTrend) {
-      const trend = await db.getAnchorDurationTrend(accountId);
-      for (const point of Array.isArray(trend) ? trend : []) {
-        const date = String(point.date || "").slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-        const total = Number(point.total) || 0;
-        const prev = durationByDate.get(date);
-        if (!prev || total > prev.total) durationByDate.set(date, { date, total });
-      }
+    for (const part of result.textParts || [result.summaryText].filter(Boolean)) {
+      if (part) await args.replyText(part);
     }
-  }
-
-  // 兼容无 trend API 时，从 export 全表过滤（测试/旧库）
-  if (!hasWaveTrend && typeof db.exportWaveSnapshots === "function") {
-    const rows = await db.exportWaveSnapshots();
-    const idSet = new Set(uniqueIds);
-    for (const row of Array.isArray(rows) ? rows : []) {
-      const id = String(row.抖音号 || row.anchorId || "").trim();
-      if (!idSet.has(id)) continue;
-      const date = String(row.日期 || row.date || "").slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-      const total = Number(row.音浪 || row.wave || row.total || 0) || 0;
-      const rank = Number(row.排名 || row.rank || 0) || 0;
-      const prev = waveByDate.get(date);
-      if (!prev || total > prev.total) waveByDate.set(date, { date, total, rank });
-    }
-  }
-  if (!hasDurationTrend && typeof db.exportDurationSnapshots === "function") {
-    const rows = await db.exportDurationSnapshots();
-    const idSet = new Set(uniqueIds);
-    for (const row of Array.isArray(rows) ? rows : []) {
-      const id = String(row.抖音号 || row.anchorId || "").trim();
-      if (!idSet.has(id)) continue;
-      const date = String(row.日期 || row.date || "").slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-      const total = Number(row.时长分钟 || row.totalMinutes || row.total || 0) || 0;
-      const prev = durationByDate.get(date);
-      if (!prev || total > prev.total) durationByDate.set(date, { date, total });
-    }
-  }
-
-  const waveDates = [...waveByDate.keys()].sort();
-  const durationDates = [...durationByDate.keys()].sort();
-  const latestWave = waveDates.length ? waveByDate.get(waveDates[waveDates.length - 1]) : null;
-  const latestDuration = durationDates.length
-    ? durationByDate.get(durationDates[durationDates.length - 1])
-    : null;
-  const peakWave = waveDates.length
-    ? [...waveByDate.values()].reduce((best, item) => (item.total > best.total ? item : best))
-    : null;
-  const waveSum = [...waveByDate.values()].reduce((sum, item) => sum + item.total, 0);
-
-  const lines = [
-    `【${anchor.name}】库内全部数据`,
-    `队伍：${genderLabel}`,
-    `主播ID：${anchor.anchorId || "-"}`,
-    `抖音号：${anchor.douyinNo || "-"}`,
-    anchor.masterName ? `师父：${anchor.masterName}` : null,
-    uniqueIds.length > 1 ? `关联账号：${uniqueIds.join("、")}` : null,
-    "",
-    "—— 音浪 ——",
-    waveDates.length
-      ? `记录 ${waveDates.length} 天（${waveDates[0]} ~ ${waveDates[waveDates.length - 1]}）`
-      : "暂无音浪快照",
-    latestWave
-      ? `最新 ${latestWave.date}：日音浪 ${formatWave(latestWave.total)}${latestWave.rank ? ` · 排名 ${latestWave.rank}` : ""}`
-      : null,
-    peakWave
-      ? `峰值 ${peakWave.date}：${formatWave(peakWave.total)}${peakWave.rank ? ` · 排名 ${peakWave.rank}` : ""}`
-      : null,
-    waveDates.length ? `各日合计：${formatWave(waveSum)}` : null,
-    "",
-    "—— 时长 ——",
-    durationDates.length
-      ? `记录 ${durationDates.length} 次（${durationDates[0]} ~ ${durationDates[durationDates.length - 1]}）`
-      : "暂无时长快照",
-    latestDuration
-      ? `最新累计 ${latestDuration.date}：${formatDuration(latestDuration.total)}（${compactNumber(latestDuration.total)} 分钟）`
-      : null,
-  ].filter((line) => line !== null);
-
-  // 附上全部明细（控制长度，过长则只发最近一段 + 提示）
-  const detailLines = [];
-  if (waveDates.length) {
-    detailLines.push("", "音浪明细：");
-    for (const date of waveDates) {
-      const item = waveByDate.get(date);
-      detailLines.push(
-        `${date}  ${formatWave(item.total)}${item.rank ? `  #${item.rank}` : ""}`
-      );
-    }
-  }
-  if (durationDates.length) {
-    detailLines.push("", "时长明细（累计分钟）：");
-    for (const date of durationDates) {
-      const item = durationByDate.get(date);
-      detailLines.push(`${date}  ${formatDuration(item.total)}`);
-    }
-  }
-
-  const full = [...lines, ...detailLines].join("\n");
-  // 微信单条文本不宜过长，超过约 3500 字时拆成摘要 + 明细
-  if (full.length <= 3500) {
-    await args.replyText(full);
     return;
   }
-  await args.replyText(lines.join("\n"));
-  // 明细按块发送
-  const chunks = [];
-  let buf = "";
-  for (const line of detailLines) {
-    if ((buf + "\n" + line).length > 3200) {
-      chunks.push(buf);
-      buf = line;
-    } else {
-      buf = buf ? `${buf}\n${line}` : line;
-    }
-  }
-  if (buf) chunks.push(buf);
-  for (const chunk of chunks) {
-    if (chunk.trim()) await args.replyText(chunk);
-  }
+  // 无 analytics 时的最小回退
+  const anchor = await resolveAnchorOrReply(args, command.query, db);
+  if (!anchor) return;
+  await args.replyText(`【${anchor.name}】库内全部数据\n主播ID：${anchor.anchorId || "-"}`);
 }
 
-async function handleAnchorWaveDays(args, command, db) {
+async function handleAnchorWaveDays(args, command, db, analytics) {
+  if (analytics) {
+    const result = await analytics.getAnchorWaveDays({ query: command.query });
+    if (!result.ok) {
+      await args.replyText(`没有找到唯一主播“${command.query}”，请使用主播姓名、抖音号或主播 ID。`);
+      return;
+    }
+    if (!result.found) {
+      await args.replyText(result.message || `${command.query} 没有可用音浪数据。`);
+      return;
+    }
+    await args.replyText(result.text);
+    return;
+  }
   const anchor = await resolveAnchorOrReply(args, command.query, db);
   if (!anchor) return;
   const date = await resolveReportDate(db, null, "wave");
@@ -664,7 +587,23 @@ async function handleAnchorWaveDays(args, command, db) {
   await args.replyText(`${anchor.name} 截至 ${date} 本月有音浪 ${liveDays} 天，累计音浪 ${formatWave(row.totalWave)}，${Number(date.slice(5, 7))}月未播 ${row.notLiveDays || 0} 天。`);
 }
 
-async function handleAnchorWave(args, command, db) {
+async function handleAnchorWave(args, command, db, analytics) {
+  if (analytics) {
+    const date = command.dateSpec ? resolveDateSpec(command.dateSpec, await getLatestDate(db, "wave")) : null;
+    const result = await analytics.getAnchorWaveProfile({ query: command.query, date });
+    if (!result.ok) {
+      await args.replyText(`没有找到唯一主播“${command.query}”，请使用主播姓名、抖音号或主播 ID。`);
+      return;
+    }
+    if (!result.found) {
+      await args.replyText(result.message || `${command.query} 没有可用音浪数据。`);
+      return;
+    }
+    await args.replyText(
+      `${result.anchor.name} ${result.asOfDate} 日音浪：${result.dailyWaveText}；截至当日累计音浪：${result.totalWaveText}。`
+    );
+    return;
+  }
   const anchor = await resolveAnchorOrReply(args, command.query, db);
   if (!anchor) return;
   const date = await resolveReportDate(db, command.dateSpec, "wave");
@@ -689,11 +628,74 @@ async function handleExportWaveFile(args, command, db) {
   await args.replyFile({ buffer, fileName: `${date}_音浪数据.csv` });
 }
 
-async function handleInboundFile(args, db) {
+function pendingImportKey(args = {}) {
+  const accountId = String(args.accountId || "").trim() || "unknown";
+  const groupId = String(args.groupId || "").trim();
+  const userId = String(args.fromUserId || args.userId || "").trim();
+  const conversationId = String(args.conversationId || "").trim();
+  if (groupId) return `a:${accountId}|g:${groupId}|u:${userId || "unknown"}`;
+  if (userId) return `a:${accountId}|u:${userId}`;
+  return `a:${accountId}|c:${conversationId || "unknown"}`;
+}
+
+function createPendingImportDateStore() {
+  /** @type {Map<string, { date: string, expiresAt: number }>} */
+  const store = new Map();
+  return {
+    set(args, date) {
+      const key = pendingImportKey(args);
+      store.set(key, { date, expiresAt: Date.now() + PENDING_IMPORT_DATE_TTL_MS });
+      return key;
+    },
+    take(args) {
+      const key = pendingImportKey(args);
+      const item = store.get(key);
+      if (!item) return null;
+      store.delete(key);
+      if (Date.now() > item.expiresAt) return null;
+      return item.date;
+    },
+    peek(args) {
+      const key = pendingImportKey(args);
+      const item = store.get(key);
+      if (!item) return null;
+      if (Date.now() > item.expiresAt) {
+        store.delete(key);
+        return null;
+      }
+      return item.date;
+    },
+    clear(args) {
+      store.delete(pendingImportKey(args));
+    },
+  };
+}
+
+/**
+ * CSV 导入日期规则：
+ * 1) 消息文字明确指定日期（如「24号数据」）→ 该日
+ * 2) 否则若会话有 10 分钟内预告的导入日 → 预告日
+ * 3) 否则默认「昨天」
+ * 不再使用文件名里的日期，避免 22 号发送的 csv 误导入 22 号。
+ */
+function resolveInboundImportDate(args, pendingDates) {
+  const fromText = parseExplicitImportDateFromText(args.text || "");
+  if (fromText) {
+    pendingDates.clear(args);
+    return { date: fromText, source: "message" };
+  }
+  const pending = pendingDates.take(args);
+  if (pending) return { date: pending, source: "pending" };
+  return { date: localYesterdayIso(), source: "yesterday" };
+}
+
+async function handleInboundFile(args, db, pendingDates) {
+  args.assertLease?.();
   const file = await args.downloadMedia(args.fileItem);
+  args.assertLease?.();
   const fileName = String(file.fileName || "weixin-file.bin");
   if (!/\.csv$/i.test(fileName)) {
-    await args.replyText("请发送 CSV 格式的音浪或时长文件；文件名可带日期，例如 2026-07-18_音浪.csv。\n");
+    await args.replyText("请发送 CSV 格式的音浪或时长文件。\n默认导入到昨天；若要指定日期，请先发「24号数据」再传文件。");
     return;
   }
   const text = decodeCsv(file.buffer);
@@ -705,18 +707,26 @@ async function handleInboundFile(args, db) {
     await args.replyText(`文件已解析，但没有匹配到主播。有效行 ${parsed.rows.length}，未匹配 ${matched.unmatched.length}。`);
     return;
   }
-  const date = extractDateFromText(`${args.text}\n${fileName}`, null);
+  const resolved = resolveInboundImportDate(args, pendingDates);
+  const date = resolved.date;
   const meta = buildImportMeta(file.buffer, fileName, kind, matched.rows);
   const importRows = kind === "wave"
     ? matched.rows.map((row) => ({ anchorId: row.anchorId, waveValue: row.value, rank: row.rank }))
     : matched.rows.map((row) => ({ anchorId: row.anchorId, totalMinutes: row.value }));
+  args.assertLease?.();
   if (kind === "wave") {
     await db.importWaveSnapshots(date, importRows, meta);
   } else {
     await db.importDurationSnapshots(date, importRows, meta);
   }
+  args.assertLease?.();
   const label = kind === "wave" ? "音浪" : "时长";
-  await args.replyText(`已导入 ${date} ${label}数据：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
+  const sourceHint = resolved.source === "yesterday"
+    ? "（默认昨天；指定日期请先发「X号数据」）"
+    : resolved.source === "pending"
+      ? "（按你预告的日期）"
+      : "（按消息指定日期）";
+  await args.replyText(`已导入 ${date} ${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
 }
 
 
@@ -771,34 +781,52 @@ async function handleCustomCommand(args, command, db, renderReportPng) {
   }
 }
 
-function createWeixinCommandHandler({ db, renderReportPng, agent = null }) {
+async function dispatchBusinessCommand(args, command, { db, renderReportPng, analytics }) {
+  if (!command) return false;
+  if (command.type === "report") await sendReport(args, command, db, renderReportPng);
+  else if (command.type === "anchor-profile") await handleAnchorProfile(args, command, db, analytics);
+  else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db, analytics);
+  else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
+  else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
+  else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
+  else return false;
+  return true;
+}
+
+function createWeixinCommandHandler({ db, renderReportPng, agent = null, analytics: sharedAnalytics = null } = {}) {
   if (!db) throw new Error("微信机器人命令处理缺少数据库");
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
+  const pendingImportDates = createPendingImportDateStore();
+  const modeStore = createModeStore();
+  const analytics = sharedAnalytics || createWeixinAnalytics({ db, renderReportPng });
+  const deps = { db, renderReportPng, analytics };
 
-  return async function handleCommand(args) {
+  async function handleCommand(args) {
     try {
       const items = Array.isArray(args.items) ? args.items : [];
       const fileItem = items.find((item) => item?.type === 4 && item.file_item);
       if (fileItem) {
-        await handleInboundFile({ ...args, fileItem }, db);
+        await handleInboundFile({ ...args, fileItem }, db, pendingImportDates);
         return { handled: true };
       }
 
-      const custom = matchCustomCommand(args.text, args.settings?.customCommands);
-      if (custom) {
-        await handleCustomCommand(args, custom, db, renderReportPng);
+      // 预告导入日：先说「24号数据」，再发 CSV（两种模式都允许）
+      const importDateHint = parseExplicitImportDateFromText(args.text || "");
+      if (importDateHint && /(?:数据|导入)/.test(normalizeText(args.text || ""))) {
+        pendingImportDates.set(args, importDateHint);
+        await args.replyText(`已记住导入日期 ${importDateHint}（10 分钟内有效）。请现在发送 CSV 文件。`);
         return { handled: true };
       }
 
-      const command = parseBotCommand(args.text);
-      if (!command) return { handled: false };
+      const systemToken = matchSystemToken(args.text);
+      const agentMode = modeStore.isAgent(args);
 
-      if (command.type === "help") {
-        await args.replyText(HELP_TEXT);
+      // 系统 token 始终处理
+      if (systemToken === "help") {
+        await args.replyText(agentMode ? AGENT_HELP : HELP_TEXT);
         return { handled: true };
       }
-
-      if (command.type === "agent-enable") {
+      if (systemToken === "enable") {
         if (!agent || typeof agent.enableSession !== "function") {
           await args.replyText("智能客服暂不可用，请先在桌面端配置 AI。");
           return { handled: true };
@@ -812,28 +840,53 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null }) {
           await args.replyText("智能客服已配置但未启用，请管理员在桌面端打开 AI 开关。");
           return { handled: true };
         }
+        modeStore.setMode(args, "agent");
         agent.enableSession(args);
         await args.replyText([
           "已接入智能客服。",
           "可直接说：查某艺名、每日报告、18号报告、对比两位主播、发音浪文件。",
-          "固定命令仍然可用；回复「退出客服」结束。",
+          "高置信指令走快速路由；其余由智能助手理解。回复「退出客服」结束。",
         ].join("\n"));
         return { handled: true };
       }
-
-      if (command.type === "agent-disable") {
+      if (systemToken === "disable") {
+        modeStore.setMode(args, "instruction");
         if (agent && typeof agent.disableSession === "function") agent.disableSession(args);
         await args.replyText("已退出智能客服。固定命令仍可用，发「帮助」查看。");
         return { handled: true };
       }
 
-      if (command.type === "report") await sendReport(args, command, db, renderReportPng);
-      else if (command.type === "anchor-profile") await handleAnchorProfile(args, command, db);
-      else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db);
-      else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db);
-      else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db);
-      else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
-      return { handled: true };
+      // Agent 模式：只跑 FastRoute；匹配不到则交给 agent
+      if (agentMode) {
+        const fast = matchFastRoute(args.text, { parseBotCommand });
+        if (fast) {
+          const ok = await dispatchBusinessCommand(args, fast, deps);
+          if (ok) return { handled: true, via: "fast-route" };
+        }
+        return { handled: false };
+      }
+
+      // 指令模式：自定义命令 + 完整 parseBotCommand
+      const custom = matchCustomCommand(args.text, args.settings?.customCommands);
+      if (custom) {
+        await handleCustomCommand(args, custom, db, renderReportPng);
+        return { handled: true };
+      }
+
+      const command = parseBotCommand(args.text);
+      if (!command) return { handled: false };
+
+      if (command.type === "help") {
+        await args.replyText(HELP_TEXT);
+        return { handled: true };
+      }
+      if (command.type === "agent-enable" || command.type === "agent-disable") {
+        // 已由 systemToken 处理；兜底
+        return { handled: false };
+      }
+
+      const ok = await dispatchBusinessCommand(args, command, deps);
+      return { handled: ok };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (typeof args.replyText === "function") {
@@ -841,11 +894,16 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null }) {
       }
       return { handled: true, error: message };
     }
-  };
+  }
+
+  handleCommand.modeStore = modeStore;
+  handleCommand.analytics = analytics;
+  return handleCommand;
 }
 
 module.exports = {
   HELP_TEXT,
+  AGENT_HELP,
   AGENT_ENABLE_RE,
   AGENT_DISABLE_RE,
   normalizeText,
@@ -861,5 +919,9 @@ module.exports = {
   parseCsvText,
   matchImportRows,
   buildImportMeta,
+  pendingImportKey,
   createWeixinCommandHandler,
+  createModeStore,
+  matchFastRoute,
+  matchSystemToken,
 };

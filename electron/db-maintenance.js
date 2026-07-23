@@ -11,7 +11,7 @@ async function ensureImportRecordsTable(db) {
        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
        PRIMARY KEY (id),
        UNIQUE KEY uq_import_kind_date_file (kind, import_date, file_hash),
-       KEY idx_import_kind_date_data (kind, import_date, data_hash)
+       UNIQUE KEY uq_import_kind_date_data (kind, import_date, data_hash)
      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
   );
 }

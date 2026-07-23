@@ -153,6 +153,7 @@ export interface WeixinBotStatus {
 
 export interface WeixinBotMessage {
   id: string;
+  accountId?: string;
   direction: "inbound" | "outbound";
   conversationId: string;
   userId: string;
@@ -182,6 +183,7 @@ export interface WeixinBotCustomCommand {
 }
 
 export interface WeixinBotContact {
+  accountId: string;
   id: string;
   kind: "user" | "group";
   conversationId: string;
@@ -201,6 +203,7 @@ export interface WeixinBotAiSettings {
 }
 
 export interface WeixinBotSettings {
+  accountId: string | null;
   autoReplyEnabled: boolean;
   autoReplyText: string;
   accessMode: WeixinBotAccessMode;
@@ -213,6 +216,7 @@ export interface WeixinBotSettings {
 
 /** 写入设置的载荷：字段均可选；AI Key 只写不读 */
 export interface WeixinBotSettingsSavePayload {
+  accountId?: string;
   autoReplyEnabled?: boolean;
   autoReplyText?: string;
   accessMode?: WeixinBotAccessMode;
@@ -769,7 +773,7 @@ declare global {
     // ── 微信 iLink Bot ──
     getWeixinBotStatus: () => Promise<IpcResult<WeixinBotStatus>>;
     getWeixinBotMessages: () => Promise<IpcResult<WeixinBotMessage[]>>;
-    getWeixinBotSettings: () => Promise<IpcResult<WeixinBotSettings>>;
+    getWeixinBotSettings: (accountId?: string) => Promise<IpcResult<WeixinBotSettings>>;
     startWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
     cancelWeixinBotLogin: () => Promise<IpcResult<WeixinBotStatus>>;
     startWeixinBot: (accountId?: string) => Promise<IpcResult<WeixinBotStatus>>;
@@ -777,6 +781,7 @@ declare global {
     disconnectWeixinBot: (accountId?: string) => Promise<IpcResult<WeixinBotStatus>>;
     setActiveWeixinBotAccount: (accountId: string) => Promise<IpcResult<WeixinBotStatus>>;
     sendWeixinBotMessage: (payload: {
+      accountId?: string;
       conversationId: string;
       text: string;
     }) => Promise<IpcResult<WeixinBotMessage>>;

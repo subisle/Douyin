@@ -11,6 +11,9 @@ release/
 .env
 .env.local
 .env.*.local
+.env.bak*
+.env.*.bak
+.env.rk3318.example
 
 # IDE
 .idea/
@@ -52,6 +55,12 @@ ios/**/DerivedData/
 backups/
 .codex-temp/
 /live-room-watcher/
+
+# Local agent/runtime state
+/data/runtime/
+/data/local-bench/
+/data/backups/
+/data/rag/custom.json
 
 # Poster PSD sources and generated diagnostics
 assets/fonts/

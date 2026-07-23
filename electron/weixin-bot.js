@@ -7,8 +7,15 @@ const {
   CDN_BASE_URL,
   buildMediaItem,
   downloadInboundMedia,
+  normalizeCdnBaseUrl,
   uploadMediaBuffer,
 } = require("./weixin-bot-media");
+const { createSessionQueues } = require("./weixin-bot-mode");
+const {
+  acquireRunnerLock,
+  renewRunnerLock,
+  releaseRunnerLock,
+} = require("./weixin-bot-runner-lock");
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const CHANNEL_VERSION = "1.0.2";
@@ -20,26 +27,29 @@ const LONG_POLL_TIMEOUT_MS = 38_000;
 const HISTORY_LIMIT = 200;
 const SEEN_MESSAGE_LIMIT = 500;
 const SESSION_EXPIRED_CODE = -14;
+const RUNNER_LEASE_TTL_MS = 120_000;
+const TRUSTED_ILINK_API_HOSTS = new Set([
+  "ilinkai.weixin.qq.com",
+  "edge.weixin.qq.com",
+]);
 
-const DEFAULT_AI_BASE_URL = "http://162.243.93.40:8317/v1";
-const DEFAULT_AI_MODEL = "grok-4.5";
-const DEFAULT_AI_API_KEY = "sk-mWuYs8rhs1v9t9dd11d3333ddVsW";
+const DEFAULT_AI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_AI_MODEL = "gpt-4o-mini";
 const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
-  "162.243.93.40",
 ]);
 
 const DEFAULT_SETTINGS = Object.freeze({
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "open", // open | allowlist
+  accessMode: "allowlist", // allowlist | open (explicit per-account opt-in)
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
   ai: {
-    enabled: true,
+    enabled: false,
     baseUrl: DEFAULT_AI_BASE_URL,
     model: DEFAULT_AI_MODEL,
     timeoutMs: 45_000,
@@ -60,6 +70,10 @@ function normalizeAiBaseUrl(value, fallback = DEFAULT_AI_BASE_URL) {
     throw new Error("AI 接口仅允许 HTTPS，或已放行的 HTTP 主机");
   }
   return url.toString().replace(/\/$/, "");
+}
+
+function environmentAiApiKey(env = process.env) {
+  return String(env.AI_API_KEY || env.OPENAI_API_KEY || "").trim();
 }
 
 function compactError(error) {
@@ -98,8 +112,11 @@ function sleep(ms, signal) {
 function normalizeBaseUrl(value) {
   const url = new URL(String(value || DEFAULT_BASE_URL));
   if (url.protocol !== "https:") throw new Error("微信接口地址必须使用 HTTPS");
-  if (url.hostname !== "ilinkai.weixin.qq.com" && !url.hostname.endsWith(".weixin.qq.com")) {
+  if (!TRUSTED_ILINK_API_HOSTS.has(url.hostname)) {
     throw new Error("微信接口返回了非受信任地址");
+  }
+  if (url.port || url.username || url.password || url.search || url.hash) {
+    throw new Error("微信接口地址包含不受支持的端口、凭据或参数");
   }
   return url.toString().replace(/\/$/, "");
 }
@@ -113,6 +130,10 @@ function messageTimestamp(value) {
   const millis = Number(value);
   const date = Number.isFinite(millis) && millis > 0 ? new Date(millis) : new Date();
   return date.toISOString();
+}
+
+function accountScopedKey(accountId, value) {
+  return JSON.stringify([String(accountId || "").trim(), String(value || "").trim()]);
 }
 
 function extractMessagePreview(message) {
@@ -169,6 +190,16 @@ function uniqueIds(values) {
   return out;
 }
 
+function normalizeAccessPolicy(input = {}, fallback = DEFAULT_SETTINGS) {
+  return {
+    accessMode: input.accessMode === "open" || input.accessMode === "allowlist"
+      ? input.accessMode
+      : (fallback.accessMode === "open" ? "open" : "allowlist"),
+    allowUserIds: uniqueIds(input.allowUserIds ?? fallback.allowUserIds),
+    allowGroupIds: uniqueIds(input.allowGroupIds ?? fallback.allowGroupIds),
+  };
+}
+
 function normalizeCustomCommands(values) {
   const list = Array.isArray(values) ? values : [];
   const out = [];
@@ -202,9 +233,32 @@ class WeixinBotService extends EventEmitter {
     this.storagePath = options.storagePath;
     this.encryptToken = options.encryptToken;
     this.decryptToken = options.decryptToken;
-    this.cdnBaseUrl = String(options.cdnBaseUrl || CDN_BASE_URL).replace(/\/$/, "");
+    this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl || CDN_BASE_URL);
     this.commandHandler = null;
     this.agentHandler = null;
+    this.modeStore = null;
+    this.sessionQueues = createSessionQueues();
+    const runnerLock = options.runnerLock || {};
+    this.runnerLockApi = {
+      acquire: runnerLock.acquire || acquireRunnerLock,
+      renew: runnerLock.renew || renewRunnerLock,
+      release: runnerLock.release || releaseRunnerLock,
+    };
+    this.runner = String(options.runner || process.env.BOT_RUNNER || "desktop").trim() || "desktop";
+    this.runnerOwnerId = String(options.runnerOwnerId || "").trim() || undefined;
+    this.runnerLockFile = String(options.runnerLockFile || "").trim() || undefined;
+    this.runnerLeaseTtlMs = Math.max(10, Number(options.runnerLeaseTtlMs) || RUNNER_LEASE_TTL_MS);
+    this.runnerHeartbeatMs = Math.max(
+      5,
+      Number(options.runnerHeartbeatMs) || Math.floor(this.runnerLeaseTtlMs / 3)
+    );
+    this.runnerLease = null;
+    this.runnerHeartbeat = null;
+    this.runnerLeaseLost = false;
+    this.outboundControllers = new Set();
+    this.outboundOperations = new Map();
+    this.runnerWorkControllers = new Set();
+    this.runnerWorkOperations = new Map();
     this.encryptedAiKey = "";
     this.knownContacts = new Map();
     this.generateQrDataUrl = options.generateQrDataUrl || ((content) => QRCode.toDataURL(content, {
@@ -234,6 +288,8 @@ class WeixinBotService extends EventEmitter {
    *   sentCount: number,
    * }>} */
     this.accounts = new Map();
+    this.accountPolicies = new Map();
+    this.defaultAccessPolicy = normalizeAccessPolicy();
     this.activeAccountId = null;
     this.settings = { ...DEFAULT_SETTINGS };
     this.messages = [];
@@ -300,8 +356,14 @@ class WeixinBotService extends EventEmitter {
 
   _getAccount(accountId) {
     const id = String(accountId || "").trim();
-    if (id && this.accounts.has(id)) return this.accounts.get(id);
+    if (id) return this.accounts.get(id) || null;
     return this._getActiveAccount();
+  }
+
+  _getAccessPolicy(accountId) {
+    const id = String(accountId || "").trim();
+    const policy = id ? this.accountPolicies.get(id) : null;
+    return normalizeAccessPolicy(policy || this.defaultAccessPolicy);
   }
 
   _listAccountsPublic() {
@@ -414,6 +476,11 @@ class WeixinBotService extends EventEmitter {
       throw new Error("微信机器人命令处理器必须是函数");
     }
     this.commandHandler = handler;
+    if (handler?.modeStore) this.modeStore = handler.modeStore;
+  }
+
+  setModeStore(store) {
+    this.modeStore = store || null;
   }
 
   setAgentHandler(handler) {
@@ -432,22 +499,27 @@ class WeixinBotService extends EventEmitter {
     this.contexts.clear();
     this.seenMessageIds.clear();
     this.seenMessageOrder = [];
-    this._setStatus({
+    for (const account of this.accounts.values()) {
+      account.receivedCount = 0;
+      account.sentCount = 0;
+    }
+    this._refreshAggregateStatus({
       lastMessageAt: null,
-      receivedCount: 0,
-      sentCount: 0,
     });
     this.emit("messages-cleared");
     return { cleared: true };
   }
 
-  getSettings() {
+  getSettings(accountId) {
+    const targetAccountId = String(accountId || this._getActiveAccount()?.accountId || "").trim();
+    const policy = this._getAccessPolicy(targetAccountId);
     return {
+      accountId: targetAccountId || null,
       autoReplyEnabled: Boolean(this.settings.autoReplyEnabled),
       autoReplyText: String(this.settings.autoReplyText || ""),
-      accessMode: this.settings.accessMode === "allowlist" ? "allowlist" : "open",
-      allowUserIds: [...(this.settings.allowUserIds || [])],
-      allowGroupIds: [...(this.settings.allowGroupIds || [])],
+      accessMode: policy.accessMode,
+      allowUserIds: [...policy.allowUserIds],
+      allowGroupIds: [...policy.allowGroupIds],
       customCommands: (this.settings.customCommands || []).map((item) => ({ ...item })),
       ai: {
         enabled: Boolean(this.settings.ai?.enabled),
@@ -455,16 +527,24 @@ class WeixinBotService extends EventEmitter {
         model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
         timeoutMs: Number(this.settings.ai?.timeoutMs) || 45_000,
         maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
-        hasApiKey: Boolean(this.encryptedAiKey || DEFAULT_AI_API_KEY),
+        hasApiKey: Boolean(this.encryptedAiKey || environmentAiApiKey()),
       },
-      contacts: this.getContacts(),
+      contacts: this.getContacts().filter((item) => !targetAccountId || item.accountId === targetAccountId),
     };
   }
 
   getContacts() {
     return [...this.knownContacts.values()]
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
-      .map((item) => ({ ...item }));
+      .map((item) => {
+        const policy = this._getAccessPolicy(item.accountId);
+        return {
+          ...item,
+          allowed: item.kind === "group"
+            ? policy.allowGroupIds.includes(item.id)
+            : policy.allowUserIds.includes(item.id),
+        };
+      });
   }
 
   getAiRuntimeConfig() {
@@ -476,7 +556,7 @@ class WeixinBotService extends EventEmitter {
         apiKey = "";
       }
     }
-    if (!apiKey) apiKey = DEFAULT_AI_API_KEY;
+    if (!apiKey) apiKey = environmentAiApiKey();
     return {
       enabled: Boolean(this.settings.ai?.enabled),
       baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
@@ -492,11 +572,13 @@ class WeixinBotService extends EventEmitter {
     const autoReplyEnabled = Boolean(input.autoReplyEnabled ?? this.settings.autoReplyEnabled);
     if (autoReplyEnabled && !autoReplyText) throw new Error("请填写自动回复内容");
 
-    const accessMode = String(input.accessMode ?? this.settings.accessMode ?? "open") === "allowlist"
-      ? "allowlist"
-      : "open";
-    const allowUserIds = uniqueIds(input.allowUserIds ?? this.settings.allowUserIds);
-    const allowGroupIds = uniqueIds(input.allowGroupIds ?? this.settings.allowGroupIds);
+    const targetAccountId = String(input.accountId || this._getActiveAccount()?.accountId || "").trim();
+    const currentPolicy = this._getAccessPolicy(targetAccountId);
+    const accessMode = String(input.accessMode ?? currentPolicy.accessMode) === "open"
+      ? "open"
+      : "allowlist";
+    const allowUserIds = uniqueIds(input.allowUserIds ?? currentPolicy.allowUserIds);
+    const allowGroupIds = uniqueIds(input.allowGroupIds ?? currentPolicy.allowGroupIds);
     const customCommands = normalizeCustomCommands(input.customCommands ?? this.settings.customCommands);
 
     const prevAi = this.settings.ai || {};
@@ -521,25 +603,29 @@ class WeixinBotService extends EventEmitter {
         this.encryptedAiKey = encrypted;
       } else if (nextAiInput.clearApiKey) {
         this.encryptedAiKey = "";
-        // 清空自定义 Key 后回退内置密钥，仍可继续启用
       }
     }
-    // 内置密钥可用，允许无自定义 Key 时启用
-    if (ai.enabled && !this.encryptedAiKey && !DEFAULT_AI_API_KEY) {
+    if (ai.enabled && !this.encryptedAiKey && !environmentAiApiKey()) {
       throw new Error("启用 AI 前请先填写 API Key");
     }
 
+    const nextPolicy = { accessMode, allowUserIds, allowGroupIds };
+    if (targetAccountId && this.accounts.has(targetAccountId)) {
+      this.accountPolicies.set(targetAccountId, nextPolicy);
+    } else {
+      this.defaultAccessPolicy = nextPolicy;
+    }
     this.settings = {
       autoReplyEnabled,
       autoReplyText,
-      accessMode,
-      allowUserIds,
-      allowGroupIds,
+      accessMode: this.defaultAccessPolicy.accessMode,
+      allowUserIds: this.defaultAccessPolicy.allowUserIds,
+      allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
       customCommands,
       ai,
     };
     this._writeStore();
-    return this.getSettings();
+    return this.getSettings(targetAccountId);
   }
 
   async startLogin() {
@@ -713,6 +799,9 @@ class WeixinBotService extends EventEmitter {
       receivedCount: existing?.receivedCount || 0,
       sentCount: existing?.sentCount || 0,
     });
+    if (!this.accountPolicies.has(accountId)) {
+      this.accountPolicies.set(accountId, normalizeAccessPolicy(this.defaultAccessPolicy));
+    }
     this.activeAccountId = accountId;
     this._writeStore();
     this.loginSession = null;
@@ -733,17 +822,221 @@ class WeixinBotService extends EventEmitter {
     await this.startMonitoring(accountId);
   }
 
+  _runnerLeaseCallOptions(lease = this.runnerLease) {
+    return {
+      runner: this.runner,
+      ttlMs: this.runnerLeaseTtlMs,
+      file: lease?.file || this.runnerLockFile,
+      ownerId: lease?.ownerId || this.runnerOwnerId,
+    };
+  }
+
+  _acquireRunnerLease() {
+    if (this.runnerLease) return;
+    let lock;
+    try {
+      lock = this.runnerLockApi.acquire(this._runnerLeaseCallOptions(null));
+    } catch (error) {
+      const wrapped = new Error(`微信 Runner 锁获取失败：${compactError(error)}`);
+      wrapped.code = "BOT_RUNNER_LOCKED";
+      throw wrapped;
+    }
+    if (!lock?.ok) {
+      const error = new Error(lock?.error || "微信 Runner 锁获取失败");
+      error.code = "BOT_RUNNER_LOCKED";
+      throw error;
+    }
+    this.runnerLease = {
+      file: lock.file || this.runnerLockFile,
+      ownerId: lock.lease?.ownerId || this.runnerOwnerId,
+    };
+    this.runnerLeaseLost = false;
+    this._startRunnerHeartbeat();
+  }
+
+  _startRunnerHeartbeat() {
+    if (this.runnerHeartbeat) clearInterval(this.runnerHeartbeat);
+    this.runnerHeartbeat = setInterval(() => {
+      if (!this.runnerLease) return;
+      let renewed;
+      try {
+        renewed = this.runnerLockApi.renew(this._runnerLeaseCallOptions());
+      } catch (error) {
+        this._handleRunnerLeaseFailure(compactError(error));
+        return;
+      }
+      if (!renewed?.ok) {
+        this._handleRunnerLeaseFailure(renewed?.error || "微信 Runner 租约续期失败");
+      }
+    }, this.runnerHeartbeatMs);
+    this.runnerHeartbeat.unref?.();
+  }
+
+  _stopRunnerHeartbeat() {
+    if (this.runnerHeartbeat) clearInterval(this.runnerHeartbeat);
+    this.runnerHeartbeat = null;
+  }
+
+  _handleRunnerLeaseFailure(reason) {
+    if (!this.runnerLease) return;
+    const error = `微信 Runner 租约失效：${String(reason || "续期失败")}`;
+    this._stopRunnerHeartbeat();
+    this.runnerLeaseLost = true;
+    this.runnerLease = null;
+    for (const controller of this.outboundControllers) controller.abort();
+    for (const controller of this.runnerWorkControllers) controller.abort();
+    for (const account of this.accounts.values()) {
+      if (!account.monitorPromise && !account.monitorController) continue;
+      account.phase = "error";
+      account.error = error;
+      account.monitorController?.abort();
+    }
+    this._refreshAggregateStatus({
+      phase: "error",
+      monitoring: false,
+      statusText: "Runner 租约失效，机器人已停止",
+      error,
+    });
+  }
+
+  _beginOutboundOperation(accountId, runnerWork = null) {
+    if (runnerWork) this._assertRunnerWork(runnerWork);
+    if (this.runnerLeaseLost || !this.runnerLease) {
+      throw new Error("微信 Runner 租约已失效，已阻止发送");
+    }
+    const operation = {
+      controller: new AbortController(),
+      accountId: String(accountId || runnerWork?.accountId || "").trim(),
+      lease: runnerWork?.lease || this.runnerLease,
+    };
+    if (operation.lease !== this.runnerLease) {
+      throw new Error("微信 Runner 租约已失效，已阻止发送");
+    }
+    this.outboundControllers.add(operation.controller);
+    this.outboundOperations.set(operation.controller, operation);
+    return operation;
+  }
+
+  _assertOutboundOperation(operation) {
+    if (
+      operation.controller.signal.aborted
+      || this.runnerLeaseLost
+      || (operation.lease && this.runnerLease !== operation.lease)
+    ) {
+      throw new Error("微信 Runner 租约已失效，已阻止发送");
+    }
+  }
+
+  _finishOutboundOperation(operation) {
+    this.outboundControllers.delete(operation.controller);
+    this.outboundOperations.delete(operation.controller);
+  }
+
+  _beginRunnerWork(accountId) {
+    if (this.runnerLeaseLost) throw new Error("微信 Runner 租约已失效，已停止处理消息");
+    if (!this.runnerLease) this._acquireRunnerLease();
+    const operation = {
+      controller: new AbortController(),
+      accountId: String(accountId || "").trim(),
+      lease: this.runnerLease,
+    };
+    this.runnerWorkControllers.add(operation.controller);
+    this.runnerWorkOperations.set(operation.controller, operation);
+    return operation;
+  }
+
+  _assertRunnerWork(operation) {
+    if (
+      operation.controller.signal.aborted
+      || this.runnerLeaseLost
+      || (operation.lease && this.runnerLease !== operation.lease)
+    ) {
+      throw new Error("微信 Runner 租约已失效，已停止处理消息");
+    }
+  }
+
+  _finishRunnerWork(operation) {
+    this.runnerWorkControllers.delete(operation.controller);
+    this.runnerWorkOperations.delete(operation.controller);
+  }
+
+  _abortOperationsForAccounts(accountIds = null) {
+    const filter = accountIds && new Set([...accountIds].map((id) => String(id || "").trim()));
+    const matches = (operation) => !filter || filter.has(String(operation?.accountId || "").trim());
+    for (const [controller, operation] of this.outboundOperations.entries()) {
+      if (matches(operation)) controller.abort();
+    }
+    for (const [controller, operation] of this.runnerWorkOperations.entries()) {
+      if (matches(operation)) controller.abort();
+    }
+  }
+
+  _resetSessionQueuesForAccounts(accountIds) {
+    const ids = new Set([...accountIds].map((id) => String(id || "").trim()).filter(Boolean));
+    if (!ids.size || typeof this.sessionQueues?.reset !== "function") return;
+    this.sessionQueues.reset((key) => {
+      const match = /^account:([^:]+):/.exec(String(key || ""));
+      if (!match) return false;
+      try {
+        return ids.has(decodeURIComponent(match[1]));
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  _hasActiveOutboundOperation() {
+    return [...this.outboundOperations.values()].some((operation) => !operation.controller.signal.aborted);
+  }
+
+  _hasActiveRunnerWork() {
+    return [...this.runnerWorkOperations.values()].some((operation) => !operation.controller.signal.aborted);
+  }
+
+  _hasRunningMonitor() {
+    return [...this.accounts.values()].some((account) =>
+      Boolean(account.monitorPromise && !account.monitorController?.signal.aborted)
+    );
+  }
+
+  _releaseRunnerLeaseIfIdle({ force = false } = {}) {
+    if (
+      !force
+      && (
+        this._hasRunningMonitor()
+        || this._hasActiveOutboundOperation()
+        || this._hasActiveRunnerWork()
+      )
+    ) return;
+    if (force) this._abortOperationsForAccounts();
+    this._stopRunnerHeartbeat();
+    const lease = this.runnerLease;
+    this.runnerLease = null;
+    if (!lease) return;
+    try {
+      const released = this.runnerLockApi.release(this._runnerLeaseCallOptions(lease));
+      if (released?.ok === false) {
+        this._refreshAggregateStatus({ error: released.error || "微信 Runner 租约释放失败" });
+      }
+    } catch (error) {
+      this._refreshAggregateStatus({ error: `微信 Runner 租约释放失败：${compactError(error)}` });
+    }
+  }
+
   async startMonitoring(accountId) {
     const account = this._getAccount(accountId);
     if (!account?.credentials?.token) throw new Error("请先连接微信");
+
     if (account.monitorPromise) {
-      if (account.phase !== "session_expired") {
+      if (account.phase === "running") {
         this.activeAccountId = account.accountId;
         this._refreshAggregateStatus();
         return this.getStatus();
       }
       await this.stopMonitoring(account.accountId, { updateStatus: false });
     }
+
+    this._acquireRunnerLease();
 
     const controller = new AbortController();
     account.monitorController = controller;
@@ -765,6 +1058,7 @@ class WeixinBotService extends EventEmitter {
       account.monitorController = null;
       if (account.phase === "running") account.phase = "stopped";
       this._refreshAggregateStatus();
+      this._releaseRunnerLeaseIfIdle();
     };
     void task.then(clearMonitorTask, clearMonitorTask);
     return this.getStatus();
@@ -786,16 +1080,28 @@ class WeixinBotService extends EventEmitter {
     const targets = targetId
       ? [this._getAccount(targetId)].filter(Boolean)
       : [...this.accounts.values()];
+    const targetIds = new Set(targets.map((account) => account.accountId));
+    this._abortOperationsForAccounts(targetIds);
+    this._resetSessionQueuesForAccounts(targetIds);
     for (const account of targets) {
       const controller = account.monitorController;
       const task = account.monitorPromise;
       controller?.abort();
-      if (task) await task.catch(() => undefined);
+      // The handler may be user supplied and ignore AbortSignal. Mark the
+      // monitor stopped immediately; its work remains fenced by the aborted
+      // operation and cannot send after a replacement monitor acquires the
+      // shared lease.
+      if (account.monitorPromise === task) {
+        account.monitorPromise = null;
+        account.monitorController = null;
+      }
+      void task?.catch(() => undefined);
       if (options.updateStatus !== false) {
         account.phase = "stopped";
         account.error = null;
       }
     }
+    this._releaseRunnerLeaseIfIdle();
     if (options.updateStatus !== false) this._refreshAggregateStatus({ error: null });
     return this.getStatus();
   }
@@ -808,6 +1114,10 @@ class WeixinBotService extends EventEmitter {
       if (account) {
         await this.stopMonitoring(targetId, { updateStatus: false });
         this.accounts.delete(targetId);
+        this.accountPolicies.delete(targetId);
+        for (const [key, context] of this.contexts.entries()) {
+          if (context.accountId === targetId) this.contexts.delete(key);
+        }
         if (this.activeAccountId === targetId) {
           this.activeAccountId = this.accounts.keys().next().value || null;
         }
@@ -815,9 +1125,10 @@ class WeixinBotService extends EventEmitter {
     } else {
       await this.stopMonitoring(null, { updateStatus: false });
       this.accounts.clear();
+      this.accountPolicies.clear();
       this.activeAccountId = null;
     }
-    this.contexts.clear();
+    if (!targetId) this.contexts.clear();
     this._writeStore();
     this._refreshAggregateStatus({
       qrDataUrl: null,
@@ -837,7 +1148,9 @@ class WeixinBotService extends EventEmitter {
 
   async shutdown() {
     await this.cancelLogin({ updateStatus: false });
+    this._abortOperationsForAccounts();
     await this.stopMonitoring(null, { updateStatus: false });
+    this._releaseRunnerLeaseIfIdle({ force: true });
   }
 
   async _monitorLoop(account, signal) {
@@ -882,7 +1195,10 @@ class WeixinBotService extends EventEmitter {
 
         for (const message of Array.isArray(response.msgs) ? response.msgs : []) {
           await this._handleInboundMessage(message, account);
+          if (signal.aborted) return;
         }
+
+        if (signal.aborted) return;
 
         const nextBuf = String(response.get_updates_buf || "");
         if (nextBuf && nextBuf !== account.updatesBuf) {
@@ -923,8 +1239,15 @@ class WeixinBotService extends EventEmitter {
     const fromUserId = String(rawMessage.from_user_id || "").trim();
     if (!fromUserId) return;
 
-    const owner = account || this._getActiveAccount();
-    if (owner) this.activeAccountId = owner.accountId;
+    const requestedAccountId = String(account?.accountId || "").trim();
+    const owner = requestedAccountId
+      ? this.accounts.get(requestedAccountId)
+      : this._getActiveAccount();
+    if (!owner?.credentials?.token) return;
+    const accountId = owner.accountId;
+    const work = this._beginRunnerWork(accountId);
+
+    try {
 
     const groupId = String(rawMessage.group_id || "").trim();
     const conversationId = groupId || fromUserId;
@@ -934,15 +1257,17 @@ class WeixinBotService extends EventEmitter {
       .createHash("sha1")
       .update(`${conversationId}|${rawMessage.create_time_ms || ""}|${JSON.stringify(rawMessage.item_list || [])}`)
       .digest("hex");
-    const id = `in-${rawId || fallbackId}`;
-    if (this._hasSeenMessage(id)) return;
+    const id = `in-${accountId}-${rawId || fallbackId}`;
+    if (this._hasSeenMessage(accountId, id)) return;
 
+    const context = { accountId, contextToken, toUserId: fromUserId, groupId };
     if (contextToken) {
-      this.contexts.set(conversationId, { contextToken, toUserId: fromUserId, groupId });
+      this.contexts.set(accountScopedKey(accountId, conversationId), context);
     }
     const preview = extractMessagePreview(rawMessage);
     this._addMessage({
       id,
+      accountId,
       direction: "inbound",
       conversationId,
       userId: fromUserId,
@@ -954,6 +1279,7 @@ class WeixinBotService extends EventEmitter {
     });
 
     this._rememberContact({
+      accountId,
       id: fromUserId,
       kind: "user",
       conversationId,
@@ -963,6 +1289,7 @@ class WeixinBotService extends EventEmitter {
     });
     if (groupId) {
       this._rememberContact({
+        accountId,
         id: groupId,
         kind: "group",
         conversationId: groupId,
@@ -972,11 +1299,35 @@ class WeixinBotService extends EventEmitter {
       });
     }
 
-    const context = { contextToken, toUserId: fromUserId, groupId };
-    if (!this._isSenderAllowed(fromUserId, groupId)) {
+    if (!this._isSenderAllowed(accountId, fromUserId, groupId)) {
       if (contextToken) {
         try {
-          await this._sendTextWithContext(conversationId, "当前账号无权限使用机器人，请联系管理员开通。", context);
+          await this._sendTextWithContext(
+            conversationId,
+            "当前账号无权限使用机器人，请联系管理员开通。",
+            context,
+            owner,
+            { runnerWork: work }
+          );
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
+    const containsFile = (Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [])
+      .some((item) => Number(item?.type) === 4);
+    if (containsFile && !this._isSenderAllowedToWrite(accountId, fromUserId)) {
+      if (contextToken) {
+        try {
+          await this._sendTextWithContext(
+            conversationId,
+            "当前账号没有文件导入权限，请联系管理员将你的用户 ID 加入允许名单。",
+            context,
+            owner,
+            { runnerWork: work }
+          );
         } catch {
           // ignore
         }
@@ -987,71 +1338,130 @@ class WeixinBotService extends EventEmitter {
     let commandHandled = false;
     const inboundText = extractMessageText(rawMessage);
     const replyApi = {
+      accountId,
       text: inboundText,
       items: Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [],
       rawMessage,
       conversationId,
       fromUserId,
       groupId: groupId || null,
-      settings: this.getSettings(),
-      replyText: (text) => this._sendTextWithContext(conversationId, String(text).slice(0, 4000), context),
-      replyImage: (input) => this._sendMediaWithContext(
-        conversationId,
-        { ...input, mediaKind: "image" },
-        context
-      ),
-      replyFile: (input) => this._sendMediaWithContext(
-        conversationId,
-        { ...input, mediaKind: "file" },
-        context
-      ),
+      settings: this.getSettings(accountId),
+      signal: work.controller.signal,
+      assertLease: () => this._assertRunnerWork(work),
+      replyText: (text) => {
+        this._assertRunnerWork(work);
+        return this._sendTextWithContext(
+          conversationId,
+          String(text).slice(0, 4000),
+          context,
+          owner,
+          { runnerWork: work }
+        );
+      },
+      replyImage: (input) => {
+        this._assertRunnerWork(work);
+        return this._sendMediaWithContext(
+          conversationId,
+          { ...input, mediaKind: "image" },
+          context,
+          owner,
+          { runnerWork: work }
+        );
+      },
+      replyFile: (input) => {
+        this._assertRunnerWork(work);
+        return this._sendMediaWithContext(
+          conversationId,
+          { ...input, mediaKind: "file" },
+          context,
+          owner,
+          { runnerWork: work }
+        );
+      },
       downloadMedia: (requestedItem) => {
+        this._assertRunnerWork(work);
         const mediaItem = requestedItem || (Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [])
           .find((item) => [2, 3, 4, 5].includes(Number(item?.type)));
         return downloadInboundMedia({
           fetchImpl: this.fetchImpl,
           item: mediaItem,
           cdnBaseUrl: this.cdnBaseUrl,
+          signal: work.controller.signal,
         });
       },
     };
 
-    if (this.commandHandler && contextToken) {
-      try {
-        const result = await this.commandHandler(replyApi);
-        commandHandled = Boolean(result?.handled);
-      } catch (error) {
-        commandHandled = true;
-        const message = `命令执行失败：${compactError(error)}`;
+    if (!contextToken) return;
+
+    const modeKey = this.modeStore?.key?.(replyApi) || conversationId;
+    const queueKey = `account:${encodeURIComponent(accountId)}:${modeKey}`;
+    await this.sessionQueues.runSerial(queueKey, async () => {
+      this._assertRunnerWork(work);
+      if (this.commandHandler) {
         try {
-          await this._sendTextWithContext(conversationId, message, context);
-        } catch (sendError) {
-          this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
+          const result = await this.commandHandler(replyApi);
+          this._assertRunnerWork(work);
+          commandHandled = Boolean(result?.handled);
+        } catch (error) {
+          if (work.controller.signal.aborted || this.runnerLeaseLost) throw error;
+          commandHandled = true;
+          const message = `命令执行失败：${compactError(error)}`;
+          try {
+            await this._sendTextWithContext(
+              conversationId,
+              message,
+              context,
+              owner,
+              { runnerWork: work }
+            );
+          } catch (sendError) {
+            this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
+          }
         }
       }
-    }
 
-    if (!commandHandled && this.agentHandler && contextToken) {
-      try {
-        const result = await this.agentHandler(replyApi);
-        commandHandled = Boolean(result?.handled);
-      } catch (error) {
-        commandHandled = true;
-        const message = `AI 处理失败：${compactError(error)}`;
+      if (!commandHandled && this.agentHandler) {
         try {
-          await this._sendTextWithContext(conversationId, message, context);
-        } catch (sendError) {
-          this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
+          this._assertRunnerWork(work);
+          const result = await this.agentHandler(replyApi);
+          this._assertRunnerWork(work);
+          commandHandled = Boolean(result?.handled);
+        } catch (error) {
+          if (work.controller.signal.aborted || this.runnerLeaseLost) throw error;
+          commandHandled = true;
+          const message = `AI 处理失败：${compactError(error)}`;
+          try {
+            await this._sendTextWithContext(
+              conversationId,
+              message,
+              context,
+              owner,
+              { runnerWork: work }
+            );
+          } catch (sendError) {
+            this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
+          }
         }
       }
-    }
 
-    if (!commandHandled && this.settings.autoReplyEnabled && this.settings.autoReplyText && contextToken) {
-      try {
-        await this._sendTextWithContext(conversationId, this.settings.autoReplyText, context);
-      } catch (error) {
-        this._setStatus({ error: `自动回复失败: ${compactError(error)}` });
+      if (!commandHandled && this.settings.autoReplyEnabled && this.settings.autoReplyText) {
+        try {
+          this._assertRunnerWork(work);
+          await this._sendTextWithContext(
+            conversationId,
+            this.settings.autoReplyText,
+            context,
+            owner,
+            { runnerWork: work }
+          );
+        } catch (error) {
+          this._setStatus({ error: `自动回复失败: ${compactError(error)}` });
+        }
       }
+    });
+    } finally {
+      this._finishRunnerWork(work);
+      this._releaseRunnerLeaseIfIdle();
     }
   }
 
@@ -1061,13 +1471,35 @@ class WeixinBotService extends EventEmitter {
     if (!conversationId) throw new Error("请选择一个微信会话");
     if (!text) throw new Error("消息内容为空");
     if (text.length > 4000) throw new Error("单条消息最多 4000 个字符");
-    const context = this.contexts.get(conversationId);
+    const requestedAccountId = String(input.accountId || "").trim();
+    const account = requestedAccountId
+      ? this.accounts.get(requestedAccountId)
+      : this._getActiveAccount();
+    if (!account?.credentials?.token) throw new Error("微信尚未连接");
+    const context = this.contexts.get(accountScopedKey(account.accountId, conversationId));
     if (!context?.contextToken) throw new Error("当前会话缺少上下文，请等待对方发送新消息");
-    return this._sendTextWithContext(conversationId, text, context);
+    if (!this.runnerLease) this._acquireRunnerLease();
+    try {
+      return await this._sendTextWithContext(conversationId, text, context, account);
+    } finally {
+      this._releaseRunnerLeaseIfIdle();
+    }
   }
 
-  async _sendTextWithContext(conversationId, text, context) {
-    if (!this.credentials?.token) throw new Error("微信尚未连接");
+  _accountForContext(context, account) {
+    const accountId = String(account?.accountId || context?.accountId || "").trim();
+    if (!accountId || (context?.accountId && context.accountId !== accountId)) {
+      throw new Error("微信会话与账号不匹配");
+    }
+    const owner = this.accounts.get(accountId);
+    if (!owner?.credentials?.token) throw new Error("微信尚未连接");
+    return owner;
+  }
+
+  async _sendTextWithContext(conversationId, text, context, account, options = {}) {
+    const owner = this._accountForContext(context, account);
+    const accountId = owner.accountId;
+    const credentials = { ...owner.credentials };
     const clientId = `douyin-${crypto.randomUUID()}`;
     const msg = {
       from_user_id: "",
@@ -1079,17 +1511,20 @@ class WeixinBotService extends EventEmitter {
       item_list: [{ type: 1, text_item: { text } }],
       ...(context.groupId ? { group_id: context.groupId } : {}),
     };
+    const operation = this._beginOutboundOperation(accountId, options.runnerWork);
 
     try {
+      this._assertOutboundOperation(operation);
       const response = await this._postJson(
-        this.credentials.baseUrl,
+        credentials.baseUrl,
         "ilink/bot/sendmessage",
         { msg },
-        { token: this.credentials.token, timeoutMs: API_TIMEOUT_MS }
+        { token: credentials.token, timeoutMs: API_TIMEOUT_MS, signal: operation.controller.signal }
       );
+      this._assertOutboundOperation(operation);
       const code = Number(response?.errcode ?? response?.ret ?? 0);
       if (code === SESSION_EXPIRED_CODE) {
-        this._markSessionExpired();
+        this._markSessionExpired(accountId);
         throw new Error("微信登录已过期，请重新扫码连接");
       }
       if (code !== 0) {
@@ -1098,6 +1533,7 @@ class WeixinBotService extends EventEmitter {
 
       const sent = {
         id: clientId,
+        accountId,
         direction: "outbound",
         conversationId,
         userId: context.toUserId,
@@ -1111,10 +1547,11 @@ class WeixinBotService extends EventEmitter {
       return { ...sent };
     } catch (error) {
       if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
-        this._markSessionExpired();
+        this._markSessionExpired(accountId);
       }
       const failed = {
         id: clientId,
+        accountId,
         direction: "outbound",
         conversationId,
         userId: context.toUserId,
@@ -1125,20 +1562,29 @@ class WeixinBotService extends EventEmitter {
         status: "failed",
       };
       this._addMessage(failed);
+      if (operation.controller.signal.aborted || this.runnerLeaseLost) {
+        throw new Error("微信 Runner 租约已失效，已阻止发送");
+      }
       throw error;
+    } finally {
+      this._finishOutboundOperation(operation);
     }
   }
 
-  async _sendMediaWithContext(conversationId, input, context) {
-    if (!this.credentials?.token) throw new Error("微信尚未连接");
+  async _sendMediaWithContext(conversationId, input, context, account, options = {}) {
+    const owner = this._accountForContext(context, account);
+    const accountId = owner.accountId;
+    const credentials = { ...owner.credentials };
     const mediaKind = input.mediaKind === "image" ? "image" : "file";
     const buffer = Buffer.isBuffer(input.buffer) ? input.buffer : Buffer.from(input.buffer || []);
     if (!buffer.length) throw new Error("待发送媒体内容为空");
     const fileName = String(input.fileName || (mediaKind === "image" ? "report.png" : "data.csv"));
     const clientId = `douyin-${crypto.randomUUID()}`;
     const content = mediaKind === "image" ? `[图片] ${fileName}` : `[文件] ${fileName}`;
+    const operation = this._beginOutboundOperation(accountId, options.runnerWork);
 
     try {
+      this._assertOutboundOperation(operation);
       const uploaded = await uploadMediaBuffer({
         fetchImpl: this.fetchImpl,
         buffer,
@@ -1146,16 +1592,19 @@ class WeixinBotService extends EventEmitter {
         mediaKind,
         toUserId: context.toUserId,
         cdnBaseUrl: this.cdnBaseUrl,
+        signal: operation.controller.signal,
         getUploadUrl: async (payload) => {
+          this._assertOutboundOperation(operation);
           const response = await this._postJson(
-            this.credentials.baseUrl,
+            credentials.baseUrl,
             "ilink/bot/getuploadurl",
             payload,
-            { token: this.credentials.token, timeoutMs: API_TIMEOUT_MS }
+            { token: credentials.token, timeoutMs: API_TIMEOUT_MS, signal: operation.controller.signal }
           );
+          this._assertOutboundOperation(operation);
           const code = Number(response?.errcode ?? response?.ret ?? 0);
           if (code === SESSION_EXPIRED_CODE) {
-            this._markSessionExpired();
+            this._markSessionExpired(accountId);
             throw new Error("微信登录已过期，请重新扫码连接");
           }
           if (code !== 0) {
@@ -1164,6 +1613,7 @@ class WeixinBotService extends EventEmitter {
           return response;
         },
       });
+      this._assertOutboundOperation(operation);
       const item = buildMediaItem(mediaKind, uploaded);
       const msg = {
         from_user_id: "",
@@ -1176,14 +1626,15 @@ class WeixinBotService extends EventEmitter {
         ...(context.groupId ? { group_id: context.groupId } : {}),
       };
       const response = await this._postJson(
-        this.credentials.baseUrl,
+        credentials.baseUrl,
         "ilink/bot/sendmessage",
         { msg },
-        { token: this.credentials.token, timeoutMs: API_TIMEOUT_MS }
+        { token: credentials.token, timeoutMs: API_TIMEOUT_MS, signal: operation.controller.signal }
       );
+      this._assertOutboundOperation(operation);
       const code = Number(response?.errcode ?? response?.ret ?? 0);
       if (code === SESSION_EXPIRED_CODE) {
-        this._markSessionExpired();
+        this._markSessionExpired(accountId);
         throw new Error("微信登录已过期，请重新扫码连接");
       }
       if (code !== 0) {
@@ -1192,6 +1643,7 @@ class WeixinBotService extends EventEmitter {
 
       const sent = {
         id: clientId,
+        accountId,
         direction: "outbound",
         conversationId,
         userId: context.toUserId,
@@ -1205,10 +1657,11 @@ class WeixinBotService extends EventEmitter {
       return { ...sent };
     } catch (error) {
       if (/微信接口 HTTP (401|403)/.test(String(error?.message || ""))) {
-        this._markSessionExpired();
+        this._markSessionExpired(accountId);
       }
       const failed = {
         id: clientId,
+        accountId,
         direction: "outbound",
         conversationId,
         userId: context.toUserId,
@@ -1219,17 +1672,24 @@ class WeixinBotService extends EventEmitter {
         status: "failed",
       };
       this._addMessage(failed);
+      if (operation.controller.signal.aborted || this.runnerLeaseLost) {
+        throw new Error("微信 Runner 租约已失效，已阻止发送");
+      }
       throw error;
+    } finally {
+      this._finishOutboundOperation(operation);
     }
   }
 
   _addMessage(message) {
-    this._rememberMessage(message.id);
-    this.messages.push(message);
+    const accountId = String(message?.accountId || "").trim();
+    if (!accountId) throw new Error("微信消息缺少账号标识");
+    this._rememberMessage(accountId, message.id);
+    this.messages.push({ ...message, accountId });
     if (this.messages.length > HISTORY_LIMIT) this.messages.splice(0, this.messages.length - HISTORY_LIMIT);
     const inbound = message.direction === "inbound";
     const delivered = message.direction === "outbound" && message.status === "sent";
-    const account = this._getActiveAccount();
+    const account = this.accounts.get(accountId);
     if (account) {
       if (inbound) account.receivedCount += 1;
       if (delivered) account.sentCount += 1;
@@ -1237,27 +1697,37 @@ class WeixinBotService extends EventEmitter {
     this._refreshAggregateStatus({
       lastMessageAt: message.createdAt,
     });
-    this.emit("message", { ...message });
+    this.emit("message", { ...message, accountId });
   }
 
-  _hasSeenMessage(id) {
-    return this.seenMessageIds.has(id);
+  _hasSeenMessage(accountId, id) {
+    return this.seenMessageIds.has(accountScopedKey(accountId, id));
   }
 
-  _isSenderAllowed(userId, groupId) {
-    if (this.settings.accessMode !== "allowlist") return true;
+  _isSenderAllowed(accountId, userId, groupId) {
+    const policy = this._getAccessPolicy(accountId);
+    if (policy.accessMode !== "allowlist") return true;
     const uid = String(userId || "").trim();
     const gid = String(groupId || "").trim();
-    if (gid && (this.settings.allowGroupIds || []).includes(gid)) return true;
-    if (uid && (this.settings.allowUserIds || []).includes(uid)) return true;
+    if (gid && policy.allowGroupIds.includes(gid)) return true;
+    if (uid && policy.allowUserIds.includes(uid)) return true;
     return false;
   }
 
+  _isSenderAllowedToWrite(accountId, userId) {
+    const uid = String(userId || "").trim();
+    return Boolean(uid && this._getAccessPolicy(accountId).allowUserIds.includes(uid));
+  }
+
   _rememberContact(contact) {
+    const accountId = String(contact?.accountId || "").trim();
     const id = String(contact?.id || "").trim();
-    if (!id) return;
-    const prev = this.knownContacts.get(id) || {};
-    this.knownContacts.set(id, {
+    if (!accountId || !id) return;
+    const key = accountScopedKey(accountId, id);
+    const prev = this.knownContacts.get(key) || {};
+    const policy = this._getAccessPolicy(accountId);
+    this.knownContacts.set(key, {
+      accountId,
       id,
       kind: contact.kind === "group" ? "group" : "user",
       conversationId: String(contact.conversationId || prev.conversationId || id),
@@ -1265,8 +1735,8 @@ class WeixinBotService extends EventEmitter {
       lastContent: String(contact.lastContent || prev.lastContent || "").slice(0, 200),
       lastSeenAt: String(contact.lastSeenAt || prev.lastSeenAt || new Date().toISOString()),
       allowed: contact.kind === "group"
-        ? (this.settings.allowGroupIds || []).includes(id)
-        : (this.settings.allowUserIds || []).includes(id),
+        ? policy.allowGroupIds.includes(id)
+        : policy.allowUserIds.includes(id),
     });
     // Keep map bounded
     if (this.knownContacts.size > 300) {
@@ -1281,10 +1751,11 @@ class WeixinBotService extends EventEmitter {
     this._writeStore();
   }
 
-  _rememberMessage(id) {
-    if (this.seenMessageIds.has(id)) return;
-    this.seenMessageIds.add(id);
-    this.seenMessageOrder.push(id);
+  _rememberMessage(accountId, id) {
+    const key = accountScopedKey(accountId, id);
+    if (this.seenMessageIds.has(key)) return;
+    this.seenMessageIds.add(key);
+    this.seenMessageOrder.push(key);
     if (this.seenMessageOrder.length <= SEEN_MESSAGE_LIMIT) return;
     const expired = this.seenMessageOrder.shift();
     if (expired) this.seenMessageIds.delete(expired);
@@ -1338,6 +1809,7 @@ class WeixinBotService extends EventEmitter {
         headers: options.headers,
         body: options.body,
         signal: controller.signal,
+        redirect: "manual",
       });
       const text = await response.text();
       if (!response.ok) {
@@ -1362,47 +1834,67 @@ class WeixinBotService extends EventEmitter {
     const file = this.storagePath();
     if (!fs.existsSync(file)) return;
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (parsed?.version !== 1 && parsed?.version !== 2 && parsed?.version !== 3) {
+    if (![1, 2, 3, 4].includes(parsed?.version)) {
       throw new Error("微信机器人存储版本不受支持");
     }
 
     const ai = parsed.settings?.ai || {};
+    this.accountPolicies = new Map();
+    if (parsed.version === 4) {
+      this.defaultAccessPolicy = normalizeAccessPolicy(parsed.defaultAccessPolicy);
+      for (const [accountId, policy] of Object.entries(parsed.accountPolicies || {})) {
+        const id = String(accountId || "").trim();
+        if (id) this.accountPolicies.set(id, normalizeAccessPolicy(policy));
+      }
+    } else {
+      // Legacy stores had one global policy and defaulted to open. Migrate the
+      // old allowlist only to the active account; every other account starts closed.
+      this.defaultAccessPolicy = normalizeAccessPolicy();
+      const legacyAccountId = String(
+        parsed.activeAccountId
+          || parsed.credentials?.accountId
+          || parsed.accounts?.[0]?.accountId
+          || ""
+      ).trim();
+      if (legacyAccountId) {
+        this.accountPolicies.set(legacyAccountId, normalizeAccessPolicy({
+          accessMode: "allowlist",
+          allowUserIds: parsed.settings?.allowUserIds,
+          allowGroupIds: parsed.settings?.allowGroupIds,
+        }));
+      }
+    }
     this.settings = {
       autoReplyEnabled: Boolean(parsed.settings?.autoReplyEnabled),
       autoReplyText: String(parsed.settings?.autoReplyText ?? DEFAULT_SETTINGS.autoReplyText).slice(0, 1000),
-      accessMode: parsed.settings?.accessMode === "allowlist" ? "allowlist" : "open",
-      allowUserIds: uniqueIds(parsed.settings?.allowUserIds),
-      allowGroupIds: uniqueIds(parsed.settings?.allowGroupIds),
+      accessMode: this.defaultAccessPolicy.accessMode,
+      allowUserIds: this.defaultAccessPolicy.allowUserIds,
+      allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
       customCommands: normalizeCustomCommands(parsed.settings?.customCommands),
       ai: {
-        // 旧配置若未写 enabled，默认开启内置 AI
-        enabled: ai.enabled === undefined ? true : Boolean(ai.enabled),
+        enabled: ai.enabled === undefined ? false : Boolean(ai.enabled),
         baseUrl: String(ai.baseUrl || DEFAULT_AI_BASE_URL),
         model: String(ai.model || DEFAULT_AI_MODEL),
         timeoutMs: Number(ai.timeoutMs) || 45_000,
         maxToolRounds: Number(ai.maxToolRounds) || 4,
       },
     };
-    // 迁移旧 OpenAI 默认
-    if (
-      this.settings.ai.baseUrl === "https://api.openai.com/v1"
-      || this.settings.ai.model === "gpt-4o-mini"
-    ) {
-      this.settings.ai.baseUrl = DEFAULT_AI_BASE_URL;
-      this.settings.ai.model = DEFAULT_AI_MODEL;
-      this.settings.ai.enabled = true;
-    }
     try {
       this.settings.ai.baseUrl = normalizeAiBaseUrl(this.settings.ai.baseUrl);
     } catch {
       this.settings.ai.baseUrl = DEFAULT_AI_BASE_URL;
+      this.settings.ai.enabled = false;
     }
     this.encryptedAiKey = String(parsed.encryptedAiKey || "");
     this.knownContacts = new Map();
     for (const item of Array.isArray(parsed.contacts) ? parsed.contacts : []) {
       const id = String(item?.id || "").trim();
       if (!id) continue;
-      this.knownContacts.set(id, {
+      const accountId = String(
+        item?.accountId || parsed.activeAccountId || parsed.credentials?.accountId || "legacy"
+      ).trim();
+      this.knownContacts.set(accountScopedKey(accountId, id), {
+        accountId,
         id,
         kind: item.kind === "group" ? "group" : "user",
         conversationId: String(item.conversationId || id),
@@ -1410,8 +1902,8 @@ class WeixinBotService extends EventEmitter {
         lastContent: String(item.lastContent || "").slice(0, 200),
         lastSeenAt: String(item.lastSeenAt || ""),
         allowed: item.kind === "group"
-          ? this.settings.allowGroupIds.includes(id)
-          : this.settings.allowUserIds.includes(id),
+          ? this._getAccessPolicy(accountId).allowGroupIds.includes(id)
+          : this._getAccessPolicy(accountId).allowUserIds.includes(id),
       });
     }
 
@@ -1449,6 +1941,9 @@ class WeixinBotService extends EventEmitter {
         receivedCount: 0,
         sentCount: 0,
       });
+      if (!this.accountPolicies.has(accountId)) {
+        this.accountPolicies.set(accountId, normalizeAccessPolicy(this.defaultAccessPolicy));
+      }
     }
     this.activeAccountId = String(parsed.activeAccountId || "") || this.accounts.keys().next().value || null;
   }
@@ -1465,13 +1960,13 @@ class WeixinBotService extends EventEmitter {
     }));
     const active = this._getActiveAccount();
     const data = {
-      version: 3,
+      version: 4,
       settings: {
         autoReplyEnabled: this.settings.autoReplyEnabled,
         autoReplyText: this.settings.autoReplyText,
-        accessMode: this.settings.accessMode,
-        allowUserIds: this.settings.allowUserIds,
-        allowGroupIds: this.settings.allowGroupIds,
+        accessMode: this.defaultAccessPolicy.accessMode,
+        allowUserIds: this.defaultAccessPolicy.allowUserIds,
+        allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
         customCommands: this.settings.customCommands,
         ai: {
           enabled: Boolean(this.settings.ai?.enabled),
@@ -1481,6 +1976,13 @@ class WeixinBotService extends EventEmitter {
           maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
         },
       },
+      defaultAccessPolicy: this.defaultAccessPolicy,
+      accountPolicies: Object.fromEntries(
+        [...this.accountPolicies.entries()].map(([accountId, policy]) => [
+          accountId,
+          normalizeAccessPolicy(policy),
+        ])
+      ),
       encryptedAiKey: this.encryptedAiKey || "",
       contacts: this.getContacts(),
       activeAccountId: this.activeAccountId,
@@ -1521,10 +2023,10 @@ class WeixinBotService extends EventEmitter {
       account.phase = "session_expired";
       account.error = "请重新扫码连接";
       account.monitorController?.abort();
-      account.monitorPromise = null;
-      account.monitorController = null;
     }
     this._refreshAggregateStatus({
+      phase: "session_expired",
+      monitoring: false,
       statusText: "微信登录已过期",
       error: "请重新扫码连接",
     });

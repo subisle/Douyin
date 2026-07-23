@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 const SESSION_COOKIE = "douyin_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
@@ -18,7 +18,7 @@ function sha256(input: string) {
 }
 
 function sign(payload: string) {
-  return sha256(`${payload}.${secret()}`);
+  return createHmac("sha256", secret()).update(payload).digest("hex");
 }
 
 function safeEqual(a: string, b: string) {

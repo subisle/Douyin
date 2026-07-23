@@ -9,8 +9,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint src electron next.config.ts",
-    "test:db-config": "node --test electron/db-config.test.js",
+    "check:release-baseline": "node scripts/check-release-baseline.mjs",
+    "test": "npm run test:db-config && npm run test:auth && npm run test:imports && npm run test:migrations && npm run test:bot-worker && npm run test:weixin-bot",
+    "test:db-config": "node --test electron/db-config.test.js electron/runtime-env.test.js",
+    "test:auth": "node --test src/server/api/login-rate-limit.test.mjs src/server/api/csrf-origin.test.mjs",
+    "test:imports": "node --test electron/db-import.test.js",
+    "test:migrations": "node --test scripts/migration-runner.test.js",
+    "test:bot-worker": "node --test scripts/bot-worker.test.js",
     "test:weixin-bot": "node --test electron/weixin-bot*.test.js",
+    "db:migrate": "node scripts/migrate.js up",
+    "db:migrate:status": "node scripts/migrate.js status",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "cross-env ELECTRON=true next build",
@@ -18,7 +26,10 @@
     "dist:mac": "npm run electron:build && electron-builder --mac",
     "dist:win": "npm run electron:build && electron-builder --win --x64",
     "poster:sync": "node scripts/sync-poster-from-psd.mjs",
-    "poster:sync:meta": "node scripts/sync-poster-from-psd.mjs --skip-images"
+    "poster:sync:meta": "node scripts/sync-poster-from-psd.mjs --skip-images",
+    "bot:worker": "node scripts/bot-worker.js",
+    "storage:bench": "node scripts/bench-local-storage.mjs",
+    "storage:doctor": "node scripts/storage-doctor.mjs"
   },
   "build": {
     "appId": "com.subisle.douyin",
@@ -30,7 +41,13 @@
     "artifactName": "douyin-data-manager-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**/*",
+      "!electron/**/*.test.js",
+      "!electron/**/*-test.js",
+      "!electron/dist/**/*",
       "assets/**/*",
+      "!assets/fonts/**/*",
+      "!assets/posters/**/*",
+      "data/rag/bot_help.json",
       "out/**/*",
       "package.json"
     ],
@@ -77,7 +94,7 @@
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.513.0",
     "mysql2": "^3.22.5",
-    "next": "^15.3.4",
+    "next": "^15.5.21",
     "papaparse": "^5.5.3",
     "protobufjs": "^8.6.6",
     "qrcode": "^1.5.4",
@@ -85,7 +102,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "3.8.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "tailwind-merge": "^3.3.1",
     "ws": "^8.21.0"
   },
@@ -108,6 +125,9 @@
     "wait-on": "^9.0.10"
   },
   "overrides": {
-    "postcss": "8.5.15"
+    "postcss": "8.5.15",
+    "js-yaml": "^4.3.0",
+    "sharp": "$sharp",
+    "shell-quote": "^1.10.0"
   }
 }

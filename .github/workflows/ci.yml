@@ -35,8 +35,11 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Test built-in database config
-        run: npm run test:db-config
+      - name: Verify tracked release baseline
+        run: npm run check:release-baseline
+
+      - name: Test
+        run: npm test
 
       - name: Build
         run: npm run build

@@ -66,7 +66,6 @@ function normalizeImportMeta(meta) {
 
 async function assertImportNotRecorded(db, kind, importDate, meta) {
   if (!meta) return;
-  await ensureImportRecordsTable(db);
   const [rows] = await db.query(
     `SELECT file_hash, data_hash, file_name, created_at
        FROM import_records
@@ -82,13 +81,81 @@ async function assertImportNotRecorded(db, kind, importDate, meta) {
 
 async function recordImport(db, kind, importDate, meta) {
   if (!meta) return;
-  await ensureImportRecordsTable(db);
   await db.query(
-    `INSERT IGNORE INTO import_records
+    `INSERT INTO import_records
        (kind, import_date, file_hash, data_hash, file_name, row_count)
      VALUES (?, ?, ?, ?, ?, ?)`,
     [kind, importDate, meta.fileHash, meta.dataHash, meta.fileName, meta.rowCount]
   );
+}
+
+async function importSnapshotRows(db, kind, importDate, rows, meta) {
+  if (!Array.isArray(rows) || rows.length === 0) return { inserted: 0 };
+
+  let values;
+  let upsertSql;
+  if (kind === "wave") {
+    values = rows
+      .map((row) => {
+        const anchorId = String(row.anchorId ?? "").trim();
+        const waveValue = Number(row.waveValue);
+        if (!anchorId || !Number.isFinite(waveValue)) return null;
+        return [
+          anchorId,
+          importDate,
+          Math.round(waveValue) || 0,
+          Math.round(Number(row.rank)) || 0,
+        ];
+      })
+      .filter(Boolean);
+    upsertSql = `INSERT INTO wave_snapshots (anchor_id, import_date, wave_value, \`rank\`)
+     VALUES ?
+     ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`;
+  } else if (kind === "duration") {
+    values = rows
+      .map((row) => {
+        const anchorId = String(row.anchorId ?? "").trim();
+        const totalMinutes = Number(row.totalMinutes);
+        if (!anchorId || !Number.isFinite(totalMinutes)) return null;
+        return [anchorId, importDate, Math.round(totalMinutes) || 0];
+      })
+      .filter(Boolean);
+    upsertSql = `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
+     VALUES ?
+     ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`;
+  } else {
+    throw new Error(`不支持的快照导入类型: ${kind}`);
+  }
+
+  if (values.length === 0) return { inserted: 0 };
+
+  const importMeta = normalizeImportMeta(meta);
+  // DDL 会隐式提交 MySQL 事务，因此必须在获取事务连接前完成。
+  if (importMeta) await ensureImportRecordsTable(db);
+
+  const conn = await db.getConnection();
+  let transactionStarted = false;
+  try {
+    await conn.beginTransaction();
+    transactionStarted = true;
+    await assertImportNotRecorded(conn, kind, importDate, importMeta);
+    const [result] = await conn.query(upsertSql, [values]);
+    await recordImport(conn, kind, importDate, importMeta);
+    await conn.commit();
+    transactionStarted = false;
+    return { inserted: result.affectedRows };
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await conn.rollback();
+      } catch (rollbackError) {
+        if (error && typeof error === "object") error.rollbackError = rollbackError;
+      }
+    }
+    throw error;
+  } finally {
+    conn.release();
+  }
 }
 
 /**
@@ -676,32 +743,7 @@ async function getWaveTrendByGender() {
  * rows: [{ anchorId, waveValue, rank }]
  */
 async function importWaveSnapshots(importDate, rows, meta) {
-  if (!rows || rows.length === 0) return { inserted: 0 };
-  const db = getPool();
-  const importMeta = normalizeImportMeta(meta);
-  await assertImportNotRecorded(db, "wave", importDate, importMeta);
-  const values = rows
-    .map((r) => {
-      const anchorId = String(r.anchorId ?? "").trim();
-      const waveValue = Number(r.waveValue);
-      if (!anchorId || !Number.isFinite(waveValue)) return null;
-      return [
-        anchorId,
-        importDate,
-        Math.round(waveValue) || 0,
-        Math.round(Number(r.rank)) || 0,
-      ];
-    })
-    .filter(Boolean);
-  if (values.length === 0) return { inserted: 0 };
-  const [res] = await db.query(
-    `INSERT INTO wave_snapshots (anchor_id, import_date, wave_value, \`rank\`)
-     VALUES ?
-     ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`,
-    [values]
-  );
-  await recordImport(db, "wave", importDate, importMeta);
-  return { inserted: res.affectedRows };
+  return importSnapshotRows(getPool(), "wave", importDate, rows, meta);
 }
 
 /**
@@ -709,31 +751,7 @@ async function importWaveSnapshots(importDate, rows, meta) {
  * rows: [{ anchorId, totalMinutes }]
  */
 async function importDurationSnapshots(importDate, rows, meta) {
-  if (!rows || rows.length === 0) return { inserted: 0 };
-  const db = getPool();
-  const importMeta = normalizeImportMeta(meta);
-  await assertImportNotRecorded(db, "duration", importDate, importMeta);
-  const values = rows
-    .map((r) => {
-      const anchorId = String(r.anchorId ?? "").trim();
-      const totalMinutes = Number(r.totalMinutes);
-      if (!anchorId || !Number.isFinite(totalMinutes)) return null;
-      return [
-        anchorId,
-        importDate,
-        Math.round(totalMinutes) || 0,
-      ];
-    })
-    .filter(Boolean);
-  if (values.length === 0) return { inserted: 0 };
-  const [res] = await db.query(
-    `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
-     VALUES ?
-     ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`,
-    [values]
-  );
-  await recordImport(db, "duration", importDate, importMeta);
-  return { inserted: res.affectedRows };
+  return importSnapshotRows(getPool(), "duration", importDate, rows, meta);
 }
 
 async function getImportPreview(kind, importDate, anchorIds, meta) {
@@ -2722,4 +2740,5 @@ module.exports = {
   getRewardReport,
   verifyAppPassword,
   hasAppPassword,
+  __testing: { importSnapshotRows },
 };

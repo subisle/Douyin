@@ -4,12 +4,17 @@
 > 日期：2026-07-06
 > 用途：网页服务器版、后续 iOS App、后续桌面端统一对接。
 
+> **【文档关系 · 2026-07-23】**
+> 本文定义 **数据 REST**（`/api/v1/**`）与兼容 `POST /api/ipc`。
+> Agent/Bot/RAG 接口（`/api/agent/**`、`/api/bot/**`、`/api/rag/**`）见 `docs/ai-agent-production-plan.md`，为 **增量扩展**，不取代本文数据路由。
+> 跨模块运行契约与实施顺序以 `docs/adr/0001-agent-runtime-contract.md` 为准。
+
 ## 1. 基础信息
 
 - Base URL：`https://your-domain.com/api/v1`
 - 本地开发：`http://localhost:3000/api/v1`
 - 数据库：服务端通过 `.env` 连接网站数据库，客户端不直连数据库。
-- 写接口保护：如果服务端配置了 `API_TOKENS` 或 `API_TOKEN`，所有 `POST` / `PUT` / `PATCH` / `DELETE` 请求必须携带 `Authorization: Bearer <token>` 或 `x-api-token: <token>`。
+- 访问控制：除 API 根信息与 `/health` 外，接口统一要求登录后的 HttpOnly 会话，或 `Authorization: Bearer <token>` / `x-api-token: <token>`；未配置可用认证凭据时保持拒绝访问。
 - 响应格式：
 
 ```ts

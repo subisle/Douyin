@@ -1,7 +1,7 @@
 "use strict";
 
-const DEFAULT_BASE_URL = "http://162.243.93.40:8317/v1";
-const DEFAULT_MODEL = "grok-4.5";
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const HARD_MAX_TOOL_ROUNDS = 6;
@@ -15,7 +15,6 @@ const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
-  "162.243.93.40",
 ]);
 
 const SYSTEM_PERSONA = [
@@ -70,10 +69,11 @@ function safeJsonParse(text) {
 }
 
 function threadKeyFromContext(context = {}) {
+  const accountId = String(context.accountId || "").trim() || "unknown";
   const groupId = String(context.groupId || "").trim();
   const userId = String(context.fromUserId || context.userId || "").trim();
-  if (groupId) return `g:${groupId}|u:${userId || "unknown"}`;
-  return `u:${userId || String(context.conversationId || "unknown")}`;
+  if (groupId) return `a:${accountId}|g:${groupId}|u:${userId || "unknown"}`;
+  return `a:${accountId}|u:${userId || String(context.conversationId || "unknown")}`;
 }
 
 class WeixinBotAgent {
@@ -81,6 +81,8 @@ class WeixinBotAgent {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
     this.skills = options.skills || null;
     this.getConfig = typeof options.getConfig === "function" ? options.getConfig : () => ({});
+    this.modeStore = options.modeStore || null;
+    this.fastRouteHandler = typeof options.fastRouteHandler === "function" ? options.fastRouteHandler : null;
     this.threads = new Map();
     this.sessions = new Map();
   }
@@ -104,6 +106,9 @@ class WeixinBotAgent {
   }
 
   enableSession(context = {}) {
+    if (this.modeStore && typeof this.modeStore.setMode === "function") {
+      this.modeStore.setMode(context, "agent");
+    }
     const key = threadKeyFromContext(context);
     this.sessions.set(key, { enabled: true, updatedAt: Date.now() });
     this._pruneSessions();
@@ -111,6 +116,9 @@ class WeixinBotAgent {
   }
 
   disableSession(context = {}) {
+    if (this.modeStore && typeof this.modeStore.setMode === "function") {
+      this.modeStore.setMode(context, "instruction");
+    }
     const key = threadKeyFromContext(context);
     this.sessions.delete(key);
     this.clearThread(key);
@@ -118,6 +126,9 @@ class WeixinBotAgent {
   }
 
   isSessionEnabled(context = {}) {
+    if (this.modeStore && typeof this.modeStore.isAgent === "function") {
+      return this.modeStore.isAgent(context);
+    }
     const key = threadKeyFromContext(context);
     const session = this.sessions.get(key);
     if (!session?.enabled) return false;
@@ -190,6 +201,15 @@ class WeixinBotAgent {
     const text = String(args.text || "").trim();
     if (!text) return { handled: false, reason: "empty" };
 
+    if (this.fastRouteHandler) {
+      try {
+        const fast = await this.fastRouteHandler(args);
+        if (fast?.handled) return fast;
+      } catch {
+        // FastRoute 失败时回退 LLM
+      }
+    }
+
     const config = this.getConfig() || {};
     const baseUrl = normalizeBaseUrl(config.baseUrl || DEFAULT_BASE_URL);
     const model = String(config.model || DEFAULT_MODEL).trim();
@@ -221,6 +241,7 @@ class WeixinBotAgent {
         timeoutMs,
         messages,
         tools: this.skills.definitions,
+        signal: args.signal,
       });
 
       const choice = response?.choices?.[0]?.message || {};
@@ -230,15 +251,20 @@ class WeixinBotAgent {
         break;
       }
 
+      const executableToolCalls = toolCallsList.slice(0, Math.min(3, Math.max(0, 8 - toolCalls)));
+      if (!executableToolCalls.length) {
+        finalText = "工具调用次数过多，已停止。请缩小问题范围后重试。";
+        break;
+      }
+
       messages.push({
         role: "assistant",
         content: choice.content || null,
-        tool_calls: toolCallsList,
+        tool_calls: executableToolCalls,
       });
 
-      for (const call of toolCallsList.slice(0, 3)) {
+      for (const call of executableToolCalls) {
         toolCalls += 1;
-        if (toolCalls > 8) break;
         const name = String(call?.function?.name || "").trim();
         const rawArgs = String(call?.function?.arguments || "{}");
         let parsedArgs = {};
@@ -253,7 +279,19 @@ class WeixinBotAgent {
         } catch (error) {
           observation = { ok: false, error: compactError(error) };
         }
-        if (observation?.artifact?.buffer) {
+        const multi = Array.isArray(observation?.artifacts)
+          ? observation.artifacts.filter((item) => item?.buffer)
+          : [];
+        if (multi.length) {
+          for (const item of multi) artifacts.push(item);
+          observation = {
+            ...observation,
+            artifacts: multi.map((item) => ({ kind: item.kind, fileName: item.fileName })),
+            artifact: multi[0]
+              ? { kind: multi[0].kind, fileName: multi[0].fileName }
+              : undefined,
+          };
+        } else if (observation?.artifact?.buffer) {
           artifacts.push(observation.artifact);
           observation = {
             ...observation,
@@ -268,10 +306,6 @@ class WeixinBotAgent {
           tool_call_id: call.id || `tool_${toolCalls}`,
           content: JSON.stringify(observation).slice(0, 6000),
         });
-      }
-      if (toolCalls > 8) {
-        finalText = "工具调用次数过多，已停止。请缩小问题范围后重试。";
-        break;
       }
     }
 
@@ -297,10 +331,17 @@ class WeixinBotAgent {
     return { handled: true, text: finalText, artifactCount: artifacts.length, toolCalls };
   }
 
-  async _chatCompletion({ baseUrl, apiKey, model, timeoutMs, messages, tools }) {
+  async _chatCompletion({ baseUrl, apiKey, model, timeoutMs, messages, tools, signal }) {
     if (typeof this.fetchImpl !== "function") throw new Error("当前环境缺少 fetch");
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    const onAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
       const response = await this.fetchImpl(`${baseUrl}/chat/completions`, {
         method: "POST",
@@ -323,10 +364,12 @@ class WeixinBotAgent {
       }
       return safeJsonParse(text);
     } catch (error) {
-      if (error?.name === "AbortError") throw new Error("AI 请求超时");
+      if (signal?.aborted) throw new Error("AI 请求已中止");
+      if (timedOut || error?.name === "AbortError") throw new Error("AI 请求超时");
       throw new Error(compactError(error));
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 }

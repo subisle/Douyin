@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 微信机器人
   getWeixinBotStatus: () => ipcRenderer.invoke("weixin-bot:status"),
   getWeixinBotMessages: () => ipcRenderer.invoke("weixin-bot:messages"),
-  getWeixinBotSettings: () => ipcRenderer.invoke("weixin-bot:settings"),
+  getWeixinBotSettings: (accountId) => ipcRenderer.invoke("weixin-bot:settings", accountId),
   startWeixinBotLogin: () => ipcRenderer.invoke("weixin-bot:login"),
   cancelWeixinBotLogin: () => ipcRenderer.invoke("weixin-bot:login-cancel"),
   startWeixinBot: (accountId) => ipcRenderer.invoke("weixin-bot:start", accountId),

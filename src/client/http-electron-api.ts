@@ -34,22 +34,17 @@ function apiBaseUrl() {
   return base.replace(/\/$/, "");
 }
 
-function apiToken() {
-  return process.env.NEXT_PUBLIC_API_TOKEN || "";
-}
-
 async function request<T>(
   path: string,
   options: { method?: HttpMethod; body?: unknown } = {}
 ): Promise<IpcResult<T>> {
   try {
-    const token = apiToken();
     const headers: Record<string, string> = {};
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
-    if (token) headers.Authorization = `Bearer ${token}`;
 
     const response = await fetch(`${apiBaseUrl()}/api/v1${path}`, {
       method: options.method ?? "GET",
+      credentials: "same-origin",
       headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
@@ -95,9 +90,10 @@ const WEB_WEIXIN_STATUS = {
 };
 
 const WEB_WEIXIN_SETTINGS = {
+  accountId: null,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "open" as const,
+  accessMode: "allowlist" as const,
   allowUserIds: [] as string[],
   allowGroupIds: [] as string[],
   customCommands: [] as [],

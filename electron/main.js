@@ -2,23 +2,26 @@ const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage } = require("e
 const fs = require("fs");
 const path = require("path");
 const { applyBuiltInDbEnv } = require("./db-config");
+const { loadRuntimeEnvironment } = require("./runtime-env");
 
 // 先加载环境变量，再加载 db，避免缺 DB_* 时过早失败
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
 const APP_ICON_PNG = path.join(__dirname, "..", "assets", "icon.png");
-for (const envPath of [
-  path.join(__dirname, "..", ".env.local"),
-  path.join(__dirname, "..", ".env"),
-  process.resourcesPath ? path.join(process.resourcesPath, ".env") : null,
-].filter(Boolean)) {
-  if (fs.existsSync(envPath)) {
-    require("dotenv").config({ path: envPath, quiet: true });
-  }
+const runtimeEnvPath = loadRuntimeEnvironment({
+  isPackaged: app.isPackaged,
+  projectDir: path.join(__dirname, ".."),
+  resourcesPath: process.resourcesPath,
+  userDataPath: app.getPath("userData"),
+  execPath: process.execPath,
+});
+if (app.isPackaged && !String(process.env.BOT_STORAGE_DIR || "").trim()) {
+  process.env.BOT_STORAGE_DIR = path.join(app.getPath("userData"), "runtime");
 }
 
 // 保证主进程后续加载的所有模块都能读到完整数据库配置。
 applyBuiltInDbEnv();
+if (runtimeEnvPath) console.log(`[config] loaded ${runtimeEnvPath}`);
 
 const db = require("./db");
 const { createUpdater } = require("./updater");
@@ -96,11 +99,17 @@ const weixinBotAgent = new WeixinBotAgent({
   skills: weixinBotSkills,
   getConfig: () => weixinBot.getAiRuntimeConfig(),
 });
-weixinBot.setCommandHandler(createWeixinCommandHandler({
+const weixinCommandHandler = createWeixinCommandHandler({
   db,
   renderReportPng: renderDailyReportPng,
   agent: weixinBotAgent,
-}));
+  analytics: weixinBotSkills.analytics,
+});
+weixinBotAgent.modeStore = weixinCommandHandler.modeStore;
+weixinBot.setCommandHandler(weixinCommandHandler);
+if (weixinCommandHandler.modeStore) {
+  weixinBot.setModeStore(weixinCommandHandler.modeStore);
+}
 weixinBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
@@ -661,6 +670,13 @@ function createWindow() {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
 
+  try {
+    const { logStorageReport } = require("./local-paths");
+    logStorageReport(process.env, console);
+  } catch (error) {
+    console.warn("[storage] doctor failed", error?.message || error);
+  }
+
   if (process.platform === "darwin" && app.dock) {
     app.dock.setIcon(APP_ICON_PNG);
   }
@@ -775,7 +791,7 @@ ipcMain.handle("live-pk:status", wrap(() => livePkWatcher.getStatus()));
 // 微信 iLink Bot IPC：令牌和消息上下文只在主进程内处理。
 ipcMain.handle("weixin-bot:status", wrap(() => weixinBot.getStatus()));
 ipcMain.handle("weixin-bot:messages", wrap(() => weixinBot.getMessages()));
-ipcMain.handle("weixin-bot:settings", wrap(() => weixinBot.getSettings()));
+ipcMain.handle("weixin-bot:settings", wrap((accountId) => weixinBot.getSettings(accountId)));
 ipcMain.handle("weixin-bot:login", wrap(() => weixinBot.startLogin()));
 ipcMain.handle("weixin-bot:login-cancel", wrap(() => weixinBot.cancelLogin()));
 ipcMain.handle("weixin-bot:start", wrap((accountId) => weixinBot.startMonitoring(accountId)));

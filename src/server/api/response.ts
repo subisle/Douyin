@@ -6,7 +6,9 @@ export type ApiErrorCode =
   | "MISSING_IDS"
   | "UNAUTHORIZED"
   | "FORBIDDEN"
+  | "PAYLOAD_TOO_LARGE"
   | "AUTH_NOT_CONFIGURED"
+  | "RATE_LIMITED"
   | "INTERNAL_ERROR";
 
 export function apiOk(data: unknown, status = 200) {

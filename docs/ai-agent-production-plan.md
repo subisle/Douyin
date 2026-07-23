@@ -59,7 +59,7 @@
 | 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` 有文件租约、owner、续租丢失退出和状态文件 | 未接 DB lease、iLink 长轮询、Inbox/Outbox、重连与凭据管理；这是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
-最新本地基线为 `npm test` **70/70 通过**（DB/运行环境 8、导入事务 6、迁移 10、Worker 3、微信/Agent 43），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
+最新本地基线为 `npm test` **104/104 通过**（DB/运行环境 8、登录限流/CSRF 8、导入事务 6、迁移 15、Worker 4、微信/Agent 63），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
 
 ### 2.1 当前已验证的产品规则
 
@@ -439,7 +439,7 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 | 9 | 未完成 | B4 通过后执行 B5 内部发布 | 黄金集、Web/微信 E2E、24 小时全链路观察和 5 分钟回滚演练通过，才标记生产可用 |
 | 10 | 后置 | 扩展全功能与可选抖音缓存 | 按 Read、Artifact、Confirmed Write、Collector 分批验收；B6 和多 Agent 均不得早于 B5 |
 
-当前自动化基线为 `npm test` **70/70 通过**，`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。该结果不代表真实 MySQL migration、真实 iLink Worker、72 小时灰度或生产恢复已经验收。
+当前自动化基线为 `npm test` **104/104 通过**，`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。该结果不代表真实 MySQL migration、真实 iLink Worker、72 小时灰度或生产恢复已经验收。
 
 ---
 

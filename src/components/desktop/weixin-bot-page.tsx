@@ -69,19 +69,20 @@ const EMPTY_STATUS: WeixinBotStatus = {
 };
 
 const DEFAULT_SETTINGS: WeixinBotSettings = {
+  accountId: null,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "open",
+  accessMode: "allowlist",
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
   ai: {
-    enabled: true,
-    baseUrl: "http://162.243.93.40:8317/v1",
-    model: "grok-4.5",
+    enabled: false,
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
     timeoutMs: 45_000,
     maxToolRounds: 4,
-    hasApiKey: true,
+    hasApiKey: false,
   },
   contacts: [],
 };
@@ -121,21 +122,24 @@ type BusyAction =
   | "login"
   | "cancel"
   | "start"
+  | "select"
   | "stop"
   | "disconnect"
   | "save"
   | "save-ai"
+  | "save-access"
   | "save-commands"
   | "save-reply";
 
-type ConfirmAction = "disconnect" | null;
+type ConfirmAction = { kind: "disconnect"; accountId: string } | null;
 
 function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBotSettings {
   const ai = input?.ai || DEFAULT_SETTINGS.ai;
   return {
+    accountId: input?.accountId ? String(input.accountId) : null,
     autoReplyEnabled: Boolean(input?.autoReplyEnabled),
     autoReplyText: String(input?.autoReplyText ?? DEFAULT_SETTINGS.autoReplyText),
-    accessMode: input?.accessMode === "allowlist" ? "allowlist" : "open",
+    accessMode: input?.accessMode === "open" ? "open" : "allowlist",
     allowUserIds: Array.isArray(input?.allowUserIds) ? input!.allowUserIds.map(String) : [],
     allowGroupIds: Array.isArray(input?.allowGroupIds) ? input!.allowGroupIds.map(String) : [],
     customCommands: Array.isArray(input?.customCommands)
@@ -159,6 +163,7 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
     },
     contacts: Array.isArray(input?.contacts)
       ? input!.contacts.map((item) => ({
+          accountId: String(item?.accountId || ""),
           id: String(item?.id || ""),
           kind: item?.kind === "group" ? "group" : "user",
           conversationId: String(item?.conversationId || item?.id || ""),
@@ -260,16 +265,23 @@ export function WeixinBotPage() {
 
   function handleDisconnect(accountId?: string) {
     if (!api) return;
-    if (confirmAction !== "disconnect") {
-      setConfirmAction("disconnect");
+    const targetAccountId = String(accountId || "");
+    if (
+      confirmAction?.kind !== "disconnect"
+      || confirmAction.accountId !== targetAccountId
+    ) {
+      setConfirmAction({ kind: "disconnect", accountId: targetAccountId });
       return;
     }
     void runStatusAction("disconnect", () => api.disconnectWeixinBot(accountId));
   }
 
-  function handleSelectAccount(accountId: string) {
+  async function handleSelectAccount(accountId: string) {
     if (!api) return;
-    void runStatusAction("start", () => api.setActiveWeixinBotAccount(accountId));
+    await runStatusAction("start", () => api.setActiveWeixinBotAccount(accountId));
+    const result = await api.getWeixinBotSettings();
+    if (result.success) setSettings(normalizeSettings(result.data));
+    else setFeedback(result.error);
   }
 
   async function saveSettingsPatch(
@@ -280,7 +292,10 @@ export function WeixinBotPage() {
     setBusyAction(action);
     setFeedback("");
     try {
-      const result = await api.saveWeixinBotSettings(patch);
+      const result = await api.saveWeixinBotSettings({
+        ...patch,
+        accountId: patch.accountId || status.accountId || undefined,
+      });
       if (result.success) {
         setSettings(normalizeSettings(result.data));
         if (action === "save-ai") setApiKeyDraft("");
@@ -298,6 +313,14 @@ export function WeixinBotPage() {
     await saveSettingsPatch("save-reply", {
       autoReplyEnabled: settings.autoReplyEnabled,
       autoReplyText: settings.autoReplyText,
+    });
+  }
+
+  async function handleSaveAccess() {
+    await saveSettingsPatch("save-access", {
+      accessMode: settings.accessMode,
+      allowUserIds: settings.allowUserIds,
+      allowGroupIds: settings.allowGroupIds,
     });
   }
 
@@ -428,14 +451,14 @@ export function WeixinBotPage() {
               />
             ) : null}
             {status.connected && (
-              confirmAction === "disconnect" ? (
+              confirmAction?.kind === "disconnect" ? (
                 <div className="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/8 px-2 py-1">
                   <span className="text-xs text-red-700 dark:text-red-300">确认断开当前/全部凭据？</span>
                   <Button
                     size="sm"
                     variant="destructive"
                     disabled={busyAction !== null}
-                    onClick={() => handleDisconnect(status.accountId || undefined)}
+                    onClick={() => handleDisconnect(confirmAction.accountId || undefined)}
                   >
                     {busyAction === "disconnect" ? <Loader2 className="size-3.5 animate-spin" /> : "确认"}
                   </Button>
@@ -498,6 +521,13 @@ export function WeixinBotPage() {
 
           <div className="flex min-h-[560px] flex-col gap-3">
             <CommandGuide />
+            <AccessControlPanel
+              accountId={status.accountId}
+              settings={settings}
+              busy={busyAction === "save-access"}
+              onChange={setSettings}
+              onSave={handleSaveAccess}
+            />
             <CustomCommandsPanel
               commands={settings.customCommands}
               busy={busyAction === "save-commands"}
@@ -620,7 +650,7 @@ function UserListPanel({
           ) : (
             contacts.map((contact) => (
               <div
-                key={contact.id}
+                key={`${contact.accountId}:${contact.id}`}
                 className="flex items-start gap-2 rounded-lg border border-transparent px-2.5 py-2 hover:border-border/70 hover:bg-muted/40"
               >
                 <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted/60">
@@ -650,7 +680,7 @@ function UserListPanel({
         </div>
       </div>
       <div className="border-t border-border/70 px-3 py-2 text-[10px] leading-4 text-muted-foreground">
-        账号与对接合并展示；权限右键稍后接入。
+        账号、对接与权限按当前微信账号统一管理。
       </div>
     </section>
   );
@@ -725,6 +755,104 @@ function CommandGuide() {
             <div className="truncate text-[10px] text-muted-foreground">{item.desc}</div>
           </div>
         ))}
+      </div>
+    </aside>
+  );
+}
+
+function AccessControlPanel({
+  accountId,
+  settings,
+  busy,
+  onChange,
+  onSave,
+}: {
+  accountId: string | null;
+  settings: WeixinBotSettings;
+  busy: boolean;
+  onChange: (settings: WeixinBotSettings) => void;
+  onSave: () => void;
+}) {
+  const setContactAllowed = (contact: WeixinBotContact, allowed: boolean) => {
+    const key = contact.kind === "group" ? "allowGroupIds" : "allowUserIds";
+    const current = settings[key];
+    const next = allowed
+      ? [...new Set([...current, contact.id])]
+      : current.filter((id) => id !== contact.id);
+    onChange({ ...settings, [key]: next });
+  };
+
+  return (
+    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
+      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+          <Settings2 className="size-3.5 text-[#07c160]" />
+          <span>账号权限</span>
+          <span className="truncate text-[10px] font-normal text-muted-foreground">
+            {accountId ? compactId(accountId) : "未选择"}
+          </span>
+        </div>
+        <IconAction
+          label="保存账号权限"
+          icon={busy ? Loader2 : Save}
+          loading={busy}
+          variant="ghost"
+          size="icon-sm"
+          onClick={onSave}
+          disabled={busy || !accountId}
+        />
+      </div>
+      <div className="space-y-2.5 p-2.5">
+        <div className="grid grid-cols-2 rounded-md border border-border/70 bg-muted/30 p-0.5">
+          {(["allowlist", "open"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={cn(
+                "h-7 rounded px-2 text-xs transition",
+                settings.accessMode === mode
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              onClick={() => onChange({ ...settings, accessMode: mode })}
+            >
+              {mode === "allowlist" ? "名单模式" : "开放读取"}
+            </button>
+          ))}
+        </div>
+        <div className="max-h-40 space-y-1 overflow-y-auto">
+          {settings.contacts.length === 0 ? (
+            <p className="px-1 py-2 text-[11px] text-muted-foreground">暂无对接用户或群聊</p>
+          ) : (
+            settings.contacts.map((contact) => {
+              const allowed = contact.kind === "group"
+                ? settings.allowGroupIds.includes(contact.id)
+                : settings.allowUserIds.includes(contact.id);
+              return (
+                <label
+                  key={`${contact.accountId}:${contact.id}`}
+                  className="flex cursor-pointer items-center gap-2 rounded-md border border-border/50 px-2 py-1.5 text-xs hover:bg-muted/40"
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowed}
+                    onChange={(event) => setContactAllowed(contact, event.target.checked)}
+                    className="size-3.5 accent-[#07c160]"
+                  />
+                  {contact.kind === "group" ? (
+                    <UsersRound className="size-3.5 text-muted-foreground" />
+                  ) : (
+                    <UserRound className="size-3.5 text-muted-foreground" />
+                  )}
+                  <span className="min-w-0 flex-1 truncate">{contactTitle(contact)}</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {contact.kind === "group" ? "读取" : "读取/导入"}
+                  </span>
+                </label>
+              );
+            })
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -883,7 +1011,7 @@ function AiSettingsPanel({
           onChange={(value) =>
             onSettingsChange({ ...settings, ai: { ...ai, baseUrl: value } })
           }
-          placeholder="http://162.243.93.40:8317/v1"
+          placeholder="https://api.openai.com/v1"
         />
         <Field
           label="模型"
@@ -891,7 +1019,7 @@ function AiSettingsPanel({
           onChange={(value) =>
             onSettingsChange({ ...settings, ai: { ...ai, model: value } })
           }
-          placeholder="grok-4.5"
+          placeholder="gpt-4o-mini"
         />
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -997,104 +1125,6 @@ function AutoReplySettings({
       <p className="text-[10px] leading-4 text-muted-foreground">
         仅在未识别为命令/AI/导入时触发。
       </p>
-    </div>
-  );
-}
-
-function ConnectionPanel({
-  status,
-  busyAction,
-  onLogin,
-  onCancel,
-}: {
-  status: WeixinBotStatus;
-  busyAction: BusyAction | null;
-  onLogin: () => void;
-  onCancel: () => void;
-}) {
-  const hasQr = Boolean(status.qrDataUrl);
-  const loginActive = ["connecting", "awaiting_scan", "scanned"].includes(status.phase);
-
-  return (
-    <section className="grid min-h-[590px] overflow-hidden rounded-lg border border-border/70 bg-card/70 md:grid-cols-[minmax(0,0.85fr)_minmax(360px,1.15fr)]">
-      <div className="flex flex-col justify-between border-b border-border/70 p-6 md:border-b-0 md:border-r">
-        <div className="space-y-4">
-          <div className="inline-flex items-center gap-2 rounded-full border border-[#07c160]/25 bg-[#07c160]/10 px-3 py-1 text-xs font-medium text-[#078b43] dark:text-[#48df8a]">
-            <Wifi className="size-3.5" />
-            iLink 机器人连接
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold">{hasQr ? "微信扫码连接" : "连接微信机器人"}</h3>
-            <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
-              扫码后凭据加密保存在本机。软件重启会自动恢复连接，无需重新绑定。
-            </p>
-          </div>
-          <div className="space-y-2 text-sm text-muted-foreground">
-            <ConnectionRow label="状态" value={status.statusText} />
-            <ConnectionRow label="账号" value={status.accountId || "-"} />
-            <ConnectionRow label="接口" value={status.baseUrl || "-"} />
-          </div>
-        </div>
-        <div className="mt-6 flex flex-wrap gap-2">
-          {loginActive ? (
-            <Button variant="outline" onClick={onCancel} disabled={busyAction !== null}>
-              {busyAction === "cancel" ? <Loader2 className="size-4 animate-spin" /> : null}
-              取消连接
-            </Button>
-          ) : (
-            <Button onClick={onLogin} disabled={!status.available || busyAction !== null}>
-              {busyAction === "login" ? <Loader2 className="size-4 animate-spin" /> : <QrCodeIcon />}
-              {status.available ? "扫码连接" : "桌面端不可用"}
-            </Button>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center justify-center bg-background/40 p-6">
-        {status.qrDataUrl ? (
-          <div className="space-y-3 text-center">
-            <div className="mx-auto overflow-hidden rounded-xl border border-border/70 bg-white p-3 shadow-sm">
-              <Image
-                src={status.qrDataUrl}
-                alt="微信登录二维码"
-                width={240}
-                height={240}
-                unoptimized
-                className="size-60"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground">
-              二维码有效至 {formatClock(status.qrExpiresAt)} · 使用微信扫一扫
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-3 text-muted-foreground">
-            <div className="flex size-20 items-center justify-center rounded-2xl border border-dashed border-border/80">
-              <QrCodeIcon className="size-8 opacity-60" />
-            </div>
-            <p className="max-w-xs text-center text-sm leading-6">
-              点击「扫码连接」生成二维码。连接成功后可管理对接列表、命令与 AI。
-            </p>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function QrCodeIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={cn("size-4", className)} fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3z" />
-      <path d="M14 14h3v3h-3zM20 14h1v1h-1zM17 17h1v1h-1zM20 20h1v1h-1zM14 20h3v1h-3z" />
-    </svg>
-  );
-}
-
-function ConnectionRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-start gap-3">
-      <span className="w-10 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-all text-xs text-foreground">{value}</span>
     </div>
   );
 }
