@@ -62,7 +62,7 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 
 过期认领与 unknown 处理（实验语义；**不得**据此标生产）：
 
-- **过期 `sending` 回收（即将支持 `reclaimExpiredClaims`）**：`claim_expires_at` 已过的 `sending` 行回收为 `retry_wait` 并清空 claim 字段，以便再次被 `claimBatch` 认领。HEAD 若尚未合入该方法，以计划实现为准；实现后应在 `claimBatch` 前或心跳中调用。
+- **过期 `sending` 回收（`reclaimExpiredClaims`）**：`claim_expires_at` 已过的 `sending` 行回收为 `retry_wait` 并清空 claim 字段；`claimBatch` 前与 worker dispatch 路径会调用，崩溃后可再次认领。
 - **`unknown` + `reconcile_status=pending`**：默认**不**自动重发。需人工或 API `resolveUnknown`（如标 `sent` / `dead_letter` / 显式允许 `retry`）后再继续；无完整 reconcile 控制面。
 
 可选：

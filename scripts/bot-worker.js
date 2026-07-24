@@ -520,6 +520,12 @@ function createBotWorker(options = {}) {
     }
     outboxDispatching = true;
     try {
+      if (typeof dbRuntime.outboxStore.reclaimExpiredClaims === "function") {
+        await dbRuntime.outboxStore.reclaimExpiredClaims({
+          workspaceId: dbRuntime.workspaceId,
+          accountId: dbAccountId,
+        });
+      }
       const claimed = await dbRuntime.outboxStore.claimBatch({
         workspaceId: dbRuntime.workspaceId,
         accountId: dbAccountId,
