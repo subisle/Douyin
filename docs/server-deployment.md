@@ -7,7 +7,29 @@
 > 本文为 Next/pm2/nginx **部署基线**。
 > 生产目标只使用微信 iLink 通道，服务端 Worker 是必选进程。专项架构、游标、幂等和验收见 `docs/ilink-server-agent-design.md`；实施门槛见 `docs/ai-agent-production-plan.md`。同一微信账号严禁由桌面 Electron 与服务器 Worker 同时运行。
 
-> 当前 `scripts/bot-worker.js` 仍是租约占位进程，尚未接入完整 iLink 长轮询和媒体收发。完成专项设计 P0-P3 前，不应把它标记为生产可用。
+> 当前 `scripts/bot-worker.js` 已可选接入**实验性 iLink 文本 transport**（长轮询 + 文本回执），但 **`persistence` 仍为 `not_connected`**，无 durable Inbox/Outbox/DB lease fencing，**不得标记为生产可用**。完整媒体收发与 P0–P3 仍见 `docs/ilink-server-agent-design.md`。
+
+### 实验性文本 transport（默认关闭）
+
+默认不启用，行为与旧「仅租约」Worker 一致。开发/应急联调可：
+
+```env
+BOT_ILINK_ENABLED=1
+BOT_ILINK_TOKEN=...                 # 明文 token；生产后续改加密库
+# 可选：
+# BOT_ILINK_BASE_URL=https://ilinkai.weixin.qq.com
+# BOT_ILINK_ACCOUNT_ID=...
+# BOT_ILINK_CURSOR=...
+# BOT_ILINK_CURSOR_PATH=/path/to/cursor.json
+# BOT_ILINK_ACK_TEXT=收到            # 空字符串=只收不发
+# BOT_ILINK_POLL_TIMEOUT_MS=35000
+```
+
+约束：
+
+- 状态文件字段 `transport` 与 `persistence` 分离；`persistence` 固定 `not_connected`，不表示消息已持久化。
+- **禁止**与桌面 Electron 同账号同时运行。
+- 仅文本；无图片/CSV/Agent/MySQL transport 表接线。
 
 ## 1. 目标
 
