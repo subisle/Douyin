@@ -7,7 +7,7 @@
 > 本文为 Next/pm2/nginx **部署基线**。
 > 生产目标只使用微信 iLink 通道，服务端 Worker 是必选进程。专项架构、游标、幂等和验收见 `docs/ilink-server-agent-design.md`；实施门槛见 `docs/ai-agent-production-plan.md`。同一微信账号严禁由桌面 Electron 与服务器 Worker 同时运行。
 
-> 当前 `scripts/bot-worker.js` 已可选接入**实验性 iLink 文本 transport**，并可选用 **MySQL 账号租约（fencing）+ 文本 Inbox/Cursor 同事务**。仍 **无 Outbox Dispatcher、无图片/CSV Artifact、无 Agent Core**，**不得标记为生产可用**。完整 P0–P3 见 `docs/ilink-server-agent-design.md`。
+> 当前 `scripts/bot-worker.js` 已可选接入**实验性 iLink 文本 transport**，并可选用 **MySQL 账号租约（fencing）+ 文本 Inbox/Cursor 同事务 + 实验性 Outbox 文本出站**。仍 **无完整 reconcile 控制面、无图片/CSV Artifact、无 Agent Core**，**不得标记为生产可用**。完整 P0–P3 见 `docs/ilink-server-agent-design.md`。
 
 ### 实验性文本 transport（默认关闭）
 
@@ -48,9 +48,9 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 
 约束：
 
-- `transport` 与 `persistence` 分离；`mysql` 只表示入站文本/游标可落库，**不**表示 Outbox/全链路生产就绪。
+- `transport` 与 `persistence` 分离；`mysql` 表示入站文本/游标可落库，并可随 DB 模式启用**实验性** Outbox 文本出站；**不**表示全链路生产就绪。
 - **禁止**与桌面 Electron 同账号同时运行。
-- 仅文本；无图片/CSV/Agent；无 Outbox 发送与 reconcile。
+- 仅文本；无图片/CSV/Agent；无完整 reconcile 控制面；无自动 unknown 重发。
 - 双 Worker 同 `workspace+account`：仅持有效 lease 的一方可 poll；丢租停 transport。
 ### 实验性 Outbox 文本出站（随 DB 模式）
 
@@ -58,7 +58,12 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 
 1. transport `sendOutbound` → `outbox_messages`（`prepared`，写时校验 fencing）
 2. Worker heartbeat / 立即 kick → `claimBatch` → iLink `sendMessage`
-3. 成功 `sent`；超时类 `unknown`；可重试错误 `retry_wait`
+3. 成功 `sent`；超时类 `unknown`（`reconcile_status=pending`）；可重试错误 `retry_wait`
+
+过期认领与 unknown 处理（实验语义；**不得**据此标生产）：
+
+- **过期 `sending` 回收（即将支持 `reclaimExpiredClaims`）**：`claim_expires_at` 已过的 `sending` 行回收为 `retry_wait` 并清空 claim 字段，以便再次被 `claimBatch` 认领。HEAD 若尚未合入该方法，以计划实现为准；实现后应在 `claimBatch` 前或心跳中调用。
+- **`unknown` + `reconcile_status=pending`**：默认**不**自动重发。需人工或 API `resolveUnknown`（如标 `sent` / `dead_letter` / 显式允许 `retry`）后再继续；无完整 reconcile 控制面。
 
 可选：
 
@@ -67,7 +72,7 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 # BOT_ILINK_OUTBOX_BATCH=10
 ```
 
-仍无图片/CSV Artifact、无完整 reconcile 控制面；**不得**标记生产可用。
+仍无图片/CSV Artifact、无完整 reconcile 控制面、无自动 unknown 重发；**不得**标记生产可用。
 
 ## 1. 目标
 
