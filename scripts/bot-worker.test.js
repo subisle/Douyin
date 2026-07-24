@@ -722,3 +722,205 @@ test("db acquisition failure records error and exits non-zero", async () => {
   assert.match(worker.getState().lastError, /lease occupied by other/);
   assert.deepEqual(exits, [1]);
 });
+
+
+test("db mode enqueues outbound via outbox and dispatches send", async () => {
+  const timers = createTimers();
+  const enqueued = [];
+  const claimedTokens = [];
+  const sentMarks = [];
+  const sendCalls = [];
+  let claimToken = "claim-1";
+  let prepared = null;
+
+  const worker = createBotWorker({
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      accountId: "acc",
+      ackText: "收到",
+    },
+    createTransport: (config, hooks) => {
+      assert.equal(typeof hooks?.sendOutbound, "function");
+      return {
+        async start() {
+          await hooks.sendOutbound({
+            toUserId: "user-a",
+            contextToken: "ctx-1",
+            groupId: "",
+            text: "收到",
+            clientId: "client-out-1",
+          });
+          return { phase: "polling" };
+        },
+        async stop() {
+          return { phase: "stopped" };
+        },
+        getState: () => ({
+          phase: "polling",
+          accountId: "acc",
+          updatesBuf: "",
+          lastPollAt: null,
+          lastInboundAt: null,
+          lastOutboundAt: null,
+          lastError: null,
+          receivedCount: 0,
+          sentCount: 1,
+        }),
+      };
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 42 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 3,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 3,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+      outboxStore: {
+        enqueueText: async (input) => {
+          enqueued.push(input);
+          prepared = {
+            id: 99,
+            clientId: input.clientId,
+            payload: {
+              toUserId: input.toUserId,
+              groupId: input.groupId || "",
+              contextToken: input.contextToken,
+              text: input.text,
+            },
+            fencingToken: input.fencingToken,
+            attemptCount: 1,
+            maxAttempts: 10,
+            claimToken,
+          };
+          return { ok: true, outboxId: 99 };
+        },
+        claimBatch: async (input) => {
+          claimedTokens.push(input);
+          if (!prepared) return { ok: true, rows: [] };
+          const row = { ...prepared };
+          prepared = null;
+          return { ok: true, rows: [row] };
+        },
+        markSent: async (input) => {
+          sentMarks.push(input);
+          return { ok: true };
+        },
+        markRetry: async () => ({ ok: true }),
+        markUnknown: async () => ({ ok: true }),
+        markFailedFencing: async () => ({ ok: true }),
+      },
+      sendMessage: async (options) => {
+        sendCalls.push(options);
+        return { errcode: 0, message_id: "up-1" };
+      },
+    },
+  });
+
+  await worker.start();
+  assert.equal(enqueued.length, 1);
+  assert.equal(enqueued[0].text, "收到");
+  assert.equal(enqueued[0].toUserId, "user-a");
+  assert.equal(enqueued[0].fencingToken, 3);
+  assert.equal(enqueued[0].accountId, 42);
+
+  // First dispatch runs at start; if race, fire heartbeat renew to re-kick.
+  await waitFor(() => sendCalls.length >= 1 || sentMarks.length >= 1, 1_000);
+  if (sendCalls.length === 0) {
+    timers.fire();
+    await waitFor(() => sendCalls.length >= 1, 1_000);
+  }
+  assert.equal(sendCalls.length, 1);
+  assert.equal(sendCalls[0].msg.to_user_id, "user-a");
+  assert.equal(sendCalls[0].msg.item_list[0].text_item.text, "收到");
+  await waitFor(() => sentMarks.length >= 1, 1_000);
+  assert.equal(sentMarks[0].outboxId, 99);
+  assert.equal(worker.getState().outboxSentCount, 1);
+
+  worker.stop();
+});
+
+test("db mode sendOutbound is provided in createTransport hooks", async () => {
+  let captured = null;
+  const worker = createBotWorker({
+    timers: createTimers(),
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    createTransport: (config, hooks) => {
+      captured = hooks;
+      return createIdleTransport();
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 1 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+      outboxStore: {
+        enqueueText: async () => ({ ok: true, outboxId: 1 }),
+        claimBatch: async () => ({ ok: true, rows: [] }),
+        markSent: async () => ({ ok: true }),
+        markRetry: async () => ({ ok: true }),
+        markUnknown: async () => ({ ok: true }),
+        markFailedFencing: async () => ({ ok: true }),
+      },
+      sendMessage: async () => ({ errcode: 0 }),
+    },
+  });
+  await worker.start();
+  assert.equal(typeof captured?.persistBatch, "function");
+  assert.equal(typeof captured?.sendOutbound, "function");
+  worker.stop();
+});

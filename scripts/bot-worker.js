@@ -7,9 +7,11 @@
  *
  * Owns the runner lease (file lock by default, optional MySQL lease when DB
  * mode is enabled) and may start the pure Node iLink text transport.
- * When BOT_ILINK_DB_ENABLED / options.dbRuntime is on, inbox batches can be
- * staged via MySQL Inbox/Cursor. Outbox / media / durable claim of full
- * message durability beyond staged text still remain unwired.
+ * When BOT_ILINK_DB_ENABLED / options.dbRuntime is on:
+ * - MySQL account lease + fencing
+ * - Inbox/Cursor same-transaction staging for inbound text
+ * - Outbox enqueue + dispatcher for outbound text (still experimental)
+ * Media Artifact and full reconcile remain unwired.
  */
 
 const os = require("node:os");
@@ -30,6 +32,8 @@ const DEFAULT_LEASE_TTL_MS = 120_000;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_DB_LEASE_NAME = "ilink-poller";
 const DEFAULT_API_BASE_URL = "https://ilinkai.weixin.qq.com";
+const DEFAULT_OUTBOX_POLL_MS = 500;
+const DEFAULT_OUTBOX_BATCH = 10;
 const WORKER_PHASES = new Set([
   "starting",
   "running",
@@ -134,7 +138,11 @@ function resolveDbRuntime(options = {}, env = process.env) {
       leaseName: DEFAULT_DB_LEASE_NAME,
       leaseStore: null,
       inboxStore: null,
+      outboxStore: null,
       pool: null,
+      outboxPollMs: DEFAULT_OUTBOX_POLL_MS,
+      outboxBatch: DEFAULT_OUTBOX_BATCH,
+      sendMessage: null,
     };
   }
 
@@ -165,12 +173,27 @@ function resolveDbRuntime(options = {}, env = process.env) {
       leaseName,
       leaseStore: null,
       inboxStore: null,
+      outboxStore: null,
       pool: null,
+      outboxPollMs: DEFAULT_OUTBOX_POLL_MS,
+      outboxBatch: DEFAULT_OUTBOX_BATCH,
+      sendMessage: null,
     };
   }
 
+  const outboxPollMs = positiveInt(
+    injected?.outboxPollMs ?? env.BOT_ILINK_OUTBOX_POLL_MS,
+    DEFAULT_OUTBOX_POLL_MS,
+    { min: 50, max: 60_000 }
+  );
+  const outboxBatch = positiveInt(
+    injected?.outboxBatch ?? env.BOT_ILINK_OUTBOX_BATCH,
+    DEFAULT_OUTBOX_BATCH,
+    { min: 1, max: 100 }
+  );
+
   // Injected path (tests): use provided stores as-is.
-  if (injected && (injected.leaseStore || injected.inboxStore || injected.enabled)) {
+  if (injected && (injected.leaseStore || injected.inboxStore || injected.outboxStore || injected.enabled)) {
     return {
       enabled: true,
       workspaceId,
@@ -180,7 +203,11 @@ function resolveDbRuntime(options = {}, env = process.env) {
       leaseName,
       leaseStore: injected.leaseStore || null,
       inboxStore: injected.inboxStore || null,
+      outboxStore: injected.outboxStore || null,
       pool: injected.pool || null,
+      outboxPollMs,
+      outboxBatch,
+      sendMessage: typeof injected.sendMessage === "function" ? injected.sendMessage : null,
     };
   }
 
@@ -195,8 +222,12 @@ function resolveDbRuntime(options = {}, env = process.env) {
       leaseName,
       leaseStore: null,
       inboxStore: null,
+      outboxStore: null,
       pool: null,
       lazyBuild: true,
+      outboxPollMs,
+      outboxBatch,
+      sendMessage: null,
     };
   }
 
@@ -209,7 +240,11 @@ function resolveDbRuntime(options = {}, env = process.env) {
     leaseName,
     leaseStore: null,
     inboxStore: null,
+    outboxStore: null,
     pool: null,
+    outboxPollMs,
+    outboxBatch,
+    sendMessage: null,
   };
 }
 
@@ -223,6 +258,8 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
   const { createRuntimeCrypto } = require("./ilink-crypto");
   const { createDbLeaseStore } = require("./ilink-db-lease");
   const { createInboxCursorStore } = require("./ilink-inbox-cursor");
+  const { createOutboxStore } = require("./ilink-outbox");
+  const { IlinkAdapter } = require("../shared/ilink-adapter");
 
   const secret = String(env.BOT_RUNTIME_SECRET || "").trim();
   if (secret.length < 16) {
@@ -237,11 +274,22 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
     dateStrings: true,
   });
   const cryptoApi = createRuntimeCrypto({ secret });
+  const adapter = new IlinkAdapter({
+    timeoutMs: positiveInt(env.BOT_ILINK_POLL_TIMEOUT_MS, 35_000, {
+      min: 1_000,
+      max: 120_000,
+    }),
+  });
   return {
     ...dbRuntime,
     pool,
     leaseStore: createDbLeaseStore({ pool }),
     inboxStore: createInboxCursorStore({ pool, crypto: cryptoApi }),
+    outboxStore: createOutboxStore({ pool, crypto: cryptoApi }),
+    sendMessage:
+      typeof dbRuntime.sendMessage === "function"
+        ? dbRuntime.sendMessage
+        : (opts) => adapter.sendMessage(opts),
   };
 }
 
@@ -281,10 +329,12 @@ function createBotWorker(options = {}) {
     : null;
 
   let heartbeatTimer = null;
+  let outboxTimer = null;
   let exitRequested = false;
   let leaseLost = false;
   let lease = null;
   let transport = null;
+  let outboxDispatching = false;
   /** @type {number|null} */
   let dbAccountId = null;
   /** @type {number|null} */
@@ -311,6 +361,9 @@ function createBotWorker(options = {}) {
     sentCount: 0,
     fencingToken: null,
     dbAccountId: null,
+    outboxPending: 0,
+    outboxSentCount: 0,
+    lastOutboxAt: null,
   };
 
   function snapshot() {
@@ -372,6 +425,11 @@ function createBotWorker(options = {}) {
     heartbeatTimer = null;
   }
 
+  function stopOutboxDispatcher() {
+    if (outboxTimer != null) timers.clearInterval(outboxTimer);
+    outboxTimer = null;
+  }
+
   function stopTransport() {
     if (!transport) return;
     const current = transport;
@@ -418,6 +476,169 @@ function createBotWorker(options = {}) {
     };
   }
 
+  function buildSendOutbound() {
+    if (!dbEnabled || !dbRuntime.outboxStore) return undefined;
+    return async ({ toUserId, contextToken, groupId, text, clientId }) => {
+      if (fencingToken == null || dbAccountId == null) {
+        throw new Error("outbox enqueue requires active DB lease");
+      }
+      const result = await dbRuntime.outboxStore.enqueueText({
+        workspaceId: dbRuntime.workspaceId,
+        accountId: dbAccountId,
+        sessionId: dbRuntime.sessionId,
+        fencingToken,
+        clientId: clientId || `worker-${Date.now()}`,
+        toUserId,
+        groupId,
+        contextToken,
+        text,
+      });
+      if (!result?.ok) {
+        const err = new Error(result?.error || result?.code || "enqueueText failed");
+        err.code = result?.code;
+        throw err;
+      }
+      update({
+        outboxPending: Number(state.outboxPending || 0) + 1,
+        lastOutboxAt: new Date().toISOString(),
+      });
+      return result;
+    };
+  }
+
+  async function dispatchOutboxOnce() {
+    if (
+      outboxDispatching
+      || leaseLost
+      || !dbModeActive
+      || state.phase !== "running"
+      || !dbRuntime.outboxStore
+      || fencingToken == null
+      || dbAccountId == null
+    ) {
+      return;
+    }
+    outboxDispatching = true;
+    try {
+      const claimed = await dbRuntime.outboxStore.claimBatch({
+        workspaceId: dbRuntime.workspaceId,
+        accountId: dbAccountId,
+        ownerId: lease?.ownerId || ownerId,
+        fencingToken,
+        limit: dbRuntime.outboxBatch || DEFAULT_OUTBOX_BATCH,
+        leaseName: dbRuntime.leaseName,
+      });
+      if (!claimed?.ok) {
+        if (claimed?.code === "FENCING_MISMATCH") {
+          handleLeaseLoss(claimed.error || "outbox fencing mismatch");
+        }
+        return;
+      }
+      const rows = Array.isArray(claimed.rows) ? claimed.rows : [];
+      for (const row of rows) {
+        if (leaseLost || state.phase !== "running") break;
+        if (Number(row.fencingToken) !== Number(fencingToken)) {
+          await dbRuntime.outboxStore.markFailedFencing({
+            workspaceId: dbRuntime.workspaceId,
+            accountId: dbAccountId,
+            outboxId: row.id,
+            claimToken: row.claimToken,
+            error: "worker fencing token changed",
+          });
+          continue;
+        }
+        try {
+          const sendImpl =
+            typeof dbRuntime.sendMessage === "function"
+              ? dbRuntime.sendMessage
+              : null;
+          if (!sendImpl) {
+            await dbRuntime.outboxStore.markRetry({
+              workspaceId: dbRuntime.workspaceId,
+              accountId: dbAccountId,
+              outboxId: row.id,
+              claimToken: row.claimToken,
+              error: "sendMessage not configured",
+              delayMs: 2_000,
+            });
+            continue;
+          }
+          const msg = {
+            from_user_id: "",
+            to_user_id: row.payload.toUserId,
+            client_id: row.clientId,
+            message_type: 2,
+            message_state: 2,
+            context_token: row.payload.contextToken,
+            item_list: [{ type: 1, text_item: { text: row.payload.text } }],
+            ...(row.payload.groupId ? { group_id: row.payload.groupId } : {}),
+          };
+          const response = await sendImpl({
+            baseUrl: transportConfig.baseUrl || dbRuntime.apiBaseUrl,
+            token: transportConfig.token,
+            msg,
+            timeoutMs: 15_000,
+          });
+          const code = Number(response?.errcode ?? response?.ret ?? 0);
+          if (code !== 0) {
+            throw new Error(
+              `微信发送消息失败 (${code}): ${String(response?.errmsg || "未知错误")}`
+            );
+          }
+          await dbRuntime.outboxStore.markSent({
+            workspaceId: dbRuntime.workspaceId,
+            accountId: dbAccountId,
+            outboxId: row.id,
+            claimToken: row.claimToken,
+            upstreamMessageId: response?.message_id || response?.msg_id || null,
+          });
+          update({
+            outboxSentCount: Number(state.outboxSentCount || 0) + 1,
+            outboxPending: Math.max(0, Number(state.outboxPending || 0) - 1),
+            lastOutboxAt: new Date().toISOString(),
+            lastOutboundAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          const message = safeError(error);
+          const isTimeout =
+            /timeout|超时|AbortError|ILINK_TIMEOUT/i.test(message)
+            || error?.code === "ILINK_TIMEOUT"
+            || error?.name === "AbortError";
+          if (isTimeout) {
+            await dbRuntime.outboxStore.markUnknown({
+              workspaceId: dbRuntime.workspaceId,
+              accountId: dbAccountId,
+              outboxId: row.id,
+              claimToken: row.claimToken,
+              error: message,
+            });
+          } else {
+            await dbRuntime.outboxStore.markRetry({
+              workspaceId: dbRuntime.workspaceId,
+              accountId: dbAccountId,
+              outboxId: row.id,
+              claimToken: row.claimToken,
+              error: message,
+              delayMs: 2_000,
+            });
+          }
+          update({ lastError: `Outbox 发送失败：${message}` });
+        }
+      }
+    } catch (error) {
+      update({ lastError: `Outbox dispatcher 错误：${safeError(error)}` });
+    } finally {
+      outboxDispatching = false;
+    }
+  }
+
+  function startOutboxDispatcher() {
+    if (!dbEnabled || !dbRuntime.outboxStore) return;
+    // Immediate kick; subsequent polls ride on the lease heartbeat timer so a
+    // single setInterval (common in tests) cannot clobber lease renewals.
+    void dispatchOutboxOnce();
+  }
+
   function defaultCreateTransport(config) {
     return createIlinkTextTransport({
       config,
@@ -426,13 +647,17 @@ function createBotWorker(options = {}) {
         if (event?.type === "state") applyTransportState(event.state);
       },
       persistBatch: buildPersistBatch(),
+      sendOutbound: buildSendOutbound(),
     });
   }
 
   function createTransportFactory(config) {
     if (customCreateTransport) {
-      // Injected factories may accept a second hooks bag; pass persistBatch for tests.
-      return customCreateTransport(config, { persistBatch: buildPersistBatch() });
+      // Injected factories may accept a second hooks bag.
+      return customCreateTransport(config, {
+        persistBatch: buildPersistBatch(),
+        sendOutbound: buildSendOutbound(),
+      });
     }
     return defaultCreateTransport(config);
   }
@@ -497,6 +722,7 @@ function createBotWorker(options = {}) {
     if (leaseLost || state.phase === "stopped") return snapshot();
     leaseLost = true;
     stopHeartbeat();
+    stopOutboxDispatcher();
     stopTransport();
     lease = null;
     fencingToken = null;
@@ -566,6 +792,7 @@ function createBotWorker(options = {}) {
           fencingToken,
           persistence: "mysql",
         });
+        void dispatchOutboxOnce();
       },
       (error) => {
         if (leaseLost || state.phase !== "running") return;
@@ -679,6 +906,7 @@ function createBotWorker(options = {}) {
       });
       heartbeatTimer = timers.setInterval(renewNow, heartbeatMs);
       startTransport();
+      startOutboxDispatcher();
       return snapshot();
     } catch (error) {
       if (state.phase === "error" || state.phase === "lease_lost") throw error;
@@ -703,6 +931,7 @@ function createBotWorker(options = {}) {
   function stop({ exitCode = 0 } = {}) {
     if (state.phase === "stopped") return snapshot();
     stopHeartbeat();
+    stopOutboxDispatcher();
     stopTransport();
     const ownedLease = lease && !leaseLost;
     const releaseOwnerId = lease?.ownerId || ownerId;

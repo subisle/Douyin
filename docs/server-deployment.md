@@ -52,6 +52,23 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 - **禁止**与桌面 Electron 同账号同时运行。
 - 仅文本；无图片/CSV/Agent；无 Outbox 发送与 reconcile。
 - 双 Worker 同 `workspace+account`：仅持有效 lease 的一方可 poll；丢租停 transport。
+### 实验性 Outbox 文本出站（随 DB 模式）
+
+当 `BOT_ILINK_DB_ENABLED=1` 且配置了 runtime secret / DB 时，出站文本不再直接 `sendMessage`，而是：
+
+1. transport `sendOutbound` → `outbox_messages`（`prepared`，写时校验 fencing）
+2. Worker heartbeat / 立即 kick → `claimBatch` → iLink `sendMessage`
+3. 成功 `sent`；超时类 `unknown`；可重试错误 `retry_wait`
+
+可选：
+
+```env
+# BOT_ILINK_OUTBOX_POLL_MS=500   # 当前实现搭载在租约心跳上；保留配置兼容
+# BOT_ILINK_OUTBOX_BATCH=10
+```
+
+仍无图片/CSV Artifact、无完整 reconcile 控制面；**不得**标记生产可用。
+
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。

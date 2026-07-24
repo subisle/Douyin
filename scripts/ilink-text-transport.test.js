@@ -300,3 +300,71 @@ test("persistBatch failure keeps cursor and records lastError", async () => {
   assert.equal(transport.getState().updatesBuf, "cursor-1");
   assert.match(String(transport.getState().lastError || ""), /db down/);
 });
+
+test("sendOutbound hook replaces adapter.sendMessage", async () => {
+  const outbound = [];
+  let sendMessageCalls = 0;
+  let pollCount = 0;
+  const adapter = {
+    async getUpdates(options) {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return {
+          errcode: 0,
+          get_updates_buf: "cursor-2",
+          msgs: [{
+            message_type: 1,
+            from_user_id: "user-a",
+            context_token: "ctx-1",
+            message_id: "m1",
+            item_list: [{ type: 1, text_item: { text: "hello" } }],
+          }],
+        };
+      }
+      return new Promise((_, reject) => {
+        const signal = options.signal;
+        const onAbort = () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+    async sendMessage() {
+      sendMessageCalls += 1;
+      return { errcode: 0 };
+    },
+  };
+
+  const transport = createIlinkTextTransport({
+    adapter,
+    config: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      updatesBuf: "cursor-1",
+      ackText: "收到",
+    },
+    sleep: async () => {},
+    async sendOutbound(payload) {
+      outbound.push(payload);
+      return { enqueued: true };
+    },
+  });
+
+  const p = transport.start();
+  await delay(40);
+  await transport.stop();
+  await p;
+
+  assert.equal(sendMessageCalls, 0);
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].text, "收到");
+  assert.equal(outbound[0].toUserId, "user-a");
+  assert.equal(outbound[0].contextToken, "ctx-1");
+  assert.ok(outbound[0].clientId);
+  assert.equal(transport.getState().sentCount, 1);
+});

@@ -96,6 +96,8 @@ function createIlinkTextTransport(options = {}) {
       : async () => (config.ackText ? config.ackText : "");
   const persistBatch =
     typeof options.persistBatch === "function" ? options.persistBatch : null;
+  const sendOutbound =
+    typeof options.sendOutbound === "function" ? options.sendOutbound : null;
 
   let controller = null;
   let loopPromise = null;
@@ -136,6 +138,20 @@ function createIlinkTextTransport(options = {}) {
 
   async function sendText({ toUserId, contextToken, groupId, text }) {
     const clientId = `worker-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    if (sendOutbound) {
+      const result = await sendOutbound({
+        toUserId,
+        contextToken,
+        groupId,
+        text,
+        clientId,
+      });
+      setState({
+        sentCount: state.sentCount + 1,
+        lastOutboundAt: new Date().toISOString(),
+      });
+      return result ?? { enqueued: true, clientId };
+    }
     const msg = {
       from_user_id: "",
       to_user_id: toUserId,
