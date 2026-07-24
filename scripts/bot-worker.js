@@ -205,6 +205,7 @@ function resolveDbRuntime(options = {}, env = process.env) {
       inboxStore: injected.inboxStore || null,
       outboxStore: injected.outboxStore || null,
       credentialStore: injected.credentialStore || null,
+      loginStore: injected.loginStore || null,
       pool: injected.pool || null,
       outboxPollMs,
       outboxBatch,
@@ -261,6 +262,7 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
   const { createInboxCursorStore } = require("./ilink-inbox-cursor");
   const { createOutboxStore } = require("./ilink-outbox");
   const { createAccountCredentialStore } = require("./ilink-account-credentials");
+  const { createLoginControlStore } = require("./ilink-login-control");
   const { IlinkAdapter } = require("../shared/ilink-adapter");
 
   const secret = String(env.BOT_RUNTIME_SECRET || "").trim();
@@ -289,6 +291,7 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
     inboxStore: createInboxCursorStore({ pool, crypto: cryptoApi }),
     outboxStore: createOutboxStore({ pool, crypto: cryptoApi }),
     credentialStore: createAccountCredentialStore({ pool, crypto: cryptoApi }),
+    loginStore: createLoginControlStore({ pool, crypto: cryptoApi }),
     sendMessage:
       typeof dbRuntime.sendMessage === "function"
         ? dbRuntime.sendMessage
@@ -333,6 +336,7 @@ function createBotWorker(options = {}) {
 
   let heartbeatTimer = null;
   let outboxTimer = null;
+  let loginPoller = null;
   let exitRequested = false;
   let leaseLost = false;
   let lease = null;
@@ -432,6 +436,71 @@ function createBotWorker(options = {}) {
     if (outboxTimer != null) timers.clearInterval(outboxTimer);
     outboxTimer = null;
   }
+
+  function stopLoginPoller() {
+    const current = loginPoller;
+    loginPoller = null;
+    if (!current) return;
+    try {
+      const result = current.stop?.();
+      if (result && typeof result.then === "function") {
+        result.catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function startLoginPoller() {
+    if (!dbEnabled || !dbRuntime.loginStore) return;
+    if (loginPoller) return;
+    const envEnabled = truthyEnv(env.BOT_ILINK_LOGIN_POLL);
+    // Default on in DB mode when loginStore present; allow explicit disable with BOT_ILINK_LOGIN_POLL=0
+    if (String(env.BOT_ILINK_LOGIN_POLL || "").trim() === "0") return;
+    try {
+      const { createLoginPoller } = require("./ilink-login-poller");
+      const { IlinkAdapter } = require("../shared/ilink-adapter");
+      const adapter =
+        typeof dbRuntime.getBotQrCode === "function"
+          ? {
+              getBotQrCode: (...a) => dbRuntime.getBotQrCode(...a),
+              getQrCodeStatus: (...a) => dbRuntime.getQrCodeStatus(...a),
+            }
+          : new IlinkAdapter({
+              timeoutMs: positiveInt(env.BOT_ILINK_POLL_TIMEOUT_MS, 15_000, {
+                min: 1_000,
+                max: 120_000,
+              }),
+            });
+      loginPoller = (typeof options.createLoginPoller === "function"
+        ? options.createLoginPoller
+        : createLoginPoller)({
+        loginStore: dbRuntime.loginStore,
+        credentialStore: dbRuntime.credentialStore,
+        adapter,
+        workspaceId: dbRuntime.workspaceId,
+        loginSlotId: String(env.BOT_ILINK_LOGIN_SLOT || "default"),
+        ownerId,
+        accountKey: dbRuntime.accountKey,
+        pollMs: positiveInt(env.BOT_ILINK_LOGIN_POLL_MS, 800, { min: 100, max: 10_000 }),
+        logger,
+        onEvent: (event) => {
+          if (event?.type === "login_succeeded" && logger?.log) {
+            logger.log("[bot-worker] login slot succeeded; credentials stored");
+          }
+        },
+      });
+      const started = loginPoller.start?.();
+      if (started && typeof started.then === "function") {
+        started.catch((error) => {
+          update({ lastError: `login poller start failed: ${safeError(error)}` });
+        });
+      }
+    } catch (error) {
+      update({ lastError: `login poller unavailable: ${safeError(error)}` });
+    }
+  }
+
 
   function stopTransport() {
     if (!transport) return;
@@ -732,6 +801,7 @@ function createBotWorker(options = {}) {
     leaseLost = true;
     stopHeartbeat();
     stopOutboxDispatcher();
+    stopLoginPoller();
     stopTransport();
     lease = null;
     fencingToken = null;
@@ -941,6 +1011,7 @@ function createBotWorker(options = {}) {
 
       startTransport();
       startOutboxDispatcher();
+      startLoginPoller();
       return snapshot();
     } catch (error) {
       if (state.phase === "error" || state.phase === "lease_lost") throw error;
@@ -966,6 +1037,7 @@ function createBotWorker(options = {}) {
     if (state.phase === "stopped") return snapshot();
     stopHeartbeat();
     stopOutboxDispatcher();
+    stopLoginPoller();
     stopTransport();
     const ownedLease = lease && !leaseLost;
     const releaseOwnerId = lease?.ownerId || ownerId;

@@ -89,6 +89,19 @@ npm run bot:seed-credential
 - Worker 读库优先、env 作开发 fallback：A2 合入后生效；A2 前 seed 仅落库，Worker 仍读 env token
 - **不得**因 seed 成功标记生产可用
 
+### 实验性扫码登录控制通道（S2 部分）
+
+需 `BOT_ILINK_DB_ENABLED=1`、`BOT_RUNTIME_SECRET`、`DB_*`，并执行 `npm run db:migrate`（含 `003_ilink_login_control`）。
+
+1. 认证后 `POST /api/bot/login/start`（body: `{ "loginSlotId": "default" }`）写入 pending 请求  
+2. Worker 持 DB 租约时轮询 claim 槽 → 拉二维码（结果加密写回，**日志不打印二维码/token**）  
+3. `GET /api/bot/login/status?slot=default` 轮询（`Cache-Control: no-store`）  
+4. 扫码成功后凭据写入 `ilink_accounts` 加密字段；此后可无 `BOT_ILINK_TOKEN` 启动文本 transport  
+
+可选：`BOT_ILINK_LOGIN_SLOT`、`BOT_ILINK_LOGIN_POLL=0` 关闭登录轮询、`BOT_ILINK_LOGIN_POLL_MS`。
+
+仍非生产：缺完整 RBAC 角色矩阵、Electron 统一入口与 72h 证据。
+
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。

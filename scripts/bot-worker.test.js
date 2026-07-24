@@ -1065,3 +1065,87 @@ test("db mode loads token from credentialStore when env token empty", async () =
   assert.equal(worker.getState().transport, "polling");
   worker.stop();
 });
+
+test("db mode starts login poller when loginStore injected", async () => {
+  const calls = [];
+  const worker = createBotWorker({
+    timers: createTimers(),
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    createTransport: () => createIdleTransport(),
+    createLoginPoller: (opts) => {
+      calls.push("create");
+      assert.ok(opts.loginStore);
+      assert.ok(opts.credentialStore);
+      return {
+        start: async () => {
+          calls.push("start");
+          return { phase: "polling_slots" };
+        },
+        stop: async () => {
+          calls.push("stop");
+          return { phase: "stopped" };
+        },
+        getState: () => ({ phase: "polling_slots" }),
+      };
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 1 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+      outboxStore: {
+        enqueueText: async () => ({ ok: true, outboxId: 1 }),
+        reclaimExpiredClaims: async () => ({ ok: true, reclaimed: 0 }),
+        claimBatch: async () => ({ ok: true, rows: [] }),
+        markSent: async () => ({ ok: true }),
+        markRetry: async () => ({ ok: true }),
+        markUnknown: async () => ({ ok: true }),
+        markFailedFencing: async () => ({ ok: true }),
+      },
+      credentialStore: {
+        getCredential: async () => ({ ok: false, code: "NOT_FOUND" }),
+        setCredential: async () => ({ ok: true, accountId: 1 }),
+      },
+      loginStore: {
+        claimLoginRequest: async () => ({ ok: false, code: "NOT_CLAIMABLE" }),
+        expireStale: async () => ({ ok: true, expired: 0 }),
+      },
+      sendMessage: async () => ({ errcode: 0 }),
+    },
+  });
+  await worker.start();
+  await waitFor(() => calls.includes("start"), 500);
+  assert.deepEqual(calls.slice(0, 2), ["create", "start"]);
+  worker.stop();
+  await waitFor(() => calls.includes("stop"), 500);
+});
