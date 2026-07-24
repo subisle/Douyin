@@ -3,12 +3,12 @@
 | 项目 | 内容 |
 | --- | --- |
 | 版本 | **v1.2.0** |
-| 最后核对 | 2026-07-23 |
-| 状态 | **执行中：桌面与 Web MVP 已有，尚未达到生产发布门槛** |
+| 最后核对 | 2026-07-24 |
+| 状态 | **执行中：桌面与 Web MVP 已有；服务器侧有实验性文本+DB transport，尚未达到生产发布门槛** |
 | 适用范围 | 微信 iLink 单通道机器人、Web 管理后台、知识库、服务器 Bot Worker |
 | 本文职责 | 产品边界、架构决策、实施顺序、验收标准、上线与回滚 |
 
-> 本文是产品范围与里程碑来源。跨文档运行契约、拓扑和实施顺序以 `adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构以 `migrations/` 为准。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`。旧版 `weixin-ai-agent-plan.md` 已废弃。
+> 本文是产品范围与里程碑来源。跨文档运行契约、拓扑和实施顺序以 `adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构以 `migrations/` 为准。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`。**2026-07-24 起服务器侧已有实验性文本 + 可选 DB transport**（`BOT_ILINK_ENABLED` / `BOT_ILINK_DB_ENABLED`），实现进度真值见 `ilink-implementation-progress.md`；内部 MVP 结论不变，**不得标记服务器生产可用**。旧版 `weixin-ai-agent-plan.md` 已废弃。
 
 ---
 
@@ -26,10 +26,10 @@
 - Web 会话使用本地 JSON 文件，不适合多实例、并发写、权限隔离和可靠审计。
 - Agent/RAG API 已统一为登录会话或服务端 API Token，浏览器不再读取公开 Token；仍需限流、角色和多实例会话。
 - 当前 Runner 锁已具备进程所有者、续租和丢租停止，但仍是本机文件租约，跨主机必须迁 DB fencing。
-- 已增加可执行 migration runner 和 iLink runtime 首迁移；Inbox/Outbox 尚未接入当前 Poller。
-- 服务器 Bot Worker 已有文件租约、续租失败退出和状态心跳，但尚未接 iLink、DB lease、Inbox/Outbox；抖音画像仍为占位实现。
+- 已增加可执行 migration runner 和 iLink runtime 迁移；文本路径已实验接入 bot-worker（长轮询 + 可选 MySQL lease/Inbox/Outbox），媒体 Artifact、共享 Core 与真实账号 E2E 未完成。
+- 服务器 Bot Worker 已有文件租约与状态心跳，并在开关下实验接入 iLink 文本闭环与 DB lease/Inbox/Outbox；仍缺真实账号 E2E、媒体收发、shared/bot-core 与 72h 灰度；抖音画像仍为占位实现。
 
-**下一目标不是继续增加 Tool，而是完成生产基础层并把 iLink Worker 做成真实服务器通道：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计、真实收发与回归测试。**
+**下一目标不是继续增加 Tool，而是完成生产基础层并把 iLink Worker 从实验文本通道推进到可验收的服务器生产通道：统一 Core、统一 RAG、服务端会话、强制鉴权、跨主机 Runner 租约、审计、真实收发与回归测试。**
 
 ---
 
@@ -43,7 +43,7 @@
 
 | 能力 | 状态 | 当前证据 | 生产缺口 |
 | --- | --- | --- | --- |
-| 微信 iLink 通道 | 已实现 | `shared/ilink-adapter.js`、`electron/weixin-bot.js` | 仍需服务器 Worker 接线、真实账号连续运行验收与脱敏日志 |
+| 微信 iLink 通道 | 已实现 | `shared/ilink-adapter.js`、`electron/weixin-bot.js`；服务器实验文本见 `scripts/ilink-text-transport.js`、`scripts/bot-worker.js` | 服务器仍缺媒体 Artifact、二维码控制通道、真实账号连续运行验收与脱敏日志 |
 | ModeRouter / FastRoute | 已实现 | `weixin-bot-mode.js`、命令回归测试 | 需迁入共享 Core，并补桌面/Web 契约测试 |
 | 数据 Analytics | 已实现 | `weixin-bot-analytics.js` | 位置仍属于 Electron，Web 通过 CJS 间接复用 |
 | 桌面 Agent Tools | 部分实现 | `weixin-bot-skills.js`，当前共 11 个工具 | 只覆盖部分查询/报告/导出；全项目能力矩阵见 `agent-framework-reference-and-extension-plan.md` |
@@ -54,9 +54,9 @@
 | 本地运行目录 | 已实现 | `electron/local-paths.js` | 打包环境必须显式配置持久路径并做启动检查 |
 | 会话持久化 | 部分实现 | `weixin-bot-session-store.js` | JSON 仅适合单机开发，服务器必须迁 MySQL |
 | Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 已有 owner/heartbeat/丢租停止；文件锁仅适用于本机，仍需账号级 DB fencing |
-| 数据迁移 | 部分实现 | `scripts/migrate.js`、`migrations/001_ilink_runtime.js` | 已建 transport foundation；尚未接入 Poller/Dispatcher，后续表按 migration 增量增加 |
+| 数据迁移 | 部分实现 | `scripts/migrate.js`、`migrations/001_ilink_runtime.js`、`migrations/002_outbox_tenant_fk.js`；DB 模块 `scripts/ilink-db-lease.js`、`ilink-inbox-cursor.js`、`ilink-outbox.js` | transport 表与文本闭环已实验接线；缺集成 MySQL 演练、媒体 Artifact 管线与后续会话/审计表 |
 | Bot 状态页 | 部分实现 | `/api/bot/status` 可读 Worker 文件租约、心跳、过期和最近错误 | 仍是单机状态文件，缺 DB 账号、fencing、Inbox/Outbox 积压和真实连接状态 |
-| 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` 有文件租约、owner、续租丢失退出和状态文件 | 未接 DB lease、iLink 长轮询、Inbox/Outbox、重连与凭据管理；这是服务器上线阻塞项 |
+| 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` + 可选 `BOT_ILINK_ENABLED` / `BOT_ILINK_DB_ENABLED` 文本闭环（`ilink-text-transport.js` 等） | 实验性文本+DB 已接；缺真实账号 E2E、媒体/CSV Artifact、二维码通道、shared/bot-core 与 72h 灰度；仍是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
 最新本地基线为 `npm test` **117/117 通过**（DB/运行环境 8、登录限流/CSRF 8、导入事务 6、迁移 15、iLink Adapter 12、Worker 4、微信/Agent 64），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。
@@ -431,11 +431,11 @@ Agent API 的标准响应使用 `api-design.md` 的统一成功/失败包络，�
 | 1 | 已验证 | 完成安全基线：数据库配置 fail closed、移除源码凭据、Agent/RAG 强制鉴权、浏览器使用登录 cookie | DB 配置与安全回归通过；浏览器代码不再读取 `NEXT_PUBLIC_API_TOKEN` |
 | 2 | 已验证 | 冻结运行契约和真源 | `docs/adr/0001-agent-runtime-contract.md` 管运行契约与顺序，`migrations/` 是唯一数据库真源 |
 | 3 | 部分完成 | 完成 B2.1 migration 基础设施 | runner、checksum、MySQL advisory lock、连续历史校验和 `001_ilink_runtime` 已有 10 项单测；仍需在集成 MySQL 执行 `status/up`、备份和恢复演练 |
-| 4 | 未完成 | 把 `001_ilink_runtime` 接入运行链路 | 实现账号级 DB lease/fencing、加密 Inbox/Cursor 同事务、dedupe-before-stage、幂等媒体 staging/短 TTL/GC 和 Outbox Dispatcher；不得用本机文件锁代替跨主机租约 |
+| 4 | 部分完成 | 文本链路实验接入 `001` / Outbox 运行路径 | 账号级 DB lease/fencing、加密 Inbox/Cursor 同事务与 Outbox 文本出站（含 reclaim/resolveUnknown）已实验接线；集成 MySQL 演练、真实账号 E2E、媒体 staging/GC 与完整 Dispatcher 仍未完成；不得用本机文件锁代替跨主机租约 |
 | 5 | 部分完成 | 收敛共享 Core，并抽出纯 Node iLink Adapter 协议层 | `shared/ilink-adapter.js` 已完成 API 路由/方法/query allowlist、redirect、超时、响应上限和 typed session-expired 测试；仍需共享 Core、媒体 Artifact 契约、真实账号 E2E，以及受 step-up/RBAC 保护的 Web -> MySQL -> Worker 二维码控制通道 |
 | 6 | 未完成 | 增加会话与可恢复工作流 migration | Session/Run/Step/effect/approval/audit 通过后续 migration 增量增加；业务写、step 和 effect ledger 共事务，等待审批时释放 worker claim |
 | 7 | 未完成 | 完成知识库、运维和观测闭环 | CRUD 写后可检索；trace、指标、限流、预算、脱敏日志、DB 账号/租约/积压/真实连接状态和备份恢复可验证；当前文件心跳只作为过渡证据 |
-| 8 | 未完成 | 完成 B4 服务器 iLink Worker | 占位 Worker 替换为真实 Poller/Dispatcher；单账号迁移、文字/图片/CSV E2E、故障注入和 72 小时记录全部通过 |
+| 8 | 未完成 | 完成 B4 服务器 iLink Worker | 文本 Poller/Outbox 已实验接入，尚非 B4 完成；单账号迁移、文字/图片/CSV E2E、故障注入和 72 小时记录全部通过后才可标生产 |
 | 9 | 未完成 | B4 通过后执行 B5 内部发布 | 黄金集、Web/微信 E2E、24 小时全链路观察和 5 分钟回滚演练通过，才标记生产可用 |
 | 10 | 后置 | 扩展全功能与可选抖音缓存 | 按 Read、Artifact、Confirmed Write、Collector 分批验收；B6 和多 Agent 均不得早于 B5 |
 
