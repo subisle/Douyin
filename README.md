@@ -17,8 +17,13 @@
 
 ## 机器人 / Worker
 
-- **用户智能对话：** 桌面 Electron 微信 Bot · **一个 Agent + 多技能** · 微信 iLink（见单 Agent 规格）
-- 使用：配置 AI → 微信发「人工客服」→ 自然语言问数据；默认指令模式不调模型
+**硬规则（详见 [`CLAUDE.md`](CLAUDE.md)）：**
+
+- **唯一用户通道：微信 iLink**（收发文字、收文件、发文件/图片均走 iLink；不接其他 IM 作主聊天口）
+- **一个 Agent + 多技能**；不加多 Agent 实时问答
+- 桌面为用户主路径；服务器 Worker 实验且未达生产前不得标生产
+
+- **用户智能对话：** 桌面 Electron 微信 Bot · 配置 AI → 微信发「人工客服」→ 自然语言问数据；默认指令模式不调模型
 - 服务器：`npm run bot:worker` — 实验文本/DB 通道，**不**替代桌面单 Agent 定义
+- 规格：`docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`
 - 测试：`npm run test:weixin-bot` · `npm run test:bot-worker` · `npm run test:ilink-db`
-- **不得**将服务器 Worker 标为生产可用，除非路线图 S7 完成

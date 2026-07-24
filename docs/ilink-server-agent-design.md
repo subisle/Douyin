@@ -6,6 +6,7 @@
 | 核对日期 | 2026-07-24 |
 | 结论 | **可落地，但当前代码尚未达到服务器生产条件**（实验文本 Worker 可开关，非生产） |
 | 通道约束 | **只使用微信 iLink；不引入公众号、企业微信、Webhook 或其他 IM 通道** |
+| 通道能力 | **收发文字、接收文件、发送文件/图片** 均经 iLink；不另建用户侧文件站/CDN 产品通道 |
 | 适用范围 | 抖音数据查询、CSV 导入、日报图片、CSV 导出、帮助/RAG、Agent、账号管理、服务器部署 |
 
 > 本文是 iLink 单通道服务器化的专项设计。产品路线见 `ai-agent-production-plan.md`，跨文档运行契约与顺序以 `docs/adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构只以 `migrations/` 为准；框架借鉴和扩展路线见 `agent-framework-reference-and-extension-plan.md`，部署参数和命令以 `server-deployment.md` 为准。

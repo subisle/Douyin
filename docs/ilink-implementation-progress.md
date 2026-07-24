@@ -10,8 +10,9 @@
 | 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md`（S0–S8；多 Agent 仅 S8） |
 | 部署开关 | `docs/server-deployment.md` |
 
-> 冲突时：**运行代码与 `migrations/` > 本文 > 旧段落日期早于 2026-07-24 的设计表述**。  
-> **用户侧智能客服主路径 = 桌面微信单 Agent**；服务器 Worker 实验不改变该产品形态，也不等于「多 Agent 已上线」。
+> 冲突时：**运行代码与 `migrations/` > `CLAUDE.md` 硬规则 > 本文 > 旧段落日期早于 2026-07-24 的设计表述**。  
+> **用户侧智能客服主路径 = 桌面微信单 Agent**；服务器 Worker 实验不改变该产品形态，也不等于「多 Agent 已上线」。  
+> **通道硬规则：** 最终用户 **只** 使用微信 iLink 收发文字与文件/图片；禁止其他 IM 作主通道（见仓库根目录 `CLAUDE.md`）。
 
 ---
 
@@ -179,3 +180,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 2026-07-24 | 用户智能真值：`weixin-single-agent-skills-design`；入口文档对齐 |
 | 2026-07-24 | S2 登录通道：login-control store + login-poller + `/api/bot/login/*`；仍实验 |
 | 2026-07-24 | S3 地基：local artifact store + media policy 校验 |
+| 2026-07-24 | 硬规则：`CLAUDE.md` 冻结微信 iLink 为唯一用户通道（含收发文件） |

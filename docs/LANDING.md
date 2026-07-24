@@ -7,6 +7,7 @@
 | 用途 | **唯一落地清单**：按序执行即可；不重复讲愿景 |
 | 权威分工 | 功能：`ai-agent-production-plan.md` · 本地盘：`local-storage-plan.md` · 数据 API：`api-design.md` · 部署：`server-deployment.md` · 板卡：`/Volumes/2t/it/服务器/ssh/server-status-2026-07-20.md` |
 | **智能客服架构真值** | `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`（**单 Agent + 多技能 + 微信 iLink**；非多 Agent） |
+| **项目硬规则** | 仓库根目录 `CLAUDE.md`：**唯一用户通道 = 微信 iLink**（收发消息与文件）；一 Agent 多技能 |
 | iLink 服务器进度真值 | `docs/ilink-implementation-progress.md` |
 | iLink 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md` |
 | iLink 服务器设计 | `docs/ilink-server-agent-design.md` |
