@@ -44,6 +44,8 @@ function createMemoryPool(seed = {}) {
     statements.push(s);
 
     // INSERT INTO ilink_accounts ... ON DUPLICATE KEY UPDATE
+    // Params: workspaceId, accountKey, displayName, apiBaseUrl, ciphertext, keyId
+    // (status/enabled are SQL literals, not bind params)
     if (s.includes("INSERT INTO ilink_accounts")) {
       const [
         workspaceId,
@@ -52,7 +54,6 @@ function createMemoryPool(seed = {}) {
         apiBaseUrl,
         ciphertext,
         keyId,
-        status,
       ] = params;
       const key = accountKey(workspaceId, accountKeyValue);
       const existing = accounts.get(key);
@@ -60,8 +61,9 @@ function createMemoryPool(seed = {}) {
         existing.api_base_url = apiBaseUrl;
         existing.credential_ciphertext = ciphertext;
         existing.credential_key_id = keyId;
-        if (displayName != null) existing.display_name = displayName;
-        if (status != null) existing.status = status;
+        const nextName = displayName == null ? "" : String(displayName);
+        if (nextName !== "") existing.display_name = nextName;
+        existing.status = "connected";
         return [{ affectedRows: 2, insertId: existing.id, warningStatus: 0 }, undefined];
       }
       const id = nextAccountId++;
@@ -73,7 +75,7 @@ function createMemoryPool(seed = {}) {
         api_base_url: apiBaseUrl,
         credential_ciphertext: ciphertext,
         credential_key_id: keyId,
-        status: status == null ? "connected" : String(status),
+        status: "connected",
         enabled: 1,
       });
       return [{ affectedRows: 1, insertId: id, warningStatus: 0 }, undefined];
