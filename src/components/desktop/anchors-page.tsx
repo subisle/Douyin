@@ -31,8 +31,10 @@ type GenderFilter = "all" | "male" | "female";
 type MasterFilter = { mode: "none" } | { mode: "master"; personId: number } | { mode: "apprentice"; personId: number };
 const PAGE_SIZE = 15;
 
-function todayStr(): string {
+// 业务日默认昨天：今天 22 → 21
+function businessDateStr(): string {
   const d = new Date();
+  d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -543,7 +545,7 @@ function EditInfoDialog({
   const [anchorId, setAnchorId] = useState(anchor.anchorId);
   const [douyinNo, setDouyinNo] = useState(anchor.douyinNo);
   const [hideInDailyReport, setHideInDailyReport] = useState(anchor.hideInDailyReport ?? false);
-  const [date, setDate] = useState(todayStr());
+  const [date, setDate] = useState(businessDateStr());
   const [waveValue, setWaveValue] = useState("");
   const [rank, setRank] = useState("");
   const [totalMinutes, setTotalMinutes] = useState("");

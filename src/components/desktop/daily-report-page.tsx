@@ -55,8 +55,10 @@ const DEFAULT_REPORT_STYLES: Record<GenderView, ReportCanvasStyle> = {
   female: "classic",
 };
 
-function todayStr(): string {
+// 业务日默认「昨天」：今天 22 号则默认看 21 号数据
+function businessDateStr(): string {
   const d = new Date();
+  d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -332,14 +334,14 @@ export function DailyReportPage() {
     }
   }, []);
 
-  // 默认日期：库里最近有音浪数据的那天；没有则用今天
+  // 默认日期：库里最近有音浪数据的那天；没有则用昨天（业务日）
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const api = getDataApi();
       if (!api) {
         if (!cancelled) {
-          setDate(todayStr());
+          setDate(businessDateStr());
           setDateReady(true);
         }
         return;
@@ -349,9 +351,9 @@ export function DailyReportPage() {
         if (cancelled) return;
         const latest =
           (res.success && (res.data.latestWaveDate || res.data.latestDataDate)) || null;
-        setDate(latest || todayStr());
+        setDate(latest || businessDateStr());
       } catch {
-        if (!cancelled) setDate(todayStr());
+        if (!cancelled) setDate(businessDateStr());
       } finally {
         if (!cancelled) setDateReady(true);
       }

@@ -29,8 +29,10 @@ import {
 } from "./poster-board-export";
 import { PosterBoardStage } from "./poster-board-stage";
 
-function todayStr(): string {
+// 业务日默认昨天：今天 22 → 21
+function businessDateStr(): string {
   const d = new Date();
+  d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -46,7 +48,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 export function PosterBoardPage() {
-  const [date, setDate] = useState(todayStr());
+  const [date, setDate] = useState(businessDateStr());
   const [templateId, setTemplateId] = useState(POSTER_BOARD_TEMPLATES[0]?.id || "male-1-40");
   const [report, setReport] = useState<DailyReportData | null>(null);
   const [loading, setLoading] = useState(false);

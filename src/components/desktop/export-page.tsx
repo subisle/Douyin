@@ -13,8 +13,10 @@ import { BrowserModeState } from "./states";
 
 type ExportKind = "wave" | "duration" | "anchors";
 
-function todayIsoDate() {
+// 业务日默认昨天：今天 22 → 21
+function businessIsoDate() {
   const now = new Date();
+  now.setDate(now.getDate() - 1);
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
@@ -54,7 +56,7 @@ export function ExportPage() {
     (async () => {
       const api = getDataApi();
       if (!api) {
-        if (!cancelled) setAsOfDate(todayIsoDate());
+        if (!cancelled) setAsOfDate(businessIsoDate());
         return;
       }
       try {
@@ -64,9 +66,9 @@ export function ExportPage() {
           (res.success &&
             (res.data.latestDurationDate || res.data.latestDataDate || res.data.latestWaveDate)) ||
           null;
-        setAsOfDate(latest || todayIsoDate());
+        setAsOfDate(latest || businessIsoDate());
       } catch {
-        if (!cancelled) setAsOfDate(todayIsoDate());
+        if (!cancelled) setAsOfDate(businessIsoDate());
       }
     })();
     return () => {
@@ -101,7 +103,7 @@ export function ExportPage() {
         setMsg(`${opt.label}暂无数据可导出`);
         return;
       }
-      const stamp = asOfDate || todayIsoDate();
+      const stamp = asOfDate || businessIsoDate();
       downloadCsv(res.data, `${opt.file}_${stamp}.csv`);
       setMsg(
         opt.kind === "duration"
@@ -141,9 +143,9 @@ export function ExportPage() {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setAsOfDate(todayIsoDate())}
+              onClick={() => setAsOfDate(businessIsoDate())}
             >
-              今天
+              昨天
             </Button>
           </div>
         </CardContent>
