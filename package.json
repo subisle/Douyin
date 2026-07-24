@@ -11,7 +11,7 @@
     "lint": "eslint src electron shared next.config.ts",
     "check:release-baseline": "node scripts/check-release-baseline.mjs",
     "test": "npm run test:db-config && npm run test:auth && npm run test:imports && npm run test:migrations && npm run test:ilink-adapter && npm run test:bot-worker && npm run test:weixin-bot",
-    "test:db-config": "node --test electron/db-config.test.js electron/runtime-env.test.js",
+    "test:db-config": "node --test electron/db-config.test.js electron/runtime-env.test.js electron/local-paths.test.js",
     "test:auth": "node --test src/server/api/login-rate-limit.test.mjs src/server/api/csrf-origin.test.mjs",
     "test:imports": "node --test electron/db-import.test.js",
     "test:migrations": "node --test scripts/migration-runner.test.js",

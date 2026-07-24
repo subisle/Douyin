@@ -34,6 +34,7 @@ const report = {
   paths: {
     tmpdir: os.tmpdir(),
     runtimeDefault: path.join(root, "data", "runtime"),
+    artifactsDefault: path.join(root, "data", "runtime", "artifacts"),
     rag: path.join(root, "data", "rag"),
   },
   sizes: {
@@ -45,6 +46,7 @@ const report = {
   },
   env: {
     BOT_STORAGE_DIR: process.env.BOT_STORAGE_DIR || "(unset → should use data/runtime)",
+    ARTIFACT_ROOT: process.env.ARTIFACT_ROOT || "(unset → BOT_STORAGE_DIR/artifacts or data/runtime/artifacts)",
     AGENT_SESSION_PATH: process.env.AGENT_SESSION_PATH || "(unset)",
     DB_HOST: process.env.DB_HOST || "(unset)",
     DB_PORT: process.env.DB_PORT || "(unset)",
@@ -58,6 +60,11 @@ if (String(avail).endsWith("Gi") && Number.parseFloat(avail) < 15) {
 }
 if (!process.env.BOT_STORAGE_DIR) {
   report.warnings.push("未设置 BOT_STORAGE_DIR，建议 export BOT_STORAGE_DIR=$PWD/data/runtime");
+}
+if (!process.env.ARTIFACT_ROOT && !process.env.BOT_STORAGE_DIR) {
+  report.warnings.push(
+    "未设置 ARTIFACT_ROOT / BOT_STORAGE_DIR，Artifact 将落在 data/runtime/artifacts（勿依赖系统 /tmp）"
+  );
 }
 
 console.log(JSON.stringify(report, null, 2));

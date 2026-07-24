@@ -102,9 +102,29 @@ npm run bot:seed-credential
 
 仍非生产：缺完整 RBAC 角色矩阵、Electron 统一入口与 72h 证据。
 
-### 实验性 Artifact 本地目录（S3 地基）
+### 实验性 Artifact 本地目录（S3 地基 / S3.1 根目录）
 
 代码已提供 `scripts/ilink-artifact-store.js`（本地 staging/GC）与 `scripts/ilink-media-policy.js`（CDN/MIME/大小白名单）。**Worker 入站下载/出站上传全链路尚未接线**；生产镜像仍需固定字体与卷路径（后续）。
+
+根目录解析（`electron/local-paths.js` → `resolveArtifactRoot`）：
+
+```text
+ARTIFACT_ROOT
+  → 否则 BOT_STORAGE_DIR/artifacts
+  → 否则 <resolveRuntimeDir>/artifacts（开发默认项目 data/runtime/artifacts）
+```
+
+```env
+# 推荐显式（服务器数据卷）
+ARTIFACT_ROOT=/var/lib/douyin/artifacts
+# 或与会话/锁共用：
+# BOT_STORAGE_DIR=/var/lib/douyin/runtime
+# ARTIFACT_MAX_BYTES=20971520
+# ARTIFACT_TTL_MS=1800000
+```
+
+`createLocalArtifactStore()` 未传 `rootDir` 时走上述解析，**不再**默认裸写 `os.tmpdir()/douyin-artifacts`。  
+检查：`npm run storage:doctor`（报告含 `artifactsDefault` / `ARTIFACT_ROOT`）。
 
 ## 1. 目标
 

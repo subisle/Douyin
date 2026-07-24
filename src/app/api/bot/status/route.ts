@@ -64,7 +64,8 @@ export async function GET(req: NextRequest) {
     ...readWorkerStatus(),
     connected: false,
     transport: "not_connected",
-    message: "服务器 iLink Adapter 与 Inbox/Outbox 尚未接入；租约状态不代表微信已连接。",
+    message:
+      "实验路径：文本 transport / 可选 MySQL lease·Inbox·Outbox·登录控制可能已接线（见 worker status 字段与 env 开关）。persistence=mysql 不代表生产可用；租约或心跳存在也不代表微信会话一定在线。",
     agentChat: "/api/agent/chat",
     rag: "/api/rag/search",
   });

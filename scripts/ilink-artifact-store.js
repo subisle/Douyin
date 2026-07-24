@@ -4,7 +4,12 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
-const os = require("node:os");
+
+const {
+  resolveArtifactRoot,
+  artifactMaxBytes,
+  artifactTtlMs,
+} = require("../electron/local-paths");
 
 const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 const DEFAULT_TTL_MS = 30 * 60_000;
@@ -18,17 +23,32 @@ function storageKeyHash(storageKey) {
 }
 
 /**
+ * Resolve store root without defaulting to bare os.tmpdir()/douyin-artifacts.
+ * Explicit rootDir wins; else ARTIFACT_ROOT → BOT_STORAGE_DIR/artifacts → runtime/artifacts.
+ */
+function resolveStoreRoot(options = {}) {
+  if (options.rootDir != null && String(options.rootDir).trim()) {
+    return path.resolve(String(options.rootDir));
+  }
+  const env = options.env || process.env;
+  return resolveArtifactRoot(env);
+}
+
+/**
  * Local filesystem artifact staging (S3.1 foundation).
  * status: staging → ready | discarded
  */
 function createLocalArtifactStore(options = {}) {
-  const rootDir = path.resolve(
-    String(options.rootDir || path.join(os.tmpdir(), "douyin-artifacts"))
-  );
+  const env = options.env || process.env;
+  const rootDir = resolveStoreRoot(options);
   const maxBytes =
-    Number(options.maxBytes) > 0 ? Number(options.maxBytes) : DEFAULT_MAX_BYTES;
+    Number(options.maxBytes) > 0
+      ? Number(options.maxBytes)
+      : artifactMaxBytes(env) || DEFAULT_MAX_BYTES;
   const defaultTtlMs =
-    Number(options.defaultTtlMs) > 0 ? Number(options.defaultTtlMs) : DEFAULT_TTL_MS;
+    Number(options.defaultTtlMs) > 0
+      ? Number(options.defaultTtlMs)
+      : artifactTtlMs(env) || DEFAULT_TTL_MS;
   const nowFn = typeof options.now === "function" ? options.now : () => new Date();
 
   fs.mkdirSync(rootDir, { recursive: true });
@@ -194,6 +214,7 @@ function createLocalArtifactStore(options = {}) {
 
 module.exports = {
   createLocalArtifactStore,
+  resolveStoreRoot,
   sha256Hex,
   storageKeyHash,
   DEFAULT_MAX_BYTES,

@@ -86,3 +86,53 @@ test("discard removes file; gcExpired removes old files", async () => {
 
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test("default root uses ARTIFACT_ROOT from env (not bare tmp/douyin-artifacts)", async () => {
+  const root = tempRoot();
+  const store = createLocalArtifactStore({
+    env: { ARTIFACT_ROOT: root },
+  });
+  assert.equal(store.rootDir, path.resolve(root));
+  const staged = await store.stageBuffer({
+    workspaceId: "ws",
+    accountId: 1,
+    buffer: Buffer.from("env-root"),
+  });
+  assert.equal(staged.ok, true);
+  assert.ok(String(staged.absolutePath).startsWith(path.resolve(root)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("default root uses BOT_STORAGE_DIR/artifacts when ARTIFACT_ROOT unset", async () => {
+  const storage = tempRoot();
+  const store = createLocalArtifactStore({
+    env: { BOT_STORAGE_DIR: storage },
+  });
+  const expected = path.resolve(storage, "artifacts");
+  assert.equal(store.rootDir, expected);
+  assert.ok(fs.existsSync(expected));
+  fs.rmSync(storage, { recursive: true, force: true });
+});
+
+test("ARTIFACT_MAX_BYTES from env is honored when options.maxBytes omitted", async () => {
+  const root = tempRoot();
+  const store = createLocalArtifactStore({
+    rootDir: root,
+    env: { ARTIFACT_MAX_BYTES: "10" },
+  });
+  assert.equal(store.maxBytes, 10);
+  const ok = await store.stageBuffer({
+    workspaceId: "ws",
+    accountId: 1,
+    buffer: Buffer.alloc(8, 1),
+  });
+  assert.equal(ok.ok, true);
+  const bad = await store.stageBuffer({
+    workspaceId: "ws",
+    accountId: 1,
+    buffer: Buffer.alloc(16, 1),
+  });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, "TOO_LARGE");
+  fs.rmSync(root, { recursive: true, force: true });
+});

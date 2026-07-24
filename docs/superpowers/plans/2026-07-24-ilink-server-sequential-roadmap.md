@@ -56,7 +56,7 @@ getUpdates → persistBatch(Inbox+Cursor) → onText
 ### 0.3 硬规则（全程）
 
 1. **禁止**桌面 Electron 与服务器 Worker **同微信账号**双开。  
-2. 未完成阶段 **S3** 前不得写「服务器生产可用」。  
+2. 未完成阶段 **S7**（及 G1–G4）前不得写「服务器生产可用」；S3 完成也不等于生产。  
 3. **不要**先堆 Tool / 多 Agent / 可视化编排。  
 4. 每个阶段结束：自动化测试绿 + 文档与代码一致 + 独立 commit 串。  
 5. 默认开关关闭时行为与旧「仅租约」兼容。
@@ -272,14 +272,20 @@ S0 文档与基线对齐
 
 ---
 
-## 当前「正确下一刀」
+## 当前「正确下一刀」（2026-07-24 审计刷新）
 
-按本总序，**下一步只应做 S0 → 然后 S1**：
+> 详表：`docs/superpowers/specs/2026-07-24-project-progress-audit.md`  
+> 执行切片：`docs/superpowers/plans/2026-07-24-next-execution-slice.md`  
+> S3 规格：`docs/superpowers/specs/2026-07-24-ilink-s3-artifact-pipeline-design.md`
 
-1. **S0** 对齐三份设计文档与 LANDING（避免后人仍读「Worker 只占位」）。  
-2. **S1** 真实账号文本 E2E runbook + 一次成功记录 + 双 worker 抢租约。  
+代码已越过「仅 S0」：`S2` 凭据/登录控制通道与 `S3` Artifact 地基已合入。按总序与证据完备性，**下一步**：
 
-**不要**在 S1 完成前开 S4 Core 大迁或 S8 多 Agent。
+1. **S3** Artifact Worker 全链路（S3.1 根目录已落地 → 入站/出站/命令）。  
+2. **S1** 有 token 时补文本 E2E 留证（不阻塞 S3 编码）。  
+3. **S2 扫码退出** 非当前门禁；env token / seed 凭据足够；控制通道代码保留后置验收。  
+4. 文档漂移持续小修。  
+
+**不要**在 S3 媒体未稳前开 S4 Core 大迁或 S8 多 Agent；未过 S7 不得标生产。
 
 ---
 

@@ -47,7 +47,7 @@
 
 | 能力 | 状态 | 当前证据 | 生产缺口 |
 | --- | --- | --- | --- |
-| 微信 iLink 通道 | 已实现 | `shared/ilink-adapter.js`、`electron/weixin-bot.js`；服务器实验文本见 `scripts/ilink-text-transport.js`、`scripts/bot-worker.js` | 服务器仍缺媒体 Artifact、二维码控制通道、真实账号连续运行验收与脱敏日志 |
+| 微信 iLink 通道 | 已实现 | `shared/ilink-adapter.js`、`electron/weixin-bot.js`；服务器实验文本见 `scripts/ilink-text-transport.js`、`scripts/bot-worker.js` | 服务器仍缺媒体 Artifact **全链路**、二维码通道**真机/RBAC 生产级**、真实账号连续运行验收与脱敏日志（登录 API+poller 已实验接线） |
 | ModeRouter / FastRoute | 已实现 | `weixin-bot-mode.js`、命令回归测试 | 需迁入共享 Core，并补桌面/Web 契约测试 |
 | 数据 Analytics | 已实现 | `weixin-bot-analytics.js` | 位置仍属于 Electron，Web 通过 CJS 间接复用 |
 | 桌面 Agent Tools | 部分实现 | `weixin-bot-skills.js`，当前共 11 个工具 | 只覆盖部分查询/报告/导出；全项目能力矩阵见 `agent-framework-reference-and-extension-plan.md` |
@@ -60,7 +60,7 @@
 | Runner 锁 | 部分实现 | `weixin-bot-runner-lock.js` | 已有 owner/heartbeat/丢租停止；文件锁仅适用于本机，仍需账号级 DB fencing |
 | 数据迁移 | 部分实现 | `scripts/migrate.js`、`migrations/001_ilink_runtime.js`、`migrations/002_outbox_tenant_fk.js`；DB 模块 `scripts/ilink-db-lease.js`、`ilink-inbox-cursor.js`、`ilink-outbox.js` | transport 表与文本闭环已实验接线；缺集成 MySQL 演练、媒体 Artifact 管线与后续会话/审计表 |
 | Bot 状态页 | 部分实现 | `/api/bot/status` 可读 Worker 文件租约、心跳、过期和最近错误 | 仍是单机状态文件，缺 DB 账号、fencing、Inbox/Outbox 积压和真实连接状态 |
-| 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` + 可选 `BOT_ILINK_ENABLED` / `BOT_ILINK_DB_ENABLED` 文本闭环（`ilink-text-transport.js` 等） | 实验性文本+DB 已接；缺真实账号 E2E、媒体/CSV Artifact、二维码通道、shared/bot-core 与 72h 灰度；仍是服务器上线阻塞项 |
+| 服务器微信 Worker | 部分实现 | `scripts/bot-worker.js` + 可选 `BOT_ILINK_ENABLED` / `BOT_ILINK_DB_ENABLED` 文本闭环；凭据/登录 poller 实验接线 | 实验性文本+DB+登录控制已接；缺真实账号 E2E **留证**、媒体/CSV Artifact **Worker 全链路**、shared/bot-core 与 72h 灰度；仍是服务器上线阻塞项 |
 | 抖音画像 / 作品 | 未实现 | `weixin-bot-douyin-insight.js` 为桩 | 签名依赖桌面窗口；服务器只能先读缓存 |
 
 最新本地基线为 `npm test` **117/117 通过**（DB/运行环境 8、登录限流/CSRF 8、导入事务 6、迁移 15、iLink Adapter 12、Worker 4、微信/Agent 64），`npx tsc --noEmit`、`npm run lint` 和 `npm run build` 均通过。生产环境必须显式配置数据库、鉴权密钥和 `BOT_STORAGE_DIR`。

@@ -9,6 +9,9 @@
 | **智能客服架构真值** | `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`（**单 Agent + 多技能 + 微信 iLink**；非多 Agent） |
 | **项目硬规则** | 仓库根目录 `CLAUDE.md`：**唯一用户通道 = 微信 iLink**（收发消息与文件）；一 Agent 多技能 |
 | iLink 服务器进度真值 | `docs/ilink-implementation-progress.md` |
+| 进度审计 / 下一刀 | `docs/superpowers/specs/2026-07-24-project-progress-audit.md` |
+| 近周执行切片 | `docs/superpowers/plans/2026-07-24-next-execution-slice.md` |
+| S3 Artifact 规格 | `docs/superpowers/specs/2026-07-24-ilink-s3-artifact-pipeline-design.md` |
 | iLink 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md` |
 | iLink 服务器设计 | `docs/ilink-server-agent-design.md` |
 
@@ -20,7 +23,7 @@
 |------|------|
 | **P0 桌面智能内核** | **已落地，可测**（ModeRouter / analytics / 串行 / 测试绿） |
 | **P1 RAG + Web 对话** | **已落地 MVP**（BM25、`/api/agent/chat`、`/agent`） |
-| **P2 控制台 / worker** | **实验性文本 + 可选 DB transport**（env 开关；**非生产**；媒体/扫码控制面/Core 未接） |
+| **P2 控制台 / worker** | **实验性文本 + DB transport + 登录控制 API/poller**（**非生产**；媒体全链路/Core/真号留证未齐） |
 | **P3 抖音旁路** | **仅桩** |
 | **rk3318 业务库** | **隧道方案已定**；板卡尚无 `douyinxs` 库/用户时需一次建库授权 |
 | **本地防爆满** | **设计+基准已有**；**代码默认仍可能写系统盘 tmp** → 下表 L1 必做 |
@@ -90,8 +93,8 @@ console.log(await c.query('SELECT DATABASE() db, COUNT(*) c FROM information_sch
 | RAG BM25 | ✅ | `electron/weixin-bot-rag.js` · `data/rag/` |
 | Web chat API | ✅ | `src/app/api/agent/chat/route.ts` · `weixin-bot-server-agent.js` |
 | Web 页 | ✅ MVP | `/agent` `/knowledge` `/bot` |
-| 会话文件默认路径 | ⚠️ **仍默认 tmp** | `weixin-bot-session-store.js` |
-| 锁默认路径 | ⚠️ **仍默认 tmp** | `weixin-bot-runner-lock.js` |
+| 会话文件默认路径 | ✅ 默认 `data/runtime/sessions/` | `electron/local-paths.js` → `weixin-bot-session-store.js` |
+| 锁默认路径 | ✅ 默认 `data/runtime/locks/` | `electron/local-paths.js` → `weixin-bot-runner-lock.js` |
 | 板卡 douyinxs 库 | ❌ 需运维一步 | 仅 `verification` 时存在 |
 | 服务器微信长轮询 | ⚠️ **实验**（env 开关；文本 + 可选 DB） | `scripts/bot-worker.js` · `scripts/ilink-text-transport.js` · `scripts/ilink-{crypto,db-lease,inbox-cursor,outbox}.js` · `shared/ilink-adapter.js` |
 | 抖音 profile 真拉 | ❌ 桩 | `weixin-bot-douyin-insight.js` |
@@ -111,18 +114,19 @@ console.log(await c.query('SELECT DATABASE() db, COUNT(*) c FROM information_sch
 
 ---
 
-### L1 · 本地防爆满（**下一刀必做代码**，0.5～1 天）
+### L1 · 本地防爆满（**代码已落地**，文档/验收勾选）
 
-> 不依赖板卡建库；直接降低系统盘写爆风险。
+> 实现：`electron/local-paths.js`（`resolveRuntimeDir` 优先 `BOT_STORAGE_DIR` → 项目 `data/runtime` → 最后才 tmp 回落）。  
+> 仍建议显式设置 `BOT_STORAGE_DIR` 到项目盘；打包环境见 `main.js` userData/runtime 回落。
 
-| # | 任务 | 改哪里 | 完成定义 |
-|---|------|--------|----------|
-| L1.1 | 统一 runtime 根目录 | 新增 `electron/local-paths.js`：`resolveRuntimeDir()` 默认 `\<project\>/data/runtime` | 未设 env 时也不走 `os.tmpdir()` |
-| L1.2 | 会话路径 | `weixin-bot-session-store.js` 用 `resolveSessionPath()` | 文件出现在 `data/runtime/sessions/` |
-| L1.3 | 锁路径 | `weixin-bot-runner-lock.js` 用 `resolveLockPath()` | 文件出现在 `data/runtime/locks/` |
-| L1.4 | 硬顶 | 会话 20MB、RAG custom 5MB | 超额拒绝或 prune，有日志 |
-| L1.5 | 启动 doctor 一行日志 | `main.js` initialize | 打印 free 空间 + runtimeDir |
-| L1.6 | 文档 | `local-storage-plan.md` S1 勾选 | 与代码一致 |
+| # | 任务 | 改哪里 | 状态 |
+|---|------|--------|------|
+| L1.1 | 统一 runtime 根目录 | `electron/local-paths.js` | ✅ |
+| L1.2 | 会话路径 | `weixin-bot-session-store.js` | ✅ |
+| L1.3 | 锁路径 | `weixin-bot-runner-lock.js` | ✅ |
+| L1.4 | 硬顶 | 会话 20MB、RAG custom 5MB | ✅ 代码有 cap |
+| L1.5 | 启动 doctor 一行日志 | `local-paths` / storage doctor | ✅ `npm run storage:doctor` |
+| L1.6 | 文档 | `local-storage-plan.md` 与代码一致 | ⏳ 同步中 |
 
 **推荐默认 env（写进 `.env.example`）：**
 
@@ -185,7 +189,7 @@ BOT_LOCK_PATH=/Volumes/2t/it/抖音/data/runtime/locks/weixin-bot-runner.lock
 | 文档 | 问题 | 处理 |
 |------|------|------|
 | `ai-agent-production-plan.md` | §0 仍有「未实现/可开工」**过时**；§0.B 测试数 24 已旧 | **以本文 §2 为准**；下节同步补丁 |
-| `local-storage-plan.md` | S1 未编码 | **L1 执行单**即实现入口 |
+| `local-storage-plan.md` | L1 代码已落地 | 以 `electron/local-paths.js` 为准；文档勾选同步 |
 | `api-design.md` | 仅数据 `/api/v1` | 正确；Agent 路由见本文 §2 |
 | `server-and-app-design.md` | 历史「今日」表述 | 横幅已裁定业务日=昨天 |
 | 多文档并行 | 易分叉 | **落地只跟 `LANDING.md` 批次** |

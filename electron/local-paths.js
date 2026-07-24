@@ -77,6 +77,33 @@ function resolveLockPath(env = process.env) {
   return path.join(dir, "weixin-bot-runner.lock");
 }
 
+/**
+ * Local artifact staging root (iLink media / CSV / report buffers).
+ * Priority: ARTIFACT_ROOT → BOT_STORAGE_DIR/artifacts → <runtime>/artifacts
+ * Never defaults straight to os.tmpdir()/douyin-artifacts when project runtime is usable.
+ */
+function resolveArtifactRoot(env = process.env) {
+  const fromEnv = String(env.ARTIFACT_ROOT || "").trim();
+  if (fromEnv) return ensureDir(path.resolve(fromEnv));
+
+  const storage = String(env.BOT_STORAGE_DIR || "").trim();
+  if (storage) {
+    return ensureDir(path.join(path.resolve(storage), "artifacts"));
+  }
+
+  return ensureDir(path.join(resolveRuntimeDir(env), "artifacts"));
+}
+
+function artifactMaxBytes(env = process.env) {
+  const n = Number(env.ARTIFACT_MAX_BYTES);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20 * 1024 * 1024;
+}
+
+function artifactTtlMs(env = process.env) {
+  const n = Number(env.ARTIFACT_TTL_MS);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30 * 60_000;
+}
+
 function resolveWorkerStatusPath(env = process.env) {
   const fromEnv = String(env.BOT_WORKER_STATUS_PATH || "").trim();
   if (fromEnv) {
@@ -153,10 +180,12 @@ function getStorageReport(env = process.env) {
   const sessionPath = resolveSessionPath(env);
   const lockPath = resolveLockPath(env);
   const workerStatusPath = resolveWorkerStatusPath(env);
+  const artifactRoot = resolveArtifactRoot(env);
   const tmpDir = resolveLocalTmpDir(env);
   const ragCustom = resolveRagCustomPath(env);
   const freeRuntime = diskFreeBytes(runtimeDir);
   const freeHome = diskFreeBytes(os.homedir());
+  const freeArtifacts = diskFreeBytes(artifactRoot);
   const warnings = [];
   if (freeHome != null && freeHome < 5 * 1024 * 1024 * 1024) {
     warnings.push(`系统盘可用 ${formatBytes(freeHome)} < 5GB，避免写 /tmp`);
@@ -164,24 +193,31 @@ function getStorageReport(env = process.env) {
   if (sessionPath.startsWith(os.tmpdir()) || lockPath.startsWith(os.tmpdir())) {
     warnings.push("会话或锁仍落在系统临时目录");
   }
+  if (artifactRoot.startsWith(os.tmpdir())) {
+    warnings.push("Artifact 根目录落在系统临时目录；请设置 ARTIFACT_ROOT 或 BOT_STORAGE_DIR");
+  }
   return {
     runtimeDir,
     sessionPath,
     lockPath,
     workerStatusPath,
+    artifactRoot,
     tmpDir,
     ragCustomPath: ragCustom,
     freeRuntime: formatBytes(freeRuntime),
     freeHome: formatBytes(freeHome),
+    freeArtifacts: formatBytes(freeArtifacts),
     sessionMaxBytes: sessionMaxBytes(env),
     ragCustomMaxBytes: ragCustomMaxBytes(env),
+    artifactMaxBytes: artifactMaxBytes(env),
+    artifactTtlMs: artifactTtlMs(env),
     warnings,
   };
 }
 
 function logStorageReport(env = process.env, logger = console) {
   const r = getStorageReport(env);
-  const line = `[storage] runtime=${r.runtimeDir} session=${r.sessionPath} lock=${r.lockPath} homeFree=${r.freeHome} runtimeFree=${r.freeRuntime}`;
+  const line = `[storage] runtime=${r.runtimeDir} session=${r.sessionPath} lock=${r.lockPath} artifacts=${r.artifactRoot} homeFree=${r.freeHome} runtimeFree=${r.freeRuntime}`;
   if (typeof logger.log === "function") logger.log(line);
   for (const w of r.warnings) {
     if (typeof logger.warn === "function") logger.warn(`[storage] WARN ${w}`);
@@ -195,11 +231,14 @@ module.exports = {
   resolveSessionPath,
   resolveLockPath,
   resolveWorkerStatusPath,
+  resolveArtifactRoot,
   resolveLocalTmpDir,
   resolveRagCustomPath,
   sessionMaxBytes,
   sessionMaxSessions,
   ragCustomMaxBytes,
+  artifactMaxBytes,
+  artifactTtlMs,
   getStorageReport,
   logStorageReport,
   formatBytes,

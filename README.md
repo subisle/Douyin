@@ -8,6 +8,9 @@
 | --- | --- |
 | [docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md](docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md) | **微信单 Agent + 多技能架构真值** |
 | [docs/ilink-implementation-progress.md](docs/ilink-implementation-progress.md) | **实现进度真值**（代码优先，2026-07-24） |
+| [docs/superpowers/specs/2026-07-24-project-progress-audit.md](docs/superpowers/specs/2026-07-24-project-progress-audit.md) | **进度审计**（设计对照 + 下一刀） |
+| [docs/superpowers/specs/2026-07-24-ilink-s3-artifact-pipeline-design.md](docs/superpowers/specs/2026-07-24-ilink-s3-artifact-pipeline-design.md) | **S3 图片/CSV Artifact 设计规格** |
+| [docs/superpowers/plans/2026-07-24-next-execution-slice.md](docs/superpowers/plans/2026-07-24-next-execution-slice.md) | **近 1–2 周执行切片** |
 | [docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md](docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md) | **按序路线 S0–S8**（多 Agent 仅 S8 后置） |
 | [docs/server-deployment.md](docs/server-deployment.md) | 部署与实验 env 开关 |
 | [docs/ai-agent-production-plan.md](docs/ai-agent-production-plan.md) | 产品门禁与批次 |

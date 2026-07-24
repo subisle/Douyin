@@ -27,13 +27,14 @@
 
 | 阻塞项 | 当前状态 | 完成条件 |
 | --- | --- | --- |
-| 服务器 iLink Worker | 实验文本收发 + DB transport 已接；**缺**真实账号 E2E、媒体 Artifact、扫码控制通道、`shared/bot-core` | 登录/收发/重连/优雅退出 + 媒体 + Core + E2E/72h 证据 |
+| 服务器 iLink Worker | 实验文本收发 + DB transport + 登录控制实验已接；**缺**真号 E2E 留证、媒体全链路、`shared/bot-core`、72h | 登录/收发/重连/优雅退出 + 媒体 + Core + E2E/72h 证据 |
 | Core 解耦 | Web 通过 `electron/*.js` 间接加载；`shared/bot-core` 仅薄 RAG re-export | `shared/bot-core` 不依赖 Electron、Next、BrowserWindow |
-| 凭据与游标 | 桌面仍本地 JSON；服务器文本路径可走加密字段/游标事务（实验） | 加密凭据库 + 持久 `cursor_ciphertext`；重启后由 Inbox/effect 约束抑制重复业务副作用 |
+| 凭据与游标 | 桌面仍本地 JSON；服务器：加密凭据 store + seed + Worker 读库（实验）；游标事务（文本） | 无 env token 的稳定生产路径 + 真机证明；重启后 Inbox/effect 抑制重复副作用 |
+| 二维码登录控制通道 | **实验已接**：`003` 表 + `ilink-login-control` + Worker poller + `/api/bot/login/*` | 真机扫码 E2E、step-up/RBAC 生产级、Electron 应急入口、审计完备 |
 | 单账号互斥 | 文件锁仍可用；DB lease/fencing 模块已实验接线 | 跨主机演练证明同账号有效 lease 始终 `<= 1` |
-| 全功能适配 | 文本路径实验；图片/CSV Artifact 管线未接 | iLink Artifact Adapter 统一处理文本、图片、文件；失败有明确回执 |
+| 全功能适配 | 文本路径实验；Artifact **仅** local store + media policy 地基，Worker 未接 | iLink Artifact 全链路（见 S3 规格）；失败有明确回执 |
 | 服务器字体/文件 | 依赖桌面环境 | 镜像固定字体、临时目录、大小上限和清理策略 |
-| 真实运维证据 | 无连续运行记录 | 单账号 72 小时、断网/重启/抢占演练通过 |
+| 真实运维证据 | runbook 齐；缺已填 E2E/72h 记录 | 单账号 72 小时、断网/重启/抢占演练通过 |
 
 因此，目标是**工程上可实现**，但实验文本 Worker **尚未达到服务器生产完成标准**。
 
@@ -145,7 +146,7 @@ iLink getupdates batch
 
 ## 6. 数据与安全
 
-数据库结构只由 `migrations/` 定义。当前 `001_ilink_runtime` 已建立 `ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、`outbox_messages`、`artifacts` 和 `import_records`。**文本路径**已通过 `scripts/bot-worker.js` + `ilink-*` 模块实验接入 lease / Inbox / Cursor / Outbox；**媒体 Artifact 管线与二维码登录控制通道尚未接入** Poller/Dispatcher。Session、Run/Step、effect、approval、audit、知识版本和评测必须通过后续 migration 增量增加。
+数据库结构只由 `migrations/` 定义。当前 `001_ilink_runtime` 已建立 `ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、`outbox_messages`、`artifacts` 和 `import_records`；`003_ilink_login_control` 建立 `ilink_login_requests`。**文本路径**已通过 `scripts/bot-worker.js` + `ilink-*` 模块实验接入 lease / Inbox / Cursor / Outbox；**二维码登录控制通道已实验接入**（Web API → DB → Worker poller），缺真机与生产级 RBAC。**媒体 Artifact 管线尚未接入** Poller/Dispatcher（仅有 local store + policy 地基）。Session、Run/Step、effect、approval、audit、知识版本和评测必须通过后续 migration 增量增加。
 
 - 凭据使用服务器密钥加密，密钥来自 Secret Manager 或受限环境变量；数据库备份不包含明文 Token。
 - 管理员接口必须登录并按角色授权；未配置生产认证时启动失败。

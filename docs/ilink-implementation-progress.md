@@ -24,7 +24,10 @@
 | 桌面微信 Bot | **可用**（指令 + FastRoute + Agent + 日报/CSV） |
 | 服务器 Worker | **实验性文本闭环已接线**（transport + 可选 DB lease/Inbox/Outbox） |
 | 生产标签 | **不得**标记「服务器生产可用」 |
-| 正确下一阶段 | **S3 Artifact 全链路 / S1 真号实跑留证**（S2 登录通道代码已齐；勿先多 Agent） |
+| 正确下一阶段 | **S3 Artifact 全链路（S3.1 已做 → S3.2+）**；S1 有 token 再留证；**S2 扫码退出非当前门禁**（env/seed 即可）；勿先 S4/多 Agent |
+| 进度审计 | `docs/superpowers/specs/2026-07-24-project-progress-audit.md` |
+| S3 设计 | `docs/superpowers/specs/2026-07-24-ilink-s3-artifact-pipeline-design.md` |
+| 执行切片 | `docs/superpowers/plans/2026-07-24-next-execution-slice.md` |
 
 ---
 
@@ -36,14 +39,15 @@
 | 桌面 iLink 主链 | ~80% | `electron/weixin-bot*.js` |
 | `shared/ilink-adapter` | ~90% | 协议层 + 单测；媒体契约仍可增强 |
 | 服务器文本 transport | ~75% | 默认可关；明文 token 仅开发 |
-| S2 凭据加密落库 | 部分 | seed CLI + 文档；store（A1）/ Worker 读库（A2）进行中；env token 仍可用 |
+| S2 凭据加密落库 | ~80% | store + seed + Worker 读库已接线；env token 仍可作开发优先 |
+| S2 登录控制通道 | ~75% | migration 003 + login-control + login-poller + `/api/bot/login/*`；缺真机扫码 E2E / 完整 RBAC / Electron 应急入口 |
 | DB lease + fencing | ~70% | 模块+Worker 接线；缺真实双机演练记录 |
 | Inbox/Cursor 同事务 | ~70% | 仅文本；加密字段 |
 | Outbox 文本 + reclaim/resolve | ~65% | 无完整 reconcile UI；unknown 不自动重发 |
-| 图片/CSV Artifact | ~20% | 本地 store + media policy 地基；Worker 全链路未接 |
+| 图片/CSV Artifact | ~25% | store 根目录绑定 ARTIFACT_ROOT/BOT_STORAGE_DIR + media policy；Worker 全链路未接 |
 | `shared/bot-core` | ~10% | 仅 RAG 薄 re-export；业务仍在 electron |
-| Web 管理面生产化 | ~30% | `/agent` `/bot` MVP |
-| 真实账号 E2E / 72h | ~0% | 缺 runbook 证据 |
+| Web 管理面生产化 | ~35% | `/agent` `/bot` MVP + 登录控制 API 最小闭环 |
+| 真实账号 E2E / 72h | ~5% | runbook/模板齐全；**缺已填成功记录** |
 | G1–G4 生产门禁 | ~10% | 鉴权部分勾选 |
 
 ---
@@ -60,13 +64,17 @@
 | `scripts/ilink-db-lease.js` | `bot_runner_leases` fencing | ✅ |
 | `scripts/ilink-inbox-cursor.js` | 文本 Inbox + Cursor 同事务 | ✅ |
 | `scripts/ilink-outbox.js` | enqueue/claim/mark* + reclaim + resolveUnknown | ✅ |
-| `scripts/ilink-account-credentials.js` | `createAccountCredentialStore` 加解密凭据 | ⏳ A1 进行中/依赖合并 |
-| `scripts/ilink-seed-credential.js` | 运维 seed：env token → 加密落库 | ✅ 脚本+文档（依赖 A1 store） |
-| `scripts/bot-worker.js` | 文件锁 **或** DB 模式文本闭环 | ✅ 实验 |
+| `scripts/ilink-account-credentials.js` | `createAccountCredentialStore` 加解密凭据 | ✅ |
+| `scripts/ilink-seed-credential.js` | 运维 seed：env token → 加密落库 | ✅ |
+| `scripts/ilink-login-control.js` | 登录请求 claim/结果加密 | ✅ |
+| `scripts/ilink-login-poller.js` | Worker 侧扫码槽轮询 | ✅ 接线 bot-worker |
+| `src/app/api/bot/login/*` | start/status/cancel | ✅ 最小鉴权 API |
+| `scripts/bot-worker.js` | 文件锁 **或** DB 模式文本闭环 + 可选 login poller | ✅ 实验 |
 | `migrations/001_ilink_runtime.js` | transport 表 | ✅ schema |
 | `migrations/002_outbox_tenant_fk.js` | outbox FK | ✅ schema |
-| `scripts/ilink-artifact-store.js` | 本地 Artifact staging/GC | ✅ S3 地基 |
-| `scripts/ilink-media-policy.js` | CDN/MIME/大小策略 | ✅ S3 地基 |
+| `migrations/003_ilink_login_control.js` | `ilink_login_requests` | ✅ schema |
+| `scripts/ilink-artifact-store.js` | 本地 Artifact staging/GC | ✅ S3 地基（未接 worker） |
+| `scripts/ilink-media-policy.js` | CDN/MIME/大小策略 | ✅ S3 地基（未接 worker） |
 
 ### 3.2 桌面主链（未替代）
 
@@ -109,7 +117,7 @@ npm run test:weixin-bot
 | iLink P0 Adapter | 协议抽出 | ✅ |
 | iLink P1 文本收发 | Worker 真 poll | ✅ 实验文本 |
 | iLink P1 DB transport | lease/Inbox/Outbox | ✅ 文本；❌ 媒体 Artifact |
-| iLink P1 二维码通道 | Web→DB→Worker | ❌ |
+| iLink P1 二维码通道 | Web→DB→Worker | ⚠️ 实验 API+poller 已接；缺真机 E2E/RBAC 生产级 |
 | iLink P2 会话/知识 MySQL | 生产基建 | ❌ / 部分鉴权 |
 | iLink P3 72h 灰度 | 生产标签 | ❌ |
 | 生产 B1 Core | `shared/bot-core` | ❌ |
@@ -125,10 +133,10 @@ npm run test:weixin-bot
 `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md`
 
 ```text
-S0 文档对齐（进行中）
-S1 真实账号文本 E2E + runbook
-S2 凭据加密 + 二维码控制通道  ← 部分：seed+store（A3/A1）；A2 Worker 读库 / B 登录通道未完
-S3 图片/CSV Artifact
+S0 文档对齐          ← 基本完成；残留漂移见 progress-audit
+S1 真实账号文本 E2E  ← runbook 齐；缺填表留证
+S2 凭据 + 扫码通道   ← 代码 ~75% 完成；退出准则未证
+S3 图片/CSV Artifact ← 地基 20%；规格见 ilink-s3-artifact-pipeline-design
 S4 shared/bot-core
 S5 Session/Run/Step/Effect
 S6 Web 控制面 + Bot DB 状态
@@ -136,7 +144,7 @@ S7 门禁与 24h+72h → 才可标生产
 S8 扩展（Catalog / 调度 / 多 Agent）
 ```
 
-**硬规则：** 未完成 S7 不得宣称服务器生产可用；S1 前不做 Core 大迁与多 Agent。
+**硬规则：** 未完成 S7 不得宣称服务器生产可用；S2 退出前不做 Core 大迁与多 Agent。
 
 ---
 
@@ -163,11 +171,11 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 
 ## 8. 阻塞项（上生产前）
 
-1. 真实账号文字 E2E 与双 Worker 抢租约记录  
-2. 加密凭据 + 扫码控制面（去掉明文 token 生产路径；S2 部分：seed 已有，store/Worker/登录通道未齐）  
-3. 图片/CSV Artifact 全链路  
+1. 图片/CSV Artifact **Worker 全链路**（当前主阻塞；S3.1 根目录已做）  
+2. 真实账号文字 E2E 留证（有 token 时；不阻塞 S3 编码）  
+3. S2 扫码换号路径（**非当前必做**；代码保留，后置真机）  
 4. `shared/bot-core` 与 API 脱离 `electron/*`  
-5. 72h + G1–G4 证据  
+5. 72h + G1–G4 证据 
 
 ---
 
@@ -181,3 +189,6 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 2026-07-24 | S2 登录通道：login-control store + login-poller + `/api/bot/login/*`；仍实验 |
 | 2026-07-24 | S3 地基：local artifact store + media policy 校验 |
 | 2026-07-24 | 硬规则：`CLAUDE.md` 冻结微信 iLink 为唯一用户通道（含收发文件） |
+| 2026-07-24 | 刷新：S2 登录/凭据代码已齐；S1 缺留证；S3 规格+进度审计+执行切片 |
+| 2026-07-24 | 进度审计 v1.1：并入多代理 Verify 附录；关键文档漂移已修 |
+| 2026-07-24 | S3.1：Artifact 根目录 `resolveArtifactRoot` + store 默认不再裸写 tmp |
