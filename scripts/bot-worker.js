@@ -20,6 +20,10 @@ const {
   releaseRunnerLock,
 } = require("../electron/weixin-bot-runner-lock");
 const { resolveWorkerStatusPath } = require("../electron/local-paths");
+const {
+  createIlinkTextTransport,
+  loadTransportConfig,
+} = require("./ilink-text-transport");
 
 const DEFAULT_LEASE_TTL_MS = 120_000;
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -77,6 +81,19 @@ function writeStatusFile(file, state) {
   }
 }
 
+function mergeTransportState(transportState) {
+  if (!transportState || typeof transportState !== "object") return {};
+  return {
+    transport: transportState.phase || "disabled",
+    transportAccountId: transportState.accountId ?? null,
+    lastPollAt: transportState.lastPollAt ?? null,
+    lastInboundAt: transportState.lastInboundAt ?? null,
+    lastOutboundAt: transportState.lastOutboundAt ?? null,
+    receivedCount: Number(transportState.receivedCount) || 0,
+    sentCount: Number(transportState.sentCount) || 0,
+  };
+}
+
 function createBotWorker(options = {}) {
   const env = options.env || process.env;
   const logger = options.logger || console;
@@ -103,10 +120,24 @@ function createBotWorker(options = {}) {
   );
   const heartbeatMs = Math.min(configuredHeartbeatMs, Math.max(5, Math.floor(leaseTtlMs / 2)));
   const statusPath = String(options.statusPath || env.BOT_WORKER_STATUS_PATH || "").trim();
+  const transportConfig =
+    options.transportConfig || loadTransportConfig({ env });
+  const createTransportFactory =
+    options.createTransport ||
+    ((config) =>
+      createIlinkTextTransport({
+        config,
+        env,
+        onEvent: (event) => {
+          if (event?.type === "state") applyTransportState(event.state);
+        },
+      }));
+
   let heartbeatTimer = null;
   let exitRequested = false;
   let leaseLost = false;
   let lease = null;
+  let transport = null;
   let state = {
     phase: "starting",
     runner,
@@ -118,6 +149,13 @@ function createBotWorker(options = {}) {
     lastError: null,
     leaseExpiresAt: null,
     persistence: "not_connected",
+    transport: "disabled",
+    transportAccountId: null,
+    lastPollAt: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
+    receivedCount: 0,
+    sentCount: 0,
   };
 
   function snapshot() {
@@ -129,6 +167,8 @@ function createBotWorker(options = {}) {
       ...state,
       ...next,
       phase: normalizePhase(next.phase || state.phase),
+      // persistence stays not_connected until a durable store is wired
+      persistence: "not_connected",
     };
     try {
       writeStatusFile(statusPath, snapshot());
@@ -147,6 +187,10 @@ function createBotWorker(options = {}) {
     return snapshot();
   }
 
+  function applyTransportState(transportState) {
+    return update(mergeTransportState(transportState));
+  }
+
   function callOptions() {
     return {
       runner,
@@ -159,6 +203,67 @@ function createBotWorker(options = {}) {
   function stopHeartbeat() {
     if (heartbeatTimer != null) timers.clearInterval(heartbeatTimer);
     heartbeatTimer = null;
+  }
+
+  function stopTransport() {
+    if (!transport) return;
+    const current = transport;
+    transport = null;
+    try {
+      const result = current.stop?.();
+      // Prefer getState after stop() is invoked; mocks often mutate sync then return a Promise.
+      const after = current.getState?.();
+      if (after) {
+        applyTransportState(after);
+        return;
+      }
+      if (result && typeof result.then === "function") {
+        result.then(
+          (stopped) => applyTransportState(stopped || { phase: "stopped" }),
+          () => applyTransportState({ phase: "stopped" })
+        );
+        return;
+      }
+      applyTransportState(result || { phase: "stopped" });
+    } catch {
+      applyTransportState(current.getState?.() || { phase: "stopped" });
+    }
+  }
+
+  function startTransport() {
+    if (!transportConfig?.enabled || !String(transportConfig.token || "").trim()) {
+      return;
+    }
+    if (transport || leaseLost || state.phase !== "running") return;
+    try {
+      const factory = createTransportFactory;
+      transport = factory(transportConfig);
+      const started = transport.start?.();
+      const mergeFrom = () => {
+        if (leaseLost || state.phase === "stopped" || state.phase === "lease_lost") {
+          return;
+        }
+        applyTransportState(transport?.getState?.() || { phase: "polling" });
+      };
+      if (started && typeof started.then === "function") {
+        started.then(
+          () => mergeFrom(),
+          (error) => {
+            update({
+              lastError: `iLink transport 启动失败：${safeError(error)}`,
+              transport: "error",
+            });
+          }
+        );
+      } else {
+        mergeFrom();
+      }
+    } catch (error) {
+      update({
+        lastError: `iLink transport 启动失败：${safeError(error)}`,
+        transport: "error",
+      });
+    }
   }
 
   function requestExit(code, reason) {
@@ -178,6 +283,7 @@ function createBotWorker(options = {}) {
     if (leaseLost || state.phase === "stopped") return snapshot();
     leaseLost = true;
     stopHeartbeat();
+    stopTransport();
     lease = null;
     const message = `Runner 租约失效：${String(reason || "续租失败")}`;
     update({ phase: "lease_lost", lastError: message, stoppedAt: new Date().toISOString() });
@@ -234,12 +340,16 @@ function createBotWorker(options = {}) {
       leaseExpiresAt: leaseExpiryIso(acquired.lease?.expiresAt, Date.now() + leaseTtlMs),
     });
     heartbeatTimer = timers.setInterval(renewNow, heartbeatMs);
+    // Keep start() synchronous: create/start transport without awaiting.
+    // Injected createTransport.start may return a Promise; state merges when it settles.
+    startTransport();
     return snapshot();
   }
 
   function stop({ exitCode = 0 } = {}) {
     if (state.phase === "stopped") return snapshot();
     stopHeartbeat();
+    stopTransport();
     const ownedLease = lease && !leaseLost;
     lease = null;
     if (ownedLease) {
@@ -273,7 +383,11 @@ function createBotWorker(options = {}) {
 }
 
 function main() {
-  const worker = createBotWorker({ statusPath: resolveWorkerStatusPath() });
+  const transportConfig = loadTransportConfig();
+  const worker = createBotWorker({
+    statusPath: resolveWorkerStatusPath(),
+    transportConfig,
+  });
   try {
     worker.start();
   } catch (error) {
@@ -281,8 +395,15 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  console.log("[bot-worker] lease acquired; server iLink adapter is not configured");
-  console.log("[bot-worker] Inbox/Outbox polling remains disabled until account and adapter configuration is present");
+
+  if (!transportConfig.enabled) {
+    console.log("[bot-worker] lease acquired; iLink text transport disabled");
+  } else if (!String(transportConfig.token || "").trim()) {
+    console.log("[bot-worker] lease acquired; iLink text transport not_configured (missing token)");
+  } else {
+    console.log("[bot-worker] lease acquired; iLink text transport starting");
+  }
+  console.log("[bot-worker] persistence remains not_connected until durable store is wired");
 
   let shuttingDown = false;
   const shutdown = (signal) => {

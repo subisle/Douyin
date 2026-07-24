@@ -222,3 +222,153 @@ test("acquisition failure records error and requests a non-zero exit", () => {
   assert.match(worker.getState().lastError, /lease occupied/);
   assert.deepEqual(exits, [1]);
 });
+
+test("worker starts text transport after lease when enabled", async () => {
+  const timers = createTimers();
+  const transportCalls = [];
+  let transportPhase = "stopped";
+  const worker = createBotWorker({
+    runner: "server",
+    ownerId: "worker-owner",
+    lockFile: "/tmp/fixture-runner.lock",
+    heartbeatMs: 10,
+    leaseTtlMs: 100,
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: {
+      acquire: (options) => ({
+        ok: true,
+        file: options.file,
+        lease: { ownerId: options.ownerId, expiresAt: Date.parse("2026-07-23T12:00:00.000Z") },
+      }),
+      renew: () => ({ ok: true, lease: { ownerId: "worker-owner", expiresAt: "2026-07-23T12:01:00.000Z" } }),
+      release: () => ({ ok: true }),
+    },
+    createTransport: (config) => {
+      transportCalls.push({ type: "create", config });
+      return {
+        async start() {
+          transportPhase = "polling";
+          transportCalls.push({ type: "start" });
+          return { phase: "polling" };
+        },
+        async stop() {
+          transportPhase = "stopped";
+          transportCalls.push({ type: "stop" });
+          return { phase: "stopped" };
+        },
+        getState: () => ({
+          phase: transportPhase,
+          updatesBuf: "c1",
+          accountId: "acc-1",
+          lastPollAt: "2026-07-23T12:00:00.000Z",
+          lastInboundAt: null,
+          lastOutboundAt: null,
+          lastError: null,
+          receivedCount: 0,
+          sentCount: 0,
+        }),
+      };
+    },
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      accountId: "acc-1",
+      ackText: "收到",
+    },
+  });
+
+  assert.equal(worker.start().phase, "running");
+  await delay(10);
+  assert.equal(worker.getState().transport, "polling");
+  assert.equal(worker.getState().persistence, "not_connected");
+  assert.equal(worker.getState().transportAccountId, "acc-1");
+  assert.deepEqual(
+    transportCalls.map((c) => c.type),
+    ["create", "start"]
+  );
+
+  assert.equal(worker.stop().phase, "stopped");
+  assert.ok(transportCalls.some((c) => c.type === "stop"));
+  assert.equal(worker.getState().transport, "stopped");
+});
+
+test("worker without transport config keeps transport disabled", () => {
+  const timers = createTimers();
+  const worker = createBotWorker({
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: {
+      acquire: () => ({
+        ok: true,
+        file: "LOCK",
+        lease: { ownerId: "o", expiresAt: "2026-07-23T12:00:00.000Z" },
+      }),
+      renew: () => ({ ok: true, lease: { ownerId: "o", expiresAt: "2026-07-23T12:01:00.000Z" } }),
+      release: () => ({ ok: true }),
+    },
+  });
+  worker.start();
+  assert.equal(worker.getState().transport, "disabled");
+  assert.equal(worker.getState().persistence, "not_connected");
+  worker.stop();
+});
+
+test("lease loss stops transport before exit", () => {
+  const timers = createTimers();
+  const transportCalls = [];
+  const worker = createBotWorker({
+    ownerId: "worker-owner",
+    heartbeatMs: 10,
+    leaseTtlMs: 100,
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: {
+      acquire: () => ({
+        ok: true,
+        file: "LOCK",
+        lease: { ownerId: "worker-owner", expiresAt: "2026-07-23T12:00:00.000Z" },
+      }),
+      renew: () => ({ ok: false, error: "lease taken over" }),
+      release: () => ({ ok: true }),
+    },
+    createTransport: () => ({
+      async start() {
+        transportCalls.push("start");
+        return { phase: "polling" };
+      },
+      async stop() {
+        transportCalls.push("stop");
+        return { phase: "stopped" };
+      },
+      getState: () => ({
+        phase: "polling",
+        updatesBuf: "",
+        accountId: null,
+        lastPollAt: null,
+        lastInboundAt: null,
+        lastOutboundAt: null,
+        lastError: null,
+        receivedCount: 0,
+        sentCount: 0,
+      }),
+    }),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+  });
+
+  worker.start();
+  // 若 transport 异步启动，先给一拍
+  // 然后 fire renew 失败
+  timers.fire();
+  assert.equal(worker.getState().phase, "lease_lost");
+  assert.ok(transportCalls.includes("stop"));
+});
