@@ -173,3 +173,130 @@ test("stop aborts in-flight getUpdates", async () => {
   assert.equal(aborted, true);
   assert.equal(transport.getState().phase, "stopped");
 });
+
+test("persistBatch success advances cursor and receives staged messages", async () => {
+  const batches = [];
+  let pollCount = 0;
+  const adapter = {
+    async getUpdates(options) {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return {
+          errcode: 0,
+          get_updates_buf: "cursor-2",
+          msgs: [{
+            message_type: 1,
+            from_user_id: "user-a",
+            context_token: "ctx-1",
+            message_id: "m1",
+            group_id: "g1",
+            item_list: [{ type: 1, text_item: { text: "hello" } }],
+          }],
+        };
+      }
+      return new Promise((_, reject) => {
+        const signal = options.signal;
+        const onAbort = () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+    async sendMessage() {
+      return { errcode: 0 };
+    },
+  };
+
+  const transport = createIlinkTextTransport({
+    adapter,
+    config: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      updatesBuf: "cursor-1",
+      ackText: "收到",
+    },
+    sleep: async () => {},
+    async persistBatch(batch) {
+      batches.push(batch);
+    },
+  });
+
+  const p = transport.start();
+  await delay(40);
+  await transport.stop();
+  await p;
+
+  assert.equal(batches.length, 1);
+  assert.equal(batches[0].updatesBuf, "cursor-2");
+  assert.equal(batches[0].messages.length, 1);
+  assert.equal(batches[0].messages[0].text, "hello");
+  assert.equal(batches[0].messages[0].fromUserId, "user-a");
+  assert.equal(batches[0].messages[0].upstreamMessageId, "m1");
+  assert.equal(batches[0].messages[0].groupId, "g1");
+  assert.equal(batches[0].messages[0].contextToken, "ctx-1");
+  assert.equal(transport.getState().updatesBuf, "cursor-2");
+});
+
+test("persistBatch failure keeps cursor and records lastError", async () => {
+  let pollCount = 0;
+  const adapter = {
+    async getUpdates(options) {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return {
+          errcode: 0,
+          get_updates_buf: "cursor-2",
+          msgs: [{
+            message_type: 1,
+            from_user_id: "user-a",
+            context_token: "ctx-1",
+            message_id: "m1",
+            item_list: [{ type: 1, text_item: { text: "hello" } }],
+          }],
+        };
+      }
+      return new Promise((_, reject) => {
+        const signal = options.signal;
+        const onAbort = () => {
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+    async sendMessage() {
+      return { errcode: 0 };
+    },
+  };
+
+  const transport = createIlinkTextTransport({
+    adapter,
+    config: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      updatesBuf: "cursor-1",
+      ackText: "收到",
+    },
+    sleep: async () => {},
+    async persistBatch() {
+      throw new Error("db down");
+    },
+  });
+
+  const p = transport.start();
+  await delay(40);
+  await transport.stop();
+  await p;
+
+  assert.equal(transport.getState().updatesBuf, "cursor-1");
+  assert.match(String(transport.getState().lastError || ""), /db down/);
+});

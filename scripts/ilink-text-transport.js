@@ -94,6 +94,8 @@ function createIlinkTextTransport(options = {}) {
     typeof options.onText === "function"
       ? options.onText
       : async () => (config.ackText ? config.ackText : "");
+  const persistBatch =
+    typeof options.persistBatch === "function" ? options.persistBatch : null;
 
   let controller = null;
   let loopPromise = null;
@@ -165,35 +167,45 @@ function createIlinkTextTransport(options = {}) {
   }
 
   async function handleMessage(raw) {
-    if (Number(raw?.message_type) !== 1) return;
+    if (Number(raw?.message_type) !== 1) return null;
     const fromUserId = String(raw.from_user_id || "").trim();
-    if (!fromUserId) return;
+    if (!fromUserId) return null;
     const text = extractText(raw);
-    if (!text) return;
+    if (!text) return null;
     const contextToken = String(raw.context_token || "").trim();
     const groupId = String(raw.group_id || "").trim();
+    const upstreamMessageId = String(raw.message_id || raw.client_id || "").trim();
     setState({
       receivedCount: state.receivedCount + 1,
       lastInboundAt: new Date().toISOString(),
     });
     onEvent({ type: "inbound", text, fromUserId, groupId });
-    if (!contextToken) return;
-    const reply = await onText({
-      text,
+    if (contextToken) {
+      const reply = await onText({
+        text,
+        fromUserId,
+        groupId,
+        contextToken,
+        raw,
+        sendText,
+      });
+      const out = String(reply ?? "").trim();
+      if (out) {
+        await sendText({
+          toUserId: fromUserId,
+          contextToken,
+          groupId: groupId || undefined,
+          text: out,
+        });
+      }
+    }
+    return {
+      upstreamMessageId: upstreamMessageId || null,
       fromUserId,
-      groupId,
+      groupId: groupId || "",
       contextToken,
-      raw,
-      sendText,
-    });
-    const out = String(reply ?? "").trim();
-    if (!out) return;
-    await sendText({
-      toUserId: fromUserId,
-      contextToken,
-      groupId: groupId || undefined,
-      text: out,
-    });
+      text,
+    };
   }
 
   async function pollLoop() {
@@ -228,13 +240,42 @@ function createIlinkTextTransport(options = {}) {
           timeoutMs = Math.min(65_000, Math.max(5_000, suggested + 3_000));
         }
 
+        const stagedMeta = [];
         for (const message of Array.isArray(response.msgs) ? response.msgs : []) {
           if (controller.signal.aborted) break;
-          await handleMessage(message);
+          const staged = await handleMessage(message);
+          if (staged) stagedMeta.push(staged);
         }
 
         const nextBuf = String(response.get_updates_buf || "");
-        if (nextBuf && nextBuf !== state.updatesBuf) {
+        const cursorChanged = Boolean(nextBuf && nextBuf !== state.updatesBuf);
+        const shouldPersist = Boolean(persistBatch) && (cursorChanged || stagedMeta.length > 0);
+
+        if (shouldPersist) {
+          try {
+            await persistBatch({
+              updatesBuf: nextBuf || state.updatesBuf || "",
+              messages: stagedMeta,
+            });
+          } catch (error) {
+            setState({
+              lastPollAt: new Date().toISOString(),
+              lastError: error?.message || String(error),
+            });
+            // Keep in-memory cursor unchanged so the batch can be retried.
+            consecutiveFailures += 1;
+            const backoffMs = consecutiveFailures >= 3 ? 30_000 : 2_000;
+            if (consecutiveFailures >= 3) consecutiveFailures = 0;
+            try {
+              await sleep(backoffMs, controller.signal);
+            } catch {
+              break;
+            }
+            continue;
+          }
+        }
+
+        if (cursorChanged) {
           setState({
             updatesBuf: nextBuf,
             lastPollAt: new Date().toISOString(),
