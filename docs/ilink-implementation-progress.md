@@ -175,3 +175,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 2026-07-24 | 初版：对齐 615 上实验性文本+DB transport 实现 |
 | 2026-07-24 | S2 部分：`bot:seed-credential` + credential seed runbook；凭据 store/Worker 读库仍进行中 |
 | 2026-07-24 | 用户智能真值：`weixin-single-agent-skills-design`；入口文档对齐 |
+| 2026-07-24 | S2 登录通道：login-control store + login-poller + `/api/bot/login/*`；仍实验 |
