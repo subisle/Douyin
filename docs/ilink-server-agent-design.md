@@ -2,9 +2,9 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 版本 | v1.2 |
-| 核对日期 | 2026-07-23 |
-| 结论 | **可落地，但当前代码尚未达到服务器生产条件** |
+| 版本 | v1.3 |
+| 核对日期 | 2026-07-24 |
+| 结论 | **可落地，但当前代码尚未达到服务器生产条件**（实验文本 Worker 可开关，非生产） |
 | 通道约束 | **只使用微信 iLink；不引入公众号、企业微信、Webhook 或其他 IM 通道** |
 | 适用范围 | 抖音数据查询、CSV 导入、日报图片、CSV 导出、帮助/RAG、Agent、账号管理、服务器部署 |
 
@@ -14,24 +14,25 @@
 
 ### 1.1 已具备的基础
 
-- `electron/weixin-bot.js` 已实现 iLink 二维码登录、`getupdates` 长轮询、文本发送、媒体上传和图片/文件发送。
+- `electron/weixin-bot.js` 已实现 iLink 二维码登录、`getupdates` 长轮询、文本发送、媒体上传和图片/文件发送（桌面主链仍是生产路径）。
 - `shared/ilink-adapter.js` 已抽出无 Electron 的 iLink HTTP 协议层，覆盖二维码、状态、长轮询、上传地址和消息发送，并对 API origin、路径、方法、query、redirect、超时和响应大小做白名单校验。
-- 业务路由、FastRoute、Agent Tool、CSV 解析、日报生成、会话串行已有可复用实现。
+- `scripts/bot-worker.js` 已具备**可开关的实验文本闭环**：可选 iLink 文本 transport（长轮询 + ack + 出站），以及可选 MySQL lease / Inbox / Outbox 接线（模块见 `scripts/ilink-text-transport.js`、`ilink-crypto.js`、`ilink-db-lease.js`、`ilink-inbox-cursor.js`、`ilink-outbox.js`）。默认可关；**非生产标签**。
+- 业务路由、FastRoute、Agent Tool、CSV 解析、日报生成、会话串行已有可复用实现（仍主要在 electron 侧）。
 - Next.js、MySQL、Node.js 运行环境适合拆出无窗口的服务器进程。
 
 ### 1.2 必须先补齐的阻塞项
 
 | 阻塞项 | 当前状态 | 完成条件 |
 | --- | --- | --- |
-| 服务器 iLink Worker | `scripts/bot-worker.js` 仍只保活锁；协议 Adapter 已存在但尚未接线 | Worker 直接调用 iLink Adapter，能登录、收发、重连、优雅退出 |
-| Core 解耦 | Web 通过 `electron/*.js` 间接加载 | `shared/bot-core` 不依赖 Electron、Next、BrowserWindow |
-| 凭据与游标 | 凭据本地 JSON，游标跟随账号进程 | 加密凭据库 + 持久 `cursor_ciphertext`；重启后由 Inbox/effect 约束抑制重复业务副作用 |
-| 单账号互斥 | 本机文件锁 | MySQL 账号租约 + fencing token，跨主机只有一个 runner |
-| 全功能适配 | Web 目前不直接推 PNG/CSV | iLink Artifact Adapter 统一处理文本、图片、文件；失败有明确回执 |
+| 服务器 iLink Worker | 实验文本收发 + DB transport 已接；**缺**真实账号 E2E、媒体 Artifact、扫码控制通道、`shared/bot-core` | 登录/收发/重连/优雅退出 + 媒体 + Core + E2E/72h 证据 |
+| Core 解耦 | Web 通过 `electron/*.js` 间接加载；`shared/bot-core` 仅薄 RAG re-export | `shared/bot-core` 不依赖 Electron、Next、BrowserWindow |
+| 凭据与游标 | 桌面仍本地 JSON；服务器文本路径可走加密字段/游标事务（实验） | 加密凭据库 + 持久 `cursor_ciphertext`；重启后由 Inbox/effect 约束抑制重复业务副作用 |
+| 单账号互斥 | 文件锁仍可用；DB lease/fencing 模块已实验接线 | 跨主机演练证明同账号有效 lease 始终 `<= 1` |
+| 全功能适配 | 文本路径实验；图片/CSV Artifact 管线未接 | iLink Artifact Adapter 统一处理文本、图片、文件；失败有明确回执 |
 | 服务器字体/文件 | 依赖桌面环境 | 镜像固定字体、临时目录、大小上限和清理策略 |
 | 真实运维证据 | 无连续运行记录 | 单账号 72 小时、断网/重启/抢占演练通过 |
 
-因此，目标是**工程上可实现**，但当前占位 Worker 尚未达到完成标准。
+因此，目标是**工程上可实现**，但实验文本 Worker **尚未达到服务器生产完成标准**。
 
 ## 2. 产品边界与“全部功能”定义
 
@@ -141,7 +142,7 @@ iLink getupdates batch
 
 ## 6. 数据与安全
 
-数据库结构只由 `migrations/` 定义。当前 `001_ilink_runtime` 已建立 `ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、`outbox_messages`、`artifacts` 和 `import_records`；这些表尚未接入当前 Poller/Dispatcher。Session、Run/Step、effect、approval、audit、知识版本和评测必须通过后续 migration 增量增加。
+数据库结构只由 `migrations/` 定义。当前 `001_ilink_runtime` 已建立 `ilink_accounts`、`ilink_update_cursors`、`bot_runner_leases`、`inbox_messages`、`outbox_messages`、`artifacts` 和 `import_records`。**文本路径**已通过 `scripts/bot-worker.js` + `ilink-*` 模块实验接入 lease / Inbox / Cursor / Outbox；**媒体 Artifact 管线与二维码登录控制通道尚未接入** Poller/Dispatcher。Session、Run/Step、effect、approval、audit、知识版本和评测必须通过后续 migration 增量增加。
 
 - 凭据使用服务器密钥加密，密钥来自 Secret Manager 或受限环境变量；数据库备份不包含明文 Token。
 - 管理员接口必须登录并按角色授权；未配置生产认证时启动失败。
@@ -204,14 +205,16 @@ iLink getupdates batch
 
 ## 10. 首个执行清单
 
+实现进度真值见 `docs/ilink-implementation-progress.md`；顺序路线见 `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md`。
+
 - [x] 建立 migration runner 和 `001_ilink_runtime` transport schema，并通过 checksum、锁和历史校验单测。
 - [x] 在 `docs/adr/0001-agent-runtime-contract.md` 冻结 `AgentResult`、拓扑、可靠性语义和实施顺序。
-- [ ] 在集成 MySQL 执行 migration、备份和恢复演练，并把 lease/fencing、Inbox/Cursor、Artifact、Outbox 接入运行链路。
+- [~] lease/fencing、Inbox/Cursor、Outbox **文本实验路径**已接入 `bot-worker`（env 可关）；**Artifact 仍未接**；集成 MySQL 备份/恢复演练与双机 fencing 证据仍缺。
 - [x] 从 `electron/weixin-bot.js` 抽出无 Electron 的 iLink HTTP Adapter；完成精确 API origin/路径/方法/query allowlist、redirect、超时、响应上限和 typed session-expired 协议测试。
 - [ ] 将媒体加密、CDN 收发和 Artifact 生命周期收敛到服务器可复用的 Artifact Adapter，并完成真实文字/图片/CSV E2E。
 - [ ] 建立受 step-up/RBAC 保护的 Web -> MySQL -> Worker 二维码控制通道；二维码、challenge 和结果均短 TTL、no-store、可审计。
 - [ ] 实现 dedupe-before-stage、幂等 staging、事务绑定和孤儿 Artifact GC，并完成崩溃点测试。
-- [ ] 把 `scripts/bot-worker.js` 从占位进程改为真实 Poller/Workflow/Outbox 进程。
+- [~] `scripts/bot-worker.js`：**文本实验 Poller/Outbox ✅**（transport + 可选 DB）；**媒体 / Workflow / Core 业务分发 ❌**。
 - [ ] 让 Electron/Web/Worker Adapter 全部实现 ADR 的 `AgentResult` 与 Artifact 发送契约。
 - [ ] 完成真实微信账号的文字、图片、CSV E2E 与 72 小时记录。
 - [ ] 更新 `server-deployment.md` 的服务编排、持久卷、Secret 和健康检查。
