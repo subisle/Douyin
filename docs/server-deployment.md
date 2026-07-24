@@ -7,7 +7,7 @@
 > 本文为 Next/pm2/nginx **部署基线**。
 > 生产目标只使用微信 iLink 通道，服务端 Worker 是必选进程。专项架构、游标、幂等和验收见 `docs/ilink-server-agent-design.md`；实施门槛见 `docs/ai-agent-production-plan.md`。同一微信账号严禁由桌面 Electron 与服务器 Worker 同时运行。
 
-> 当前 `scripts/bot-worker.js` 已可选接入**实验性 iLink 文本 transport**（长轮询 + 文本回执），但 **`persistence` 仍为 `not_connected`**，无 durable Inbox/Outbox/DB lease fencing，**不得标记为生产可用**。完整媒体收发与 P0–P3 仍见 `docs/ilink-server-agent-design.md`。
+> 当前 `scripts/bot-worker.js` 已可选接入**实验性 iLink 文本 transport**，并可选用 **MySQL 账号租约（fencing）+ 文本 Inbox/Cursor 同事务**。仍 **无 Outbox Dispatcher、无图片/CSV Artifact、无 Agent Core**，**不得标记为生产可用**。完整 P0–P3 见 `docs/ilink-server-agent-design.md`。
 
 ### 实验性文本 transport（默认关闭）
 
@@ -25,12 +25,33 @@ BOT_ILINK_TOKEN=...                 # 明文 token；生产后续改加密库
 # BOT_ILINK_POLL_TIMEOUT_MS=35000
 ```
 
+### 实验性 MySQL lease + Inbox/Cursor（默认关闭）
+
+在文本 transport 之上，可选把账号互斥与入站文本落到 `001_ilink_runtime` 表：
+
+```env
+BOT_ILINK_DB_ENABLED=1
+BOT_RUNTIME_SECRET=at-least-16-chars   # AES 字段密钥；缺省则 DB 模式 fail closed
+BOT_ILINK_WORKSPACE_ID=default
+BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / default
+# 以及既有 DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+# 先执行: npm run db:migrate
+```
+
+行为摘要：
+
+| 模式 | 租约 | 入站持久化 | status.persistence |
+| --- | --- | --- | --- |
+| 默认 | 本机文件锁 | 无（内存/可选 cursor 文件） | `not_connected` |
+| `BOT_ILINK_ENABLED` 仅开 | 文件锁 | 无 | `not_connected` |
+| 再开 `BOT_ILINK_DB_ENABLED` | MySQL `bot_runner_leases` + fencing | 文本 `inbox_messages` + `ilink_update_cursors` 同事务 | `mysql` |
+
 约束：
 
-- 状态文件字段 `transport` 与 `persistence` 分离；`persistence` 固定 `not_connected`，不表示消息已持久化。
+- `transport` 与 `persistence` 分离；`mysql` 只表示入站文本/游标可落库，**不**表示 Outbox/全链路生产就绪。
 - **禁止**与桌面 Electron 同账号同时运行。
-- 仅文本；无图片/CSV/Agent/MySQL transport 表接线。
-
+- 仅文本；无图片/CSV/Agent；无 Outbox 发送与 reconcile。
+- 双 Worker 同 `workspace+account`：仅持有效 lease 的一方可 poll；丢租停 transport。
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。
