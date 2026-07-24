@@ -32,6 +32,7 @@
 | 桌面 iLink 主链 | ~80% | `electron/weixin-bot*.js` |
 | `shared/ilink-adapter` | ~90% | 协议层 + 单测；媒体契约仍可增强 |
 | 服务器文本 transport | ~75% | 默认可关；明文 token 仅开发 |
+| S2 凭据加密落库 | 部分 | seed CLI + 文档；store（A1）/ Worker 读库（A2）进行中；env token 仍可用 |
 | DB lease + fencing | ~70% | 模块+Worker 接线；缺真实双机演练记录 |
 | Inbox/Cursor 同事务 | ~70% | 仅文本；加密字段 |
 | Outbox 文本 + reclaim/resolve | ~65% | 无完整 reconcile UI；unknown 不自动重发 |
@@ -55,6 +56,8 @@
 | `scripts/ilink-db-lease.js` | `bot_runner_leases` fencing | ✅ |
 | `scripts/ilink-inbox-cursor.js` | 文本 Inbox + Cursor 同事务 | ✅ |
 | `scripts/ilink-outbox.js` | enqueue/claim/mark* + reclaim + resolveUnknown | ✅ |
+| `scripts/ilink-account-credentials.js` | `createAccountCredentialStore` 加解密凭据 | ⏳ A1 进行中/依赖合并 |
+| `scripts/ilink-seed-credential.js` | 运维 seed：env token → 加密落库 | ✅ 脚本+文档（依赖 A1 store） |
 | `scripts/bot-worker.js` | 文件锁 **或** DB 模式文本闭环 | ✅ 实验 |
 | `migrations/001_ilink_runtime.js` | transport 表 | ✅ schema |
 | `migrations/002_outbox_tenant_fk.js` | outbox FK | ✅ schema |
@@ -118,7 +121,7 @@ npm run test:weixin-bot
 ```text
 S0 文档对齐（进行中）
 S1 真实账号文本 E2E + runbook
-S2 凭据加密 + 二维码控制通道
+S2 凭据加密 + 二维码控制通道  ← 部分：seed+store（A3/A1）；A2 Worker 读库 / B 登录通道未完
 S3 图片/CSV Artifact
 S4 shared/bot-core
 S5 Session/Run/Step/Effect
@@ -147,13 +150,15 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 - `docs/superpowers/plans/2026-07-24-ilink-db-lease-inbox-cursor.md`
 - `docs/superpowers/plans/2026-07-24-ilink-outbox-text-dispatch.md`
 - `docs/superpowers/plans/2026-07-24-ilink-outbox-reclaim-reconcile.md`
+- `docs/superpowers/plans/2026-07-24-ilink-s2-credentials-login.md`
+- seed runbook：`docs/runbooks/ilink-credential-seed.md`
 
 ---
 
 ## 8. 阻塞项（上生产前）
 
 1. 真实账号文字 E2E 与双 Worker 抢租约记录  
-2. 加密凭据 + 扫码控制面（去掉明文 token 生产路径）  
+2. 加密凭据 + 扫码控制面（去掉明文 token 生产路径；S2 部分：seed 已有，store/Worker/登录通道未齐）  
 3. 图片/CSV Artifact 全链路  
 4. `shared/bot-core` 与 API 脱离 `electron/*`  
 5. 72h + G1–G4 证据  
@@ -165,3 +170,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 日期 | 说明 |
 | --- | --- |
 | 2026-07-24 | 初版：对齐 615 上实验性文本+DB transport 实现 |
+| 2026-07-24 | S2 部分：`bot:seed-credential` + credential seed runbook；凭据 store/Worker 读库仍进行中 |

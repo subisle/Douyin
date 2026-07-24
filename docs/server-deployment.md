@@ -74,6 +74,21 @@ BOT_ILINK_ACCOUNT_KEY=...              # 缺省回退 BOT_ILINK_ACCOUNT_ID / def
 
 仍无图片/CSV Artifact、无完整 reconcile 控制面、无自动 unknown 重发；**不得**标记生产可用。
 
+### 加密凭据种子（实验 · S2a）
+
+DB 模式可将 iLink token **加密写入** `ilink_accounts.credential_ciphertext`，避免生产路径长期依赖明文 env token。开发仍可用 `BOT_ILINK_TOKEN`。
+
+```bash
+# 先 migrate；再 export BOT_RUNTIME_SECRET / DB_* / BOT_ILINK_ACCOUNT_KEY / BOT_ILINK_TOKEN
+npm run bot:seed-credential
+# 成功只打印 accountId，不打印 token
+```
+
+- 步骤与安全约束：`docs/runbooks/ilink-credential-seed.md`
+- Store API：`createAccountCredentialStore`（`scripts/ilink-account-credentials.js`，A1）
+- Worker 读库优先、env 作开发 fallback：A2 合入后生效；A2 前 seed 仅落库，Worker 仍读 env token
+- **不得**因 seed 成功标记生产可用
+
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。

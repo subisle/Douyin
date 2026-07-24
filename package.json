@@ -30,6 +30,7 @@
     "poster:sync": "node scripts/sync-poster-from-psd.mjs",
     "poster:sync:meta": "node scripts/sync-poster-from-psd.mjs --skip-images",
     "bot:worker": "node scripts/bot-worker.js",
+    "bot:seed-credential": "node scripts/ilink-seed-credential.js",
     "storage:bench": "node scripts/bench-local-storage.mjs",
     "storage:doctor": "node scripts/storage-doctor.mjs"
   },
