@@ -102,6 +102,10 @@ npm run bot:seed-credential
 
 仍非生产：缺完整 RBAC 角色矩阵、Electron 统一入口与 72h 证据。
 
+### 实验性 Artifact 本地目录（S3 地基）
+
+代码已提供 `scripts/ilink-artifact-store.js`（本地 staging/GC）与 `scripts/ilink-media-policy.js`（CDN/MIME/大小白名单）。**Worker 入站下载/出站上传全链路尚未接线**；生产镜像仍需固定字体与卷路径（后续）。
+
 ## 1. 目标
 
 将当前抖音数据管理系统作为网站部署，浏览器、后续 iOS App、后续桌面端统一通过网站 API 访问数据。

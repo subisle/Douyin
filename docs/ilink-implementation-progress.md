@@ -23,7 +23,7 @@
 | 桌面微信 Bot | **可用**（指令 + FastRoute + Agent + 日报/CSV） |
 | 服务器 Worker | **实验性文本闭环已接线**（transport + 可选 DB lease/Inbox/Outbox） |
 | 生产标签 | **不得**标记「服务器生产可用」 |
-| 正确下一阶段 | **S1 真实账号文本 E2E 实跑 / S2 登录通道**（勿先迁 Core / 勿上多 Agent） |
+| 正确下一阶段 | **S3 Artifact 全链路 / S1 真号实跑留证**（S2 登录通道代码已齐；勿先多 Agent） |
 
 ---
 
@@ -39,7 +39,7 @@
 | DB lease + fencing | ~70% | 模块+Worker 接线；缺真实双机演练记录 |
 | Inbox/Cursor 同事务 | ~70% | 仅文本；加密字段 |
 | Outbox 文本 + reclaim/resolve | ~65% | 无完整 reconcile UI；unknown 不自动重发 |
-| 图片/CSV Artifact | ~5% | 表有，管线无 |
+| 图片/CSV Artifact | ~20% | 本地 store + media policy 地基；Worker 全链路未接 |
 | `shared/bot-core` | ~10% | 仅 RAG 薄 re-export；业务仍在 electron |
 | Web 管理面生产化 | ~30% | `/agent` `/bot` MVP |
 | 真实账号 E2E / 72h | ~0% | 缺 runbook 证据 |
@@ -64,6 +64,8 @@
 | `scripts/bot-worker.js` | 文件锁 **或** DB 模式文本闭环 | ✅ 实验 |
 | `migrations/001_ilink_runtime.js` | transport 表 | ✅ schema |
 | `migrations/002_outbox_tenant_fk.js` | outbox FK | ✅ schema |
+| `scripts/ilink-artifact-store.js` | 本地 Artifact staging/GC | ✅ S3 地基 |
+| `scripts/ilink-media-policy.js` | CDN/MIME/大小策略 | ✅ S3 地基 |
 
 ### 3.2 桌面主链（未替代）
 
@@ -176,3 +178,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 2026-07-24 | S2 部分：`bot:seed-credential` + credential seed runbook；凭据 store/Worker 读库仍进行中 |
 | 2026-07-24 | 用户智能真值：`weixin-single-agent-skills-design`；入口文档对齐 |
 | 2026-07-24 | S2 登录通道：login-control store + login-poller + `/api/bot/login/*`；仍实验 |
+| 2026-07-24 | S3 地基：local artifact store + media policy 校验 |
