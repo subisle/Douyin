@@ -202,6 +202,163 @@ FOR UPDATE`,
       }
     },
 
+    async reclaimExpiredClaims(input) {
+      const workspaceId = String(input.workspaceId);
+      const hasAccount =
+        input.accountId != null && input.accountId !== "";
+      const accountId = hasAccount ? Number(input.accountId) : null;
+      const limit = Number(input.limit) > 0 ? Number(input.limit) : 50;
+      const now = nowFn();
+      const defaultError = "claim expired";
+      try {
+        let header;
+        if (hasAccount) {
+          header = unwrap(
+            await pool.query(
+              `UPDATE outbox_messages
+SET status = 'retry_wait', next_attempt_at = ?,
+    last_error = COALESCE(NULLIF(last_error, ''), ?),
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE workspace_id = ? AND account_id = ?
+  AND status = 'sending'
+  AND claim_expires_at IS NOT NULL AND claim_expires_at < ?
+ORDER BY id ASC
+LIMIT ?`,
+              [now, defaultError, workspaceId, accountId, now, limit]
+            )
+          );
+        } else {
+          header = unwrap(
+            await pool.query(
+              `UPDATE outbox_messages
+SET status = 'retry_wait', next_attempt_at = ?,
+    last_error = COALESCE(NULLIF(last_error, ''), ?),
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE workspace_id = ?
+  AND status = 'sending'
+  AND claim_expires_at IS NOT NULL AND claim_expires_at < ?
+ORDER BY id ASC
+LIMIT ?`,
+              [now, defaultError, workspaceId, now, limit]
+            )
+          );
+        }
+        const reclaimed = header ? Number(header.affectedRows) || 0 : 0;
+        return { ok: true, reclaimed };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+
+    async resolveUnknown(input) {
+      const workspaceId = String(input.workspaceId);
+      const accountId = Number(input.accountId);
+      const outboxId = Number(input.outboxId);
+      const resolution = String(input.resolution || "");
+      const now = nowFn();
+      try {
+        if (resolution === "sent") {
+          const upstreamMessageId =
+            input.upstreamMessageId == null
+              ? null
+              : String(input.upstreamMessageId);
+          const header = unwrap(
+            await pool.query(
+              `UPDATE outbox_messages
+SET status = 'sent', reconcile_status = 'resolved', sent_at = ?,
+    upstream_message_id = COALESCE(?, upstream_message_id),
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE id = ? AND workspace_id = ? AND account_id = ?
+  AND status = 'unknown'
+  AND (reconcile_status IS NULL OR reconcile_status = 'pending')`,
+              [now, upstreamMessageId, outboxId, workspaceId, accountId]
+            )
+          );
+          if (!header || Number(header.affectedRows) !== 1) {
+            return {
+              ok: false,
+              error: "resolveUnknown affected 0 rows",
+              code: "NOT_UNKNOWN",
+            };
+          }
+          return { ok: true };
+        }
+
+        if (resolution === "dead_letter") {
+          const lastError =
+            input.error != null ? String(input.error) : null;
+          const header = unwrap(
+            await pool.query(
+              lastError != null
+                ? `UPDATE outbox_messages
+SET status = 'dead_letter', reconcile_status = 'resolved', last_error = ?,
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE id = ? AND workspace_id = ? AND account_id = ?
+  AND status = 'unknown'
+  AND (reconcile_status IS NULL OR reconcile_status = 'pending')`
+                : `UPDATE outbox_messages
+SET status = 'dead_letter', reconcile_status = 'resolved',
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE id = ? AND workspace_id = ? AND account_id = ?
+  AND status = 'unknown'
+  AND (reconcile_status IS NULL OR reconcile_status = 'pending')`,
+              lastError != null
+                ? [lastError, outboxId, workspaceId, accountId]
+                : [outboxId, workspaceId, accountId]
+            )
+          );
+          if (!header || Number(header.affectedRows) !== 1) {
+            return {
+              ok: false,
+              error: "resolveUnknown affected 0 rows",
+              code: "NOT_UNKNOWN",
+            };
+          }
+          return { ok: true };
+        }
+
+        if (resolution === "retry") {
+          const delayMs =
+            Number(input.delayMs) >= 0 ? Number(input.delayMs) : 2_000;
+          const nextAttemptAt = new Date(now.getTime() + delayMs);
+          const header = unwrap(
+            await pool.query(
+              `UPDATE outbox_messages
+SET status = 'retry_wait', reconcile_status = 'not_required',
+    next_attempt_at = ?,
+    claimed_by = NULL, claim_token = NULL, claim_expires_at = NULL
+WHERE id = ? AND workspace_id = ? AND account_id = ?
+  AND status = 'unknown'
+  AND (reconcile_status IS NULL OR reconcile_status = 'pending')`,
+              [nextAttemptAt, outboxId, workspaceId, accountId]
+            )
+          );
+          if (!header || Number(header.affectedRows) !== 1) {
+            return {
+              ok: false,
+              error: "resolveUnknown affected 0 rows",
+              code: "NOT_UNKNOWN",
+            };
+          }
+          return { ok: true };
+        }
+
+        return {
+          ok: false,
+          error: `invalid resolution: ${resolution}`,
+          code: "INVALID_RESOLUTION",
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+
     async claimBatch(input) {
       const workspaceId = String(input.workspaceId);
       const accountId = Number(input.accountId);
@@ -211,6 +368,13 @@ FOR UPDATE`,
       const leaseName = String(input.leaseName || DEFAULT_LEASE_NAME);
 
       try {
+        // reclaim expired claims for this account before claiming
+        await this.reclaimExpiredClaims({
+          workspaceId,
+          accountId,
+          limit: Math.max(limit, 50),
+        });
+
         return await withTransaction(async (conn) => {
           await assertLeaseFencing(conn, {
             workspaceId,

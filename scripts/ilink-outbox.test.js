@@ -219,11 +219,176 @@ function createMemoryPool(seed = {}) {
       return [{ affectedRows: 1 }, undefined];
     }
 
-    // markSent
+    // reclaimExpiredClaims bulk: sending + claim_expires_at < now → retry_wait
+    if (
+      s.includes("UPDATE outbox_messages") &&
+      s.includes("status = 'retry_wait'") &&
+      s.includes("claim_expires_at") &&
+      s.includes("status = 'sending'") &&
+      !s.includes("claim_token = ?")
+    ) {
+      // [nextAttemptAt, lastError, workspaceId, now, limit]
+      // [nextAttemptAt, lastError, workspaceId, accountId, now, limit]
+      const hasAccount = params.length === 6;
+      const nextAttemptAt = params[0];
+      const lastError = params[1];
+      const workspaceId = params[2];
+      const accountId = hasAccount ? params[3] : null;
+      const now = toDate(params[hasAccount ? 4 : 3]);
+      const limit = Number(params[hasAccount ? 5 : 4]) || 50;
+      const nowMs = now.getTime();
+      let affected = 0;
+      const candidates = [...outbox.values()]
+        .filter((r) => {
+          if (r.workspace_id !== workspaceId) return false;
+          if (hasAccount && Number(r.account_id) !== Number(accountId)) {
+            return false;
+          }
+          if (r.status !== "sending") return false;
+          const exp = toDate(r.claim_expires_at);
+          if (!exp || exp.getTime() >= nowMs) return false;
+          return true;
+        })
+        .sort((a, b) => a.id - b.id)
+        .slice(0, limit);
+      for (const row of candidates) {
+        row.status = "retry_wait";
+        row.next_attempt_at = toDate(nextAttemptAt);
+        if (row.last_error == null || row.last_error === "") {
+          row.last_error = lastError;
+        }
+        row.claimed_by = null;
+        row.claim_token = null;
+        row.claim_expires_at = null;
+        affected += 1;
+      }
+      return [{ affectedRows: affected }, undefined];
+    }
+
+    // resolveUnknown → sent (WHERE status='unknown', SET status='sent')
+    if (
+      s.includes("UPDATE outbox_messages") &&
+      s.includes("status = 'sent'") &&
+      s.includes("status = 'unknown'")
+    ) {
+      const [sentAt, upstreamMessageId, id, workspaceId, accountId] = params;
+      const row = outbox.get(Number(id));
+      if (
+        !row ||
+        row.workspace_id !== workspaceId ||
+        Number(row.account_id) !== Number(accountId) ||
+        row.status !== "unknown" ||
+        (row.reconcile_status != null && row.reconcile_status !== "pending")
+      ) {
+        return [{ affectedRows: 0 }, undefined];
+      }
+      row.status = "sent";
+      row.reconcile_status = "resolved";
+      row.sent_at = toDate(sentAt);
+      if (upstreamMessageId != null) {
+        row.upstream_message_id = upstreamMessageId;
+      }
+      row.claimed_by = null;
+      row.claim_token = null;
+      row.claim_expires_at = null;
+      return [{ affectedRows: 1 }, undefined];
+    }
+
+    // resolveUnknown → dead_letter (WHERE status='unknown')
+    if (
+      s.includes("UPDATE outbox_messages") &&
+      s.includes("status = 'dead_letter'") &&
+      s.includes("status = 'unknown'")
+    ) {
+      let lastError = null;
+      let id;
+      let workspaceId;
+      let accountId;
+      if (params.length === 4) {
+        [lastError, id, workspaceId, accountId] = params;
+      } else {
+        [id, workspaceId, accountId] = params;
+      }
+      const row = outbox.get(Number(id));
+      if (
+        !row ||
+        row.workspace_id !== workspaceId ||
+        Number(row.account_id) !== Number(accountId) ||
+        row.status !== "unknown" ||
+        (row.reconcile_status != null && row.reconcile_status !== "pending")
+      ) {
+        return [{ affectedRows: 0 }, undefined];
+      }
+      row.status = "dead_letter";
+      row.reconcile_status = "resolved";
+      if (lastError != null) row.last_error = lastError;
+      row.claimed_by = null;
+      row.claim_token = null;
+      row.claim_expires_at = null;
+      return [{ affectedRows: 1 }, undefined];
+    }
+
+    // resolveUnknown → retry (WHERE status='unknown', SET retry_wait)
+    if (
+      s.includes("UPDATE outbox_messages") &&
+      s.includes("status = 'retry_wait'") &&
+      s.includes("status = 'unknown'") &&
+      s.includes("next_attempt_at")
+    ) {
+      const [nextAt, outboxId, ws, acc] = params;
+      const row = outbox.get(Number(outboxId));
+      if (
+        !row ||
+        row.workspace_id !== ws ||
+        Number(row.account_id) !== Number(acc) ||
+        row.status !== "unknown" ||
+        (row.reconcile_status != null && row.reconcile_status !== "pending")
+      ) {
+        return [{ affectedRows: 0 }, undefined];
+      }
+      row.status = "retry_wait";
+      row.reconcile_status = "not_required";
+      row.next_attempt_at = toDate(nextAt);
+      row.claimed_by = null;
+      row.claim_token = null;
+      row.claim_expires_at = null;
+      return [{ affectedRows: 1 }, undefined];
+    }
+
+    // markRetry (claim_token + sending → retry_wait)
+    if (
+      s.includes("UPDATE outbox_messages") &&
+      s.includes("status = 'retry_wait'") &&
+      s.includes("next_attempt_at") &&
+      s.includes("claim_token")
+    ) {
+      const [nextAttemptAt, lastError, id, workspaceId, accountId, claimToken] =
+        params;
+      const row = outbox.get(Number(id));
+      if (
+        !row ||
+        row.workspace_id !== workspaceId ||
+        Number(row.account_id) !== Number(accountId) ||
+        row.claim_token !== claimToken ||
+        row.status !== "sending"
+      ) {
+        return [{ affectedRows: 0 }, undefined];
+      }
+      row.status = "retry_wait";
+      row.next_attempt_at = toDate(nextAttemptAt);
+      row.last_error = lastError;
+      row.claimed_by = null;
+      row.claim_token = null;
+      row.claim_expires_at = null;
+      return [{ affectedRows: 1 }, undefined];
+    }
+
+    // markSent (claim_token + sending → sent)
     if (
       s.includes("UPDATE outbox_messages") &&
       s.includes("sent_at") &&
-      s.includes("status = 'sent'")
+      s.includes("status = 'sent'") &&
+      s.includes("claim_token")
     ) {
       const [sentAt, upstreamMessageId, id, workspaceId, accountId, claimToken] =
         params;
@@ -246,10 +411,12 @@ function createMemoryPool(seed = {}) {
       return [{ affectedRows: 1 }, undefined];
     }
 
-    // markUnknown
+    // markUnknown (claim_token + sending → unknown)
     if (
       s.includes("UPDATE outbox_messages") &&
-      s.includes("status = 'unknown'")
+      s.includes("status = 'unknown'") &&
+      s.includes("claim_token") &&
+      s.includes("unknown_at")
     ) {
       const [unknownAt, lastError, id, workspaceId, accountId, claimToken] =
         params;
@@ -273,41 +440,11 @@ function createMemoryPool(seed = {}) {
       return [{ affectedRows: 1 }, undefined];
     }
 
-    // markRetry (require next_attempt_at so claim WHERE 'retry_wait' does not match)
-    if (
-      s.includes("UPDATE outbox_messages") &&
-      s.includes("status = 'retry_wait'") &&
-      s.includes("next_attempt_at")
-    ) {
-      const [nextAttemptAt, lastError, id, workspaceId, accountId, claimToken] =
-        params;
-      const row = outbox.get(Number(id));
-      if (
-        !row ||
-        row.workspace_id !== workspaceId ||
-        Number(row.account_id) !== Number(accountId) ||
-        row.claim_token !== claimToken ||
-        row.status !== "sending"
-      ) {
-        return [{ affectedRows: 0 }, undefined];
-      }
-      row.status = "retry_wait";
-      row.next_attempt_at = toDate(nextAttemptAt);
-      row.last_error = lastError;
-      row.claimed_by = null;
-      row.claim_token = null;
-      row.claim_expires_at = null;
-      return [{ affectedRows: 1 }, undefined];
-    }
-
     // markFailedFencing / decrypt dead_letter
     if (
       s.includes("UPDATE outbox_messages") &&
       s.includes("status = 'dead_letter'")
     ) {
-      // Two shapes:
-      // markFailedFencing: [lastError, id, workspaceId, accountId, claimToken] (status='sending' in WHERE)
-      // decrypt path: [lastError, id, workspaceId, accountId, claimToken] (claim_token match only)
       const [lastError, id, workspaceId, accountId, claimToken] = params;
       const row = outbox.get(Number(id));
       if (
@@ -635,4 +772,267 @@ test("claimBatch with wrong fencing → FENCING_MISMATCH", async () => {
   assert.equal(claimed.code, "FENCING_MISMATCH");
   const stored = [...pool.__state.outbox.values()][0];
   assert.equal(stored.status, "prepared");
+});
+
+test("reclaimExpiredClaims: expired sending → retry_wait, reclaimed=1", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const clock = createFixedNow("2026-01-01T00:00:00.000Z");
+  const store = createOutboxStore({ pool, crypto: cryptoApi, now: clock.now });
+
+  const enq = await store.enqueueText(baseEnqueue({ clientId: "c-reclaim" }));
+  const claimed = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  assert.equal(claimed.ok, true);
+  assert.equal(claimed.rows.length, 1);
+
+  // claim TTL is 30s; advance past expiry
+  clock.advance(31_000);
+
+  const reclaimed = await store.reclaimExpiredClaims({
+    workspaceId: "ws1",
+    accountId: 1,
+  });
+  assert.equal(reclaimed.ok, true);
+  assert.equal(reclaimed.reclaimed, 1);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "retry_wait");
+  assert.equal(stored.claimed_by, null);
+  assert.equal(stored.claim_token, null);
+  assert.equal(stored.claim_expires_at, null);
+  assert.ok(stored.next_attempt_at);
+  assert.ok(
+    stored.last_error == null ||
+      stored.last_error === "" ||
+      stored.last_error === "claim expired" ||
+      typeof stored.last_error === "string"
+  );
+});
+
+test("reclaimExpiredClaims: not yet expired → reclaimed=0", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const clock = createFixedNow("2026-01-01T00:00:00.000Z");
+  const store = createOutboxStore({ pool, crypto: cryptoApi, now: clock.now });
+
+  const enq = await store.enqueueText(baseEnqueue({ clientId: "c-reclaim-fresh" }));
+  const claimed = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  assert.equal(claimed.ok, true);
+
+  // still within claim TTL
+  clock.advance(5_000);
+
+  const reclaimed = await store.reclaimExpiredClaims({
+    workspaceId: "ws1",
+    accountId: 1,
+  });
+  assert.equal(reclaimed.ok, true);
+  assert.equal(reclaimed.reclaimed, 0);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "sending");
+  assert.ok(stored.claim_token);
+});
+
+test("resolveUnknown: sent", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const store = createOutboxStore({
+    pool,
+    crypto: cryptoApi,
+    now: createFixedNow().now,
+  });
+
+  const enq = await store.enqueueText(baseEnqueue({ clientId: "c-resolve-sent" }));
+  const claimed = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  await store.markUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    claimToken: claimed.rows[0].claimToken,
+    error: "timeout",
+  });
+
+  const resolved = await store.resolveUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    resolution: "sent",
+    upstreamMessageId: "up-resolved",
+  });
+  assert.equal(resolved.ok, true);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "sent");
+  assert.equal(stored.reconcile_status, "resolved");
+  assert.equal(stored.upstream_message_id, "up-resolved");
+  assert.ok(stored.sent_at);
+});
+
+test("resolveUnknown: dead_letter", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const store = createOutboxStore({
+    pool,
+    crypto: cryptoApi,
+    now: createFixedNow().now,
+  });
+
+  const enq = await store.enqueueText(
+    baseEnqueue({ clientId: "c-resolve-dead" })
+  );
+  const claimed = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  await store.markUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    claimToken: claimed.rows[0].claimToken,
+    error: "timeout",
+  });
+
+  const resolved = await store.resolveUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    resolution: "dead_letter",
+    error: "confirmed lost",
+  });
+  assert.equal(resolved.ok, true);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "dead_letter");
+  assert.equal(stored.reconcile_status, "resolved");
+});
+
+test("resolveUnknown: retry", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const clock = createFixedNow("2026-01-01T00:00:00.000Z");
+  const store = createOutboxStore({ pool, crypto: cryptoApi, now: clock.now });
+
+  const enq = await store.enqueueText(
+    baseEnqueue({ clientId: "c-resolve-retry" })
+  );
+  const claimed = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  await store.markUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    claimToken: claimed.rows[0].claimToken,
+    error: "timeout",
+  });
+
+  const resolved = await store.resolveUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    resolution: "retry",
+    delayMs: 2000,
+  });
+  assert.equal(resolved.ok, true);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "retry_wait");
+  assert.equal(stored.reconcile_status, "not_required");
+  assert.equal(stored.claim_token, null);
+  assert.equal(
+    stored.next_attempt_at.getTime(),
+    new Date("2026-01-01T00:00:02.000Z").getTime()
+  );
+});
+
+test("resolveUnknown: non-unknown status → fail", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const store = createOutboxStore({
+    pool,
+    crypto: cryptoApi,
+    now: createFixedNow().now,
+  });
+
+  const enq = await store.enqueueText(
+    baseEnqueue({ clientId: "c-resolve-fail" })
+  );
+  // still prepared — not unknown
+  const resolved = await store.resolveUnknown({
+    workspaceId: "ws1",
+    accountId: 1,
+    outboxId: enq.outboxId,
+    resolution: "sent",
+  });
+  assert.equal(resolved.ok, false);
+  assert.ok(resolved.error);
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "prepared");
+});
+
+test("claimBatch auto-reclaims expired sending rows", async () => {
+  const cryptoApi = createRuntimeCrypto({ secret: "test-secret-16chars" });
+  const pool = createMemoryPool();
+  seedLease(pool, { fencingToken: 7, ownerId: "owner-1" });
+  const clock = createFixedNow("2026-01-01T00:00:00.000Z");
+  const store = createOutboxStore({ pool, crypto: cryptoApi, now: clock.now });
+
+  const enq = await store.enqueueText(
+    baseEnqueue({ clientId: "c-auto-reclaim" })
+  );
+  const first = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-1",
+    fencingToken: 7,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.rows.length, 1);
+  assert.equal(first.rows[0].id, enq.outboxId);
+
+  // crash: leave as sending; advance past claim TTL
+  clock.advance(31_000);
+
+  const second = await store.claimBatch({
+    workspaceId: "ws1",
+    accountId: 1,
+    ownerId: "owner-2",
+    fencingToken: 7,
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.rows.length, 1);
+  assert.equal(second.rows[0].id, enq.outboxId);
+  assert.equal(second.rows[0].payload.text, "hello");
+
+  const stored = pool.__state.outbox.get(enq.outboxId);
+  assert.equal(stored.status, "sending");
+  assert.equal(stored.claimed_by, "owner-2");
 });
