@@ -990,3 +990,78 @@ test("dispatch calls reclaimExpiredClaims before claimBatch", async () => {
   assert.deepEqual(order.slice(0, 2), ["reclaim", "claim"]);
   worker.stop();
 });
+
+
+test("db mode loads token from credentialStore when env token empty", async () => {
+  let capturedConfig = null;
+  const worker = createBotWorker({
+    timers: createTimers(),
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    transportConfig: {
+      enabled: true,
+      token: "",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    createTransport: (config) => {
+      capturedConfig = config;
+      return createIdleTransport();
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 5 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 2,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 2,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+      outboxStore: {
+        enqueueText: async () => ({ ok: true, outboxId: 1 }),
+        reclaimExpiredClaims: async () => ({ ok: true, reclaimed: 0 }),
+        claimBatch: async () => ({ ok: true, rows: [] }),
+        markSent: async () => ({ ok: true }),
+        markRetry: async () => ({ ok: true }),
+        markUnknown: async () => ({ ok: true }),
+        markFailedFencing: async () => ({ ok: true }),
+      },
+      credentialStore: {
+        getCredential: async () => ({
+          ok: true,
+          accountId: 5,
+          token: "from-db-token",
+          baseUrl: "https://ilinkai.weixin.qq.com",
+          keyId: "v1",
+          accountKey: "k1",
+        }),
+      },
+      sendMessage: async () => ({ errcode: 0 }),
+    },
+  });
+
+  await worker.start();
+  assert.ok(capturedConfig);
+  assert.equal(capturedConfig.token, "from-db-token");
+  assert.equal(worker.getState().transport, "polling");
+  worker.stop();
+});

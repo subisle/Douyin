@@ -204,6 +204,7 @@ function resolveDbRuntime(options = {}, env = process.env) {
       leaseStore: injected.leaseStore || null,
       inboxStore: injected.inboxStore || null,
       outboxStore: injected.outboxStore || null,
+      credentialStore: injected.credentialStore || null,
       pool: injected.pool || null,
       outboxPollMs,
       outboxBatch,
@@ -259,6 +260,7 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
   const { createDbLeaseStore } = require("./ilink-db-lease");
   const { createInboxCursorStore } = require("./ilink-inbox-cursor");
   const { createOutboxStore } = require("./ilink-outbox");
+  const { createAccountCredentialStore } = require("./ilink-account-credentials");
   const { IlinkAdapter } = require("../shared/ilink-adapter");
 
   const secret = String(env.BOT_RUNTIME_SECRET || "").trim();
@@ -286,6 +288,7 @@ function buildLiveDbRuntime(dbRuntime, env = process.env) {
     leaseStore: createDbLeaseStore({ pool }),
     inboxStore: createInboxCursorStore({ pool, crypto: cryptoApi }),
     outboxStore: createOutboxStore({ pool, crypto: cryptoApi }),
+    credentialStore: createAccountCredentialStore({ pool, crypto: cryptoApi }),
     sendMessage:
       typeof dbRuntime.sendMessage === "function"
         ? dbRuntime.sendMessage
@@ -911,6 +914,31 @@ function createBotWorker(options = {}) {
         dbAccountId,
       });
       heartbeatTimer = timers.setInterval(renewNow, heartbeatMs);
+
+      // Env token wins for local dev; otherwise load encrypted credential from MySQL.
+      if (!String(transportConfig.token || "").trim() && dbRuntime.credentialStore) {
+        try {
+          const cred = await dbRuntime.credentialStore.getCredential({
+            workspaceId: dbRuntime.workspaceId,
+            accountId: dbAccountId,
+            accountKey: dbRuntime.accountKey,
+          });
+          if (cred?.ok && cred.token) {
+            transportConfig.token = cred.token;
+            if (cred.baseUrl) transportConfig.baseUrl = cred.baseUrl;
+            if (logger && typeof logger.log === "function") {
+              logger.log("[bot-worker] loaded iLink token from encrypted account credentials");
+            }
+          }
+        } catch (credErr) {
+          if (logger && typeof logger.error === "function") {
+            logger.error(
+              `[bot-worker] credential load failed: ${safeError(credErr)}`
+            );
+          }
+        }
+      }
+
       startTransport();
       startOutboxDispatcher();
       return snapshot();
