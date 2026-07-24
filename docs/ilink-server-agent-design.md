@@ -10,6 +10,8 @@
 
 > 本文是 iLink 单通道服务器化的专项设计。产品路线见 `ai-agent-production-plan.md`，跨文档运行契约与顺序以 `docs/adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构只以 `migrations/` 为准；框架借鉴和扩展路线见 `agent-framework-reference-and-extension-plan.md`，部署参数和命令以 `server-deployment.md` 为准。
 
+> **业务智能形态：** 服务器化解决的是 **通道与运维**（租约、Inbox/Outbox、扫码控制面等）；面向用户的数据智能仍是 **单 Agent + Tools**，见 `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`。
+
 ## 1. 可行性结论
 
 ### 1.1 已具备的基础

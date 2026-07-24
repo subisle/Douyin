@@ -6,10 +6,12 @@
 | 核对日期 | 2026-07-24 |
 | 分支 | `615`（相对 `origin/615` 含实验切片，以本地 HEAD 为准） |
 | 文档角色 | **实现进度真值表**（代码优先）；产品愿景仍以 `ai-agent-production-plan.md` 为准 |
-| 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md`（S0–S8） |
+| 用户智能对话真值 | `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`（**单 Agent + 多技能**） |
+| 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md`（S0–S8；多 Agent 仅 S8） |
 | 部署开关 | `docs/server-deployment.md` |
 
-> 冲突时：**运行代码与 `migrations/` > 本文 > 旧段落日期早于 2026-07-24 的设计表述**。
+> 冲突时：**运行代码与 `migrations/` > 本文 > 旧段落日期早于 2026-07-24 的设计表述**。  
+> **用户侧智能客服主路径 = 桌面微信单 Agent**；服务器 Worker 实验不改变该产品形态，也不等于「多 Agent 已上线」。
 
 ---
 
@@ -17,10 +19,11 @@
 
 | 维度 | 结论 |
 | --- | --- |
+| 用户 AI 对话 | **桌面单 Agent + 多技能 + 微信 iLink**（见 single-agent 规格） |
 | 桌面微信 Bot | **可用**（指令 + FastRoute + Agent + 日报/CSV） |
 | 服务器 Worker | **实验性文本闭环已接线**（transport + 可选 DB lease/Inbox/Outbox） |
 | 生产标签 | **不得**标记「服务器生产可用」 |
-| 正确下一阶段 | **S0 文档对齐 → S1 真实账号文本 E2E**（勿先迁 Core / 勿上多 Agent） |
+| 正确下一阶段 | **S1 真实账号文本 E2E 实跑 / S2 登录通道**（勿先迁 Core / 勿上多 Agent） |
 
 ---
 
@@ -171,3 +174,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | --- | --- |
 | 2026-07-24 | 初版：对齐 615 上实验性文本+DB transport 实现 |
 | 2026-07-24 | S2 部分：`bot:seed-credential` + credential seed runbook；凭据 store/Worker 读库仍进行中 |
+| 2026-07-24 | 用户智能真值：`weixin-single-agent-skills-design`；入口文档对齐 |

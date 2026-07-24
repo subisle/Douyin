@@ -6,6 +6,7 @@
 | 日期 | 2026-07-24 |
 | 用途 | **唯一落地清单**：按序执行即可；不重复讲愿景 |
 | 权威分工 | 功能：`ai-agent-production-plan.md` · 本地盘：`local-storage-plan.md` · 数据 API：`api-design.md` · 部署：`server-deployment.md` · 板卡：`/Volumes/2t/it/服务器/ssh/server-status-2026-07-20.md` |
+| **智能客服架构真值** | `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`（**单 Agent + 多技能 + 微信 iLink**；非多 Agent） |
 | iLink 服务器进度真值 | `docs/ilink-implementation-progress.md` |
 | iLink 顺序路线 | `docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md` |
 | iLink 服务器设计 | `docs/ilink-server-agent-design.md` |
@@ -23,8 +24,8 @@
 | **rk3318 业务库** | **隧道方案已定**；板卡尚无 `douyinxs` 库/用户时需一次建库授权 |
 | **本地防爆满** | **设计+基准已有**；**代码默认仍可能写系统盘 tmp** → 下表 L1 必做 |
 
-**现在就能跑的：** 桌面微信机器人（指令 + 人工客服 FastRoute）、`npm run test:weixin-bot` / `test:bot-worker` / `test:ilink-db`、项目盘存储基准、Web `/agent` 知识问答；**实验开关下**可在服务器路径收发**文本**（非生产）。  
-**现在不能假设已好的：** 直连 `192.168.5.12:3306`、**服务器生产可用 / 媒体 Artifact / 扫码控制面**、抖音主页爬取、会话默认已在项目盘。
+**现在就能跑的：** 桌面微信机器人（指令模式 + 配置 AI 后发「人工客服」进**单助手多技能**）、`npm run test:weixin-bot` / `test:bot-worker` / `test:ilink-db`、项目盘存储基准、Web `/agent` 知识问答；**实验开关下**可在服务器路径收发**文本**（非生产）。  
+**现在不能假设已好的：** 直连 `192.168.5.12:3306`、**服务器生产可用 / 媒体 Artifact / 扫码控制面**、**多 Agent 已实现**、抖音主页爬取、会话默认已在项目盘。
 
 ---
 

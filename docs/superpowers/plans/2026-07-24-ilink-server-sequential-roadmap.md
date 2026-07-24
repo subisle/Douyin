@@ -4,8 +4,9 @@
 > 推荐：`subagent-driven-development`（每任务一代理 + 审查）或 `executing-plans`。  
 > 相关切片计划见同目录既有文件（text-loop / db-lease-inbox / outbox-dispatch / reclaim-reconcile）。
 
-**目标：** 把微信 iLink 数据客服从「桌面 MVP + 实验性服务器文本闭环」推进到 **可灰度的服务器生产通道**（文字 → 图片/CSV → 共享 Core → 门禁），且 **不得跳步**。
+> **产品智能：** 实时微信问答为 **单 Agent + 多技能**（`docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`）。**多 Agent 仅 S8 后置**，不得插入 S0–S7 主路径。
 
+**目标：** 把微信 iLink 数据客服从「桌面 MVP + 实验性服务器文本闭环」推进到 **可灰度的服务器生产通道**（文字 → 图片/CSV → 共享 Core → 门禁），且 **不得跳步**。
 **架构锚点：**
 
 - 契约：`docs/adr/0001-agent-runtime-contract.md`（拓扑、`AgentResult`、交付不变量、实施顺序 1–6）

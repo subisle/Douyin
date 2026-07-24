@@ -10,6 +10,8 @@
 
 > 本文是产品范围与里程碑来源。跨文档运行契约、拓扑和实施顺序以 `adr/0001-agent-runtime-contract.md` 为准，可执行数据库结构以 `migrations/` 为准。iLink 服务器化专项见 `ilink-server-agent-design.md`，框架借鉴与扩展路线见 `agent-framework-reference-and-extension-plan.md`；部署命令见 `server-deployment.md`。**2026-07-24 起服务器侧已有实验性文本 + 可选 DB transport**（`BOT_ILINK_ENABLED` / `BOT_ILINK_DB_ENABLED`），实现进度真值见 `ilink-implementation-progress.md`；内部 MVP 结论不变，**不得标记服务器生产可用**。旧版 `weixin-ai-agent-plan.md` 已废弃。
 
+> **用户智能问答形态冻结：** **单 Agent + 多技能（Tools）+ 微信 iLink**。真值规格见 `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`。多 Agent / L3 编排**不是**微信实时问答路径；服务器 Worker 实验只改变运维通道，**不**改变「一个助手多个技能」的产品形态。
+
 ---
 
 ## 1. 执行摘要

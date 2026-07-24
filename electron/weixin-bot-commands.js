@@ -828,24 +828,30 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       }
       if (systemToken === "enable") {
         if (!agent || typeof agent.enableSession !== "function") {
-          await args.replyText("智能客服暂不可用，请先在桌面端配置 AI。");
+          await args.replyText(
+            "智能客服暂不可用。请在桌面端「设置」中启用 AI，并填写接口地址、模型与 API Key 后再发「人工客服」。"
+          );
           return { handled: true };
         }
         const status = typeof agent.getPublicStatus === "function" ? agent.getPublicStatus() : {};
         if (!status.configured) {
-          await args.replyText("智能客服未配置：请管理员在桌面端填写 API Key 并启用 AI。");
+          await args.replyText(
+            "智能客服未配置完成：请在桌面端启用 AI，并填写接口地址、模型与 API Key。配置前不会进入智能模式。"
+          );
           return { handled: true };
         }
         if (!status.enabled) {
-          await args.replyText("智能客服已配置但未启用，请管理员在桌面端打开 AI 开关。");
+          await args.replyText(
+            "智能客服接口已填但未启用：请在桌面端打开 AI 开关后再发「人工客服」。当前仍为指令模式。"
+          );
           return { handled: true };
         }
         modeStore.setMode(args, "agent");
         agent.enableSession(args);
         await args.replyText([
-          "已接入智能客服。",
+          "已接入智能客服（单个助手 + 多项数据技能）。",
           "可直接说：查某艺名、每日报告、18号报告、对比两位主播、发音浪文件。",
-          "高置信指令走快速路由；其余由智能助手理解。回复「退出客服」结束。",
+          "高置信指令走快速路由；其余由助手选技能查询。回复「退出客服」结束。",
         ].join("\n"));
         return { handled: true };
       }
