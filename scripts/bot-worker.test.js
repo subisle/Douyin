@@ -401,3 +401,324 @@ test("lease loss stops transport before exit", () => {
   assert.equal(worker.getState().phase, "lease_lost");
   assert.ok(transportCalls.includes("stop"));
 });
+
+function createThrowingFileLock() {
+  return {
+    acquire: () => {
+      throw new Error("file lock should not run");
+    },
+    renew: () => {
+      throw new Error("file lock should not run");
+    },
+    release: () => {
+      throw new Error("file lock should not run");
+    },
+  };
+}
+
+function createIdleTransport(transportCalls) {
+  let transportPhase = "stopped";
+  return {
+    async start() {
+      transportPhase = "polling";
+      transportCalls?.push("start");
+      return { phase: "polling" };
+    },
+    async stop() {
+      transportPhase = "stopped";
+      transportCalls?.push("stop");
+      return { phase: "stopped" };
+    },
+    getState: () => ({
+      phase: transportPhase,
+      accountId: "acc",
+      updatesBuf: "",
+      lastPollAt: null,
+      lastInboundAt: null,
+      lastOutboundAt: null,
+      lastError: null,
+      receivedCount: 0,
+      sentCount: 0,
+    }),
+  };
+}
+
+test("db mode start acquires lease and sets mysql persistence", async () => {
+  const calls = [];
+  const timers = createTimers();
+  const worker = createBotWorker({
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    createTransport: () => createIdleTransport(),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      accountId: "acc",
+      ackText: "收到",
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => {
+          calls.push("ensure");
+          return { accountId: 9 };
+        },
+        acquire: async (o) => {
+          calls.push("acquire");
+          return {
+            ok: true,
+            fencingToken: 3,
+            expiresAt: new Date("2026-07-24T12:00:00.000Z"),
+            ownerId: o.ownerId,
+          };
+        },
+        renew: async () => ({
+          ok: true,
+          fencingToken: 3,
+          expiresAt: new Date("2026-07-24T12:01:00.000Z"),
+        }),
+        release: async () => {
+          calls.push("release");
+          return { ok: true };
+        },
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "x",
+        }),
+      },
+    },
+  });
+
+  await worker.start();
+  assert.equal(worker.getState().phase, "running");
+  assert.equal(worker.getState().persistence, "mysql");
+  assert.equal(worker.getState().fencingToken, 3);
+  assert.equal(worker.getState().dbAccountId, 9);
+  assert.deepEqual(calls, ["ensure", "acquire"]);
+
+  worker.stop();
+  await delay(20);
+  assert.ok(calls.includes("release"));
+  assert.equal(worker.getState().phase, "stopped");
+  assert.equal(worker.getState().persistence, "mysql");
+});
+
+test("db renew failure yields lease_lost and stops transport", async () => {
+  const transportCalls = [];
+  const timers = createTimers();
+  const worker = createBotWorker({
+    ownerId: "db-owner",
+    heartbeatMs: 10,
+    leaseTtlMs: 100,
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    createTransport: () => createIdleTransport(transportCalls),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 9 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 1,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({ ok: false, error: "db lease taken over" }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+    },
+  });
+
+  await worker.start();
+  await delay(10);
+  assert.equal(worker.getState().phase, "running");
+  assert.ok(transportCalls.includes("start"));
+
+  timers.fire();
+  await waitFor(() => worker.getState().phase === "lease_lost");
+  assert.equal(worker.getState().phase, "lease_lost");
+  assert.match(worker.getState().lastError, /db lease taken over/);
+  assert.ok(transportCalls.includes("stop"));
+  assert.equal(worker.getState().fencingToken, null);
+});
+
+test("db stop calls lease release", async () => {
+  const releaseArgs = [];
+  const worker = createBotWorker({
+    ownerId: "db-owner",
+    timers: createTimers(),
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    createTransport: () => createIdleTransport(),
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws1",
+      accountKey: "acc-key",
+      sessionId: "main",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 42 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 7,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 7,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async (input) => {
+          releaseArgs.push(input);
+          return { ok: true };
+        },
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+    },
+  });
+
+  await worker.start();
+  worker.stop();
+  await waitFor(() => releaseArgs.length === 1);
+  assert.equal(releaseArgs[0].workspaceId, "ws1");
+  assert.equal(releaseArgs[0].accountId, 42);
+  assert.equal(releaseArgs[0].ownerId, "db-owner");
+  assert.equal(releaseArgs[0].fencingToken, 7);
+});
+
+test("db mode wires persistBatch into createTransport hooks", async () => {
+  const stageCalls = [];
+  let capturedPersistBatch = null;
+  const worker = createBotWorker({
+    timers: createTimers(),
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    createTransport: (config, hooks) => {
+      capturedPersistBatch = hooks?.persistBatch || null;
+      return createIdleTransport();
+    },
+    transportConfig: {
+      enabled: true,
+      token: "tok",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      sessionId: "sess-1",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 11 }),
+        acquire: async () => ({
+          ok: true,
+          fencingToken: 5,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        renew: async () => ({
+          ok: true,
+          fencingToken: 5,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async (input) => {
+          stageCalls.push(input);
+          return { ok: true, inserted: 1, deduped: 0, cursorHash: "h" };
+        },
+      },
+    },
+  });
+
+  await worker.start();
+  assert.equal(typeof capturedPersistBatch, "function");
+  const staged = await capturedPersistBatch({
+    updatesBuf: "cursor-1",
+    messages: [{ text: "hi", fromUserId: "u1" }],
+  });
+  assert.equal(staged.ok, true);
+  assert.equal(stageCalls.length, 1);
+  assert.equal(stageCalls[0].workspaceId, "ws");
+  assert.equal(stageCalls[0].accountId, 11);
+  assert.equal(stageCalls[0].sessionId, "sess-1");
+  assert.equal(stageCalls[0].fencingToken, 5);
+  assert.equal(stageCalls[0].updatesBuf, "cursor-1");
+  worker.stop();
+});
+
+test("db acquisition failure records error and exits non-zero", async () => {
+  const exits = [];
+  const worker = createBotWorker({
+    timers: createTimers(),
+    exit: (code) => exits.push(code),
+    logger: { log() {}, error() {} },
+    runnerLock: createThrowingFileLock(),
+    dbRuntime: {
+      enabled: true,
+      workspaceId: "ws",
+      accountKey: "k1",
+      leaseStore: {
+        ensureAccount: async () => ({ accountId: 1 }),
+        acquire: async () => ({ ok: false, error: "lease occupied by other" }),
+        renew: async () => ({ ok: true }),
+        release: async () => ({ ok: true }),
+      },
+      inboxStore: {
+        stageTextBatch: async () => ({
+          ok: true,
+          inserted: 0,
+          deduped: 0,
+          cursorHash: "h",
+        }),
+      },
+    },
+  });
+
+  await assert.rejects(() => worker.start(), /lease occupied by other/);
+  assert.equal(worker.getState().phase, "error");
+  assert.match(worker.getState().lastError, /lease occupied by other/);
+  assert.deepEqual(exits, [1]);
+});
