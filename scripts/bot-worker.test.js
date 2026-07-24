@@ -317,6 +317,35 @@ test("worker without transport config keeps transport disabled", () => {
   worker.stop();
 });
 
+test("worker with enabled flag but missing token is not_configured", () => {
+  const timers = createTimers();
+  const worker = createBotWorker({
+    timers,
+    exit: () => {},
+    logger: { log() {}, error() {} },
+    runnerLock: {
+      acquire: () => ({
+        ok: true,
+        file: "LOCK",
+        lease: { ownerId: "o", expiresAt: "2026-07-23T12:00:00.000Z" },
+      }),
+      renew: () => ({ ok: true, lease: { ownerId: "o", expiresAt: "2026-07-23T12:01:00.000Z" } }),
+      release: () => ({ ok: true }),
+    },
+    transportConfig: {
+      enabled: true,
+      token: "",
+      baseUrl: "https://ilinkai.weixin.qq.com",
+      ackText: "收到",
+    },
+  });
+  worker.start();
+  assert.equal(worker.getState().transport, "not_configured");
+  assert.equal(worker.getState().persistence, "not_connected");
+  assert.equal(worker.getState().phase, "running");
+  worker.stop();
+});
+
 test("lease loss stops transport before exit", () => {
   const timers = createTimers();
   const transportCalls = [];

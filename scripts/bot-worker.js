@@ -231,7 +231,15 @@ function createBotWorker(options = {}) {
   }
 
   function startTransport() {
-    if (!transportConfig?.enabled || !String(transportConfig.token || "").trim()) {
+    if (!transportConfig?.enabled) {
+      update({ transport: "disabled" });
+      return;
+    }
+    if (!String(transportConfig.token || "").trim()) {
+      update({
+        transport: "not_configured",
+        lastError: state.lastError || "缺少 BOT_ILINK_TOKEN",
+      });
       return;
     }
     if (transport || leaseLost || state.phase !== "running") return;
