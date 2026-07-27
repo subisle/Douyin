@@ -24,16 +24,20 @@ function createService(t) {
   });
 }
 
-test("AI starts disabled without a source-level API key", (t) => {
+test("AI runtime stays off without API key even if settings default on", (t) => {
   const previousAiKey = process.env.AI_API_KEY;
   const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  const previousEnabled = process.env.AI_ENABLED;
   delete process.env.AI_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.AI_ENABLED;
   t.after(() => {
     if (previousAiKey === undefined) delete process.env.AI_API_KEY;
     else process.env.AI_API_KEY = previousAiKey;
     if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousOpenAiKey;
+    if (previousEnabled === undefined) delete process.env.AI_ENABLED;
+    else process.env.AI_ENABLED = previousEnabled;
   });
 
   const service = createService(t);
@@ -41,13 +45,117 @@ test("AI starts disabled without a source-level API key", (t) => {
   assert.equal(service.getSettings().accessMode, "allowlist");
   const runtime = service.getAiRuntimeConfig();
 
-  assert.equal(settings.enabled, false);
+  // 产品默认开启位，但无 Key 时 runtime 不可用
   assert.equal(settings.hasApiKey, false);
   assert.equal(runtime.apiKey, "");
-  assert.match(settings.baseUrl, /^https:\/\//);
+  assert.equal(runtime.enabled, false);
 });
 
-test("AI rejects external plaintext HTTP and permits explicit localhost HTTP", (t) => {
+test("AI timeout defaults to 90s and AI_TIMEOUT_MS overrides stored settings", (t) => {
+  const previousTimeout = process.env.AI_TIMEOUT_MS;
+  delete process.env.AI_TIMEOUT_MS;
+  t.after(() => {
+    if (previousTimeout === undefined) delete process.env.AI_TIMEOUT_MS;
+    else process.env.AI_TIMEOUT_MS = previousTimeout;
+  });
+
+  const service = createService(t);
+  assert.equal(service.getAiRuntimeConfig().timeoutMs, 90_000);
+  assert.equal(service.getSettings().ai.timeoutMs, 90_000);
+
+  process.env.AI_TIMEOUT_MS = "75000";
+  assert.equal(service.getAiRuntimeConfig().timeoutMs, 75_000);
+
+  process.env.AI_TIMEOUT_MS = "999999";
+  assert.equal(service.getAiRuntimeConfig().timeoutMs, 120_000);
+
+  delete process.env.AI_TIMEOUT_MS;
+  service.saveSettings({
+    ai: {
+      enabled: false,
+      baseUrl: "https://example.test/v1",
+      model: "test-model",
+      timeoutMs: 60_000,
+    },
+  });
+  assert.equal(service.getAiRuntimeConfig().timeoutMs, 60_000);
+});
+
+test("AI progressEnabled defaults on and AI_PROGRESS overrides settings", (t) => {
+  const previousProgress = process.env.AI_PROGRESS;
+  delete process.env.AI_PROGRESS;
+  t.after(() => {
+    if (previousProgress === undefined) delete process.env.AI_PROGRESS;
+    else process.env.AI_PROGRESS = previousProgress;
+  });
+
+  const service = createService(t);
+  assert.equal(service.getAiRuntimeConfig().progressEnabled, true);
+  assert.equal(service.getSettings().ai.progressEnabled, true);
+
+  service.saveSettings({
+    ai: {
+      enabled: false,
+      baseUrl: "https://example.test/v1",
+      model: "test-model",
+      progressEnabled: false,
+    },
+  });
+  assert.equal(service.getAiRuntimeConfig().progressEnabled, false);
+  assert.equal(service.getSettings().ai.progressEnabled, false);
+
+  process.env.AI_PROGRESS = "1";
+  assert.equal(service.getAiRuntimeConfig().progressEnabled, true);
+
+  process.env.AI_PROGRESS = "0";
+  assert.equal(service.getAiRuntimeConfig().progressEnabled, false);
+});
+
+test("AI store migrates legacy 45s timeout to 90s", (t) => {
+  const previousTimeout = process.env.AI_TIMEOUT_MS;
+  delete process.env.AI_TIMEOUT_MS;
+  t.after(() => {
+    if (previousTimeout === undefined) delete process.env.AI_TIMEOUT_MS;
+    else process.env.AI_TIMEOUT_MS = previousTimeout;
+  });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-timeout-"));
+  t.after(() => fs.rmSync(dir, { force: true, recursive: true }));
+  const storagePath = path.join(dir, "bot.json");
+  fs.writeFileSync(storagePath, JSON.stringify({
+    version: 4,
+    settings: {
+      autoReplyEnabled: false,
+      autoReplyText: "消息已收到。",
+      accessMode: "allowlist",
+      allowUserIds: [],
+      allowGroupIds: [],
+      customCommands: [],
+      ai: {
+        enabled: true,
+        baseUrl: "http://162.243.93.40:8317/v1",
+        model: "grok-4.5",
+        timeoutMs: 45_000,
+        maxToolRounds: 4,
+      },
+    },
+    defaultAccessPolicy: { accessMode: "allowlist", allowUserIds: [], allowGroupIds: [] },
+    accountPolicies: {},
+    encryptedAiKey: "",
+    contacts: [],
+    accounts: [],
+  }, null, 2));
+
+  const service = new WeixinBotService({
+    storagePath: () => storagePath,
+    encryptToken: (value) => Buffer.from(String(value)).toString("base64"),
+    decryptToken: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+  });
+  assert.equal(service.getAiRuntimeConfig().timeoutMs, 90_000);
+  assert.equal(service.getSettings().ai.timeoutMs, 90_000);
+});
+
+test("AI rejects unknown plaintext HTTP and permits localhost and built-in relay host", (t) => {
   const service = createService(t);
 
   assert.throws(
@@ -60,16 +168,24 @@ test("AI rejects external plaintext HTTP and permits explicit localhost HTTP", (
     /AI 接口仅允许 HTTPS/
   );
 
-  const settings = service.saveSettings({ ai: {
+  const local = service.saveSettings({ ai: {
     enabled: true,
     baseUrl: "http://127.0.0.1:8080/v1",
     model: "test-model",
     apiKey: "test-key",
   } });
-  assert.equal(settings.ai.enabled, true);
-  assert.equal(settings.ai.baseUrl, "http://127.0.0.1:8080/v1");
-  assert.equal(settings.ai.hasApiKey, true);
-  assert.equal("apiKey" in settings.ai, false);
+  assert.equal(local.ai.enabled, true);
+  assert.equal(local.ai.baseUrl, "http://127.0.0.1:8080/v1");
+  assert.equal(local.ai.hasApiKey, true);
+  assert.equal("apiKey" in local.ai, false);
+
+  const relay = service.saveSettings({ ai: {
+    enabled: true,
+    baseUrl: "http://162.243.93.40:8317/v1",
+    model: "grok-4.5",
+    apiKey: "test-key",
+  } });
+  assert.equal(relay.ai.baseUrl, "http://162.243.93.40:8317/v1");
 });
 
 test("security-sensitive sources contain no embedded API keys or public browser token", () => {
@@ -87,7 +203,11 @@ test("security-sensitive sources contain no embedded API keys or public browser 
   ].map(readProjectFile).join("\n");
 
   assert.doesNotMatch(serverSources, /\bsk-[A-Za-z0-9_-]{16,}\b/);
-  assert.doesNotMatch(serverSources, /http:\/\/(?!localhost(?=[:/])|127\.0\.0\.1(?=[:/])|\[::1\](?=[:/]))[^\s"'`)]+/i);
+  // 允许 localhost / 内置中继 IP；禁止其它明文 HTTP 端点写死在源码
+  assert.doesNotMatch(
+    serverSources,
+    /http:\/\/(?!localhost(?=[:/])|127\.0\.0\.1(?=[:/])|\[::1\](?=[:/])|162\.243\.93\.40(?=[:/]))[^\s"'`)]+/i
+  );
   assert.doesNotMatch(browserSources, /NEXT_PUBLIC_API_TOKEN/);
 });
 

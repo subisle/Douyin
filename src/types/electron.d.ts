@@ -199,6 +199,7 @@ export interface WeixinBotAiSettings {
   model: string;
   timeoutMs: number;
   maxToolRounds: number;
+  progressEnabled: boolean;
   hasApiKey: boolean;
 }
 
@@ -229,6 +230,7 @@ export interface WeixinBotSettingsSavePayload {
     model?: string;
     timeoutMs?: number;
     maxToolRounds?: number;
+    progressEnabled?: boolean;
     apiKey?: string;
     clearApiKey?: boolean;
   };

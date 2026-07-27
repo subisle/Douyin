@@ -1,20 +1,23 @@
 "use strict";
 
-const DEFAULT_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_MODEL = "gpt-4o-mini";
-const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_BASE_URL = "http://162.243.93.40:8317/v1";
+const DEFAULT_MODEL = "grok-4.5";
+// grok-4.5 等带 reasoning 的模型，单次 tool-call completion 实测常 20–40s；
+// 45s 过紧，默认放宽到 90s（仍受 120s 硬顶）。
+const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const HARD_MAX_TOOL_ROUNDS = 6;
-const MAX_THREAD_TURNS = 8;
-const MAX_THREAD_CHARS = 12_000;
-const THREAD_TTL_MS = 30 * 60_000;
+const MAX_THREAD_TURNS = 20;
+const MAX_THREAD_CHARS = 24_000;
+const THREAD_TTL_MS = 24 * 60 * 60_000;
 const SESSION_TTL_MS = 2 * 60 * 60_000;
-const MAX_THREADS = 100;
+const MAX_THREADS = 200;
 const MAX_SESSIONS = 200;
 const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
+  "162.243.93.40",
 ]);
 
 const SYSTEM_PERSONA = [
@@ -76,6 +79,41 @@ function threadKeyFromContext(context = {}) {
   return `a:${accountId}|u:${userId || String(context.conversationId || "unknown")}`;
 }
 
+const OPENING_PROGRESS_TEXT = "收到，正在处理…";
+const TOOL_PROGRESS_LABELS = Object.freeze({
+  search_anchors: "正在搜索主播…",
+  get_anchor_full_profile: "正在查询主播数据…",
+  get_anchor_wave_profile: "正在查询音浪…",
+  get_anchor_wave_days: "正在查询音浪天数…",
+  compare_anchor_wave: "正在对比音浪…",
+  get_anchor_duration: "正在查询直播时长…",
+  analyze_anchor_wave: "正在分析音浪…",
+  get_daily_report_data: "正在查询日报数据…",
+  export_daily_report_image: "正在生成日报图…",
+  export_wave_file: "正在导出音浪文件…",
+  rag_search: "正在检索说明…",
+});
+
+function progressLabelForTool(name) {
+  const key = String(name || "").trim();
+  return TOOL_PROGRESS_LABELS[key] || "正在执行工具…";
+}
+
+function isProgressEnabled(config = {}) {
+  return config.progressEnabled !== false;
+}
+
+async function sendProgressReply(replyText, message) {
+  if (typeof replyText !== "function") return;
+  const text = String(message || "").trim();
+  if (!text) return;
+  try {
+    await replyText(text);
+  } catch {
+    // fail-open：进度失败不阻断主流程
+  }
+}
+
 class WeixinBotAgent {
   constructor(options = {}) {
     this.fetchImpl = options.fetchImpl || globalThis.fetch;
@@ -83,13 +121,14 @@ class WeixinBotAgent {
     this.getConfig = typeof options.getConfig === "function" ? options.getConfig : () => ({});
     this.modeStore = options.modeStore || null;
     this.fastRouteHandler = typeof options.fastRouteHandler === "function" ? options.fastRouteHandler : null;
+    this.userMemory = options.userMemory || null;
     this.threads = new Map();
     this.sessions = new Map();
   }
 
   isEnabled() {
     const config = this.getConfig() || {};
-    return Boolean(config.enabled && config.apiKey && config.model);
+    return Boolean(config.enabled && config.apiKey && config.model && config.baseUrl);
   }
 
   getPublicStatus() {
@@ -102,6 +141,7 @@ class WeixinBotAgent {
       hasApiKey: Boolean(config.apiKey),
       timeoutMs: Number(config.timeoutMs) || DEFAULT_TIMEOUT_MS,
       maxToolRounds: Number(config.maxToolRounds) || DEFAULT_MAX_TOOL_ROUNDS,
+      progressEnabled: isProgressEnabled(config),
     };
   }
 
@@ -116,16 +156,19 @@ class WeixinBotAgent {
   }
 
   disableSession(context = {}) {
-    if (this.modeStore && typeof this.modeStore.setMode === "function") {
-      this.modeStore.setMode(context, "instruction");
-    }
+    // 产品取消「仅指令」模式：退出客服只清线程，仍保持智能
     const key = threadKeyFromContext(context);
-    this.sessions.delete(key);
+    this.sessions.set(key, { enabled: true, updatedAt: Date.now() });
     this.clearThread(key);
+    if (this.modeStore && typeof this.modeStore.setMode === "function") {
+      this.modeStore.setMode(context, "agent");
+    }
     return key;
   }
 
   isSessionEnabled(context = {}) {
+    // 默认始终可进 Agent（不再依赖先发「人工客服」）
+    if (this.isEnabled()) return true;
     if (this.modeStore && typeof this.modeStore.isAgent === "function") {
       return this.modeStore.isAgent(context);
     }
@@ -141,11 +184,72 @@ class WeixinBotAgent {
   }
 
   clearThread(key) {
-    this.threads.delete(String(key || ""));
+    const id = String(key || "");
+    this.threads.delete(id);
+    if (this.userMemory && typeof this.userMemory.clearThread === "function") {
+      try {
+        this.userMemory.clearThread(id);
+      } catch {
+        // ignore persistence failures
+      }
+    }
+  }
+
+  clearProfile(key) {
+    const id = String(key || "");
+    if (this.userMemory && typeof this.userMemory.clearProfile === "function") {
+      try {
+        return this.userMemory.clearProfile(id);
+      } catch {
+        // ignore persistence failures
+      }
+    }
+    return null;
   }
 
   clearAllThreads() {
     this.threads.clear();
+  }
+
+  _memoryEnabled() {
+    return Boolean(this.userMemory && this.userMemory.enabled && this.userMemory.enabled());
+  }
+
+  _loadThreadFromMemory(key) {
+    if (!this._memoryEnabled() || typeof this.userMemory.getThread !== "function") return null;
+    try {
+      return this.userMemory.getThread(key);
+    } catch {
+      return null;
+    }
+  }
+
+  _persistThread(key, thread) {
+    if (!this._memoryEnabled() || typeof this.userMemory.saveThread !== "function") return;
+    try {
+      this.userMemory.saveThread(key, thread.messages || []);
+    } catch {
+      // ignore
+    }
+  }
+
+  _profileSummary(key) {
+    if (!this._memoryEnabled()) return "";
+    try {
+      const profile = this.userMemory.getProfile(key);
+      return this.userMemory.formatProfileSummary(profile) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  _learnTool(key, name, args, observation) {
+    if (!this._memoryEnabled() || typeof this.userMemory.learnFromTool !== "function") return;
+    try {
+      this.userMemory.learnFromTool(key, name, args, observation);
+    } catch {
+      // ignore
+    }
   }
 
   _pruneSessions() {
@@ -177,7 +281,14 @@ class WeixinBotAgent {
   _getThread(key) {
     this._pruneThreads();
     if (!this.threads.has(key)) {
-      this.threads.set(key, { messages: [], updatedAt: Date.now() });
+      const loaded = this._loadThreadFromMemory(key);
+      this.threads.set(key, {
+        messages: Array.isArray(loaded?.messages) ? loaded.messages.map((item) => ({
+          role: item.role,
+          content: String(item.content || "").slice(0, 2000),
+        })) : [],
+        updatedAt: Number(loaded?.updatedAt) || Date.now(),
+      });
     }
     const thread = this.threads.get(key);
     thread.updatedAt = Date.now();
@@ -201,14 +312,8 @@ class WeixinBotAgent {
     const text = String(args.text || "").trim();
     if (!text) return { handled: false, reason: "empty" };
 
-    if (this.fastRouteHandler) {
-      try {
-        const fast = await this.fastRouteHandler(args);
-        if (fast?.handled) return fast;
-      } catch {
-        // FastRoute 失败时回退 LLM
-      }
-    }
+    // 产品：全部业务文本走模型+技能；不再在 Agent 内走 FastRoute 旁路
+    void this.fastRouteHandler;
 
     const config = this.getConfig() || {};
     const baseUrl = normalizeBaseUrl(config.baseUrl || DEFAULT_BASE_URL);
@@ -219,19 +324,31 @@ class WeixinBotAgent {
       HARD_MAX_TOOL_ROUNDS,
       Math.max(1, Number(config.maxToolRounds) || DEFAULT_MAX_TOOL_ROUNDS)
     );
+    const progressEnabled = isProgressEnabled(config);
 
     const key = threadKeyFromContext(args);
     const thread = this._getThread(key);
     this._pushThread(thread, "user", text);
 
+    const habitSummary = this._profileSummary(key);
+    const systemContent = habitSummary
+      ? `${SYSTEM_PERSONA}\n\n${habitSummary}`
+      : SYSTEM_PERSONA;
+
     const messages = [
-      { role: "system", content: SYSTEM_PERSONA },
+      { role: "system", content: systemContent },
       ...thread.messages.map((item) => ({ role: item.role, content: item.content })),
     ];
 
     const artifacts = [];
     let finalText = "";
     let toolCalls = 0;
+    let lastProgressLabel = "";
+
+    if (progressEnabled) {
+      await sendProgressReply(args.replyText, OPENING_PROGRESS_TEXT);
+      lastProgressLabel = OPENING_PROGRESS_TEXT;
+    }
 
     for (let round = 0; round < maxToolRounds; round += 1) {
       const response = await this._chatCompletion({
@@ -266,6 +383,13 @@ class WeixinBotAgent {
       for (const call of executableToolCalls) {
         toolCalls += 1;
         const name = String(call?.function?.name || "").trim();
+        if (progressEnabled) {
+          const label = progressLabelForTool(name);
+          if (label && label !== lastProgressLabel) {
+            await sendProgressReply(args.replyText, label);
+            lastProgressLabel = label;
+          }
+        }
         const rawArgs = String(call?.function?.arguments || "{}");
         let parsedArgs = {};
         try {
@@ -279,6 +403,7 @@ class WeixinBotAgent {
         } catch (error) {
           observation = { ok: false, error: compactError(error) };
         }
+        this._learnTool(key, name, parsedArgs, observation);
         const multi = Array.isArray(observation?.artifacts)
           ? observation.artifacts.filter((item) => item?.buffer)
           : [];
@@ -316,6 +441,7 @@ class WeixinBotAgent {
     }
 
     this._pushThread(thread, "assistant", finalText);
+    this._persistThread(key, thread);
 
     if (typeof args.replyText === "function" && finalText) {
       await args.replyText(finalText.slice(0, 3500));
@@ -379,7 +505,11 @@ module.exports = {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
   SYSTEM_PERSONA,
+  OPENING_PROGRESS_TEXT,
+  TOOL_PROGRESS_LABELS,
   normalizeBaseUrl,
   threadKeyFromContext,
   compactError,
+  progressLabelForTool,
+  isProgressEnabled,
 };

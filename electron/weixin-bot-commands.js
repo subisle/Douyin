@@ -10,6 +10,7 @@ const {
   SYSTEM_ENABLE_RE: AGENT_ENABLE_RE,
   SYSTEM_DISABLE_RE: AGENT_DISABLE_RE,
 } = require("./weixin-bot-mode");
+const { threadKeyFromContext } = require("./weixin-bot-agent");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -819,60 +820,68 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       }
 
       const systemToken = matchSystemToken(args.text);
-      const agentMode = modeStore.isAgent(args);
+      const aiStatus = typeof agent?.getPublicStatus === "function" ? agent.getPublicStatus() : {};
+      const aiReady = Boolean(aiStatus.configured && aiStatus.enabled);
+      // 产品：AI 就绪后文本全部进 Agent；无 FastRoute / 固定业务指令旁路
+      const agentMode = aiReady;
 
-      // 系统 token 始终处理
       if (systemToken === "help") {
-        await args.replyText(agentMode ? AGENT_HELP : HELP_TEXT);
+        await args.replyText(AGENT_HELP);
+        if (!aiReady) {
+          await args.replyText(
+            "提示：请在桌面启用 AI 并配置 Key；当前仅固定指令兜底可用。"
+          );
+        }
         return { handled: true };
       }
       if (systemToken === "enable") {
         if (!agent || typeof agent.enableSession !== "function") {
-          await args.replyText(
-            "智能客服暂不可用。请在桌面端「设置」中启用 AI，并填写接口地址、模型与 API Key 后再发「人工客服」。"
-          );
+          await args.replyText("智能对话暂不可用。请检查桌面 AI 配置。");
           return { handled: true };
         }
-        const status = typeof agent.getPublicStatus === "function" ? agent.getPublicStatus() : {};
-        if (!status.configured) {
+        if (!aiReady) {
           await args.replyText(
-            "智能客服未配置完成：请在桌面端启用 AI，并填写接口地址、模型与 API Key。配置前不会进入智能模式。"
-          );
-          return { handled: true };
-        }
-        if (!status.enabled) {
-          await args.replyText(
-            "智能客服接口已填但未启用：请在桌面端打开 AI 开关后再发「人工客服」。当前仍为指令模式。"
+            "AI 未就绪：请确认桌面已保存接口地址、模型与 API Key，并开启 AI。"
           );
           return { handled: true };
         }
         modeStore.setMode(args, "agent");
         agent.enableSession(args);
         await args.replyText([
-          "已接入智能客服（单个助手 + 多项数据技能）。",
-          "可直接说：查某艺名、每日报告、18号报告、对比两位主播、发音浪文件。",
-          "高置信指令走快速路由；其余由助手选技能查询。回复「退出客服」结束。",
+          "智能对话已就绪（默认开启）。",
+          "全部业务文本由 AI 处理；直接聊天即可。",
         ].join("\n"));
         return { handled: true };
       }
       if (systemToken === "disable") {
-        modeStore.setMode(args, "instruction");
+        // 不清退到指令模式；只清会话线程
+        modeStore.setMode(args, "agent");
         if (agent && typeof agent.disableSession === "function") agent.disableSession(args);
-        await args.replyText("已退出智能客服。固定命令仍可用，发「帮助」查看。");
+        await args.replyText("已清空本会话对话记忆。智能对话保持开启，文本仍全部由 AI 处理。");
+        return { handled: true };
+      }
+      if (systemToken === "clear-habits") {
+        modeStore.setMode(args, "agent");
+        const key = threadKeyFromContext(args);
+        if (agent && typeof agent.clearProfile === "function") {
+          agent.clearProfile(key);
+        } else if (agent?.userMemory && typeof agent.userMemory.clearProfile === "function") {
+          try {
+            agent.userMemory.clearProfile(key);
+          } catch {
+            // ignore
+          }
+        }
+        await args.replyText("已清除本会话习惯画像；对话记忆未改。");
         return { handled: true };
       }
 
-      // Agent 模式：只跑 FastRoute；匹配不到则交给 agent
+      // AI 就绪：文本一律交 Agent（含「每日报告」「艺名」等原固定指令）
       if (agentMode) {
-        const fast = matchFastRoute(args.text, { parseBotCommand });
-        if (fast) {
-          const ok = await dispatchBusinessCommand(args, fast, deps);
-          if (ok) return { handled: true, via: "fast-route" };
-        }
-        return { handled: false };
+        return { handled: false, via: "ai" };
       }
 
-      // 指令模式：自定义命令 + 完整 parseBotCommand
+      // AI 未就绪：仅确定性命令（兼容无 Key 环境）
       const custom = matchCustomCommand(args.text, args.settings?.customCommands);
       if (custom) {
         await handleCustomCommand(args, custom, db, renderReportPng);
@@ -883,11 +892,10 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       if (!command) return { handled: false };
 
       if (command.type === "help") {
-        await args.replyText(HELP_TEXT);
+        await args.replyText(AGENT_HELP);
         return { handled: true };
       }
       if (command.type === "agent-enable" || command.type === "agent-disable") {
-        // 已由 systemToken 处理；兜底
         return { handled: false };
       }
 

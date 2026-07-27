@@ -31,6 +31,8 @@ const { createWeixinCommandHandler } = require("./weixin-bot-commands");
 const { renderDailyReportPng } = require("./weixin-bot-report");
 const { createWeixinBotSkills } = require("./weixin-bot-skills");
 const { WeixinBotAgent } = require("./weixin-bot-agent");
+const { createWeixinUserMemory } = require("./weixin-bot-user-memory");
+const { resolveUserMemoryPath } = require("./local-paths");
 const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
@@ -95,9 +97,13 @@ const weixinBot = new WeixinBotService({
   },
 });
 const weixinBotSkills = createWeixinBotSkills({ db, renderReportPng: renderDailyReportPng });
+const weixinUserMemory = createWeixinUserMemory({
+  storagePath: () => resolveUserMemoryPath(),
+});
 const weixinBotAgent = new WeixinBotAgent({
   skills: weixinBotSkills,
   getConfig: () => weixinBot.getAiRuntimeConfig(),
+  userMemory: weixinUserMemory,
 });
 const weixinCommandHandler = createWeixinCommandHandler({
   db,

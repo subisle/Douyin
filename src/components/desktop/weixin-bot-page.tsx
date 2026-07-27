@@ -77,11 +77,12 @@ const DEFAULT_SETTINGS: WeixinBotSettings = {
   allowGroupIds: [],
   customCommands: [],
   ai: {
-    enabled: false,
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-    timeoutMs: 45_000,
+    enabled: true,
+    baseUrl: "http://162.243.93.40:8317/v1",
+    model: "grok-4.5",
+    timeoutMs: 90_000,
     maxToolRounds: 4,
+    progressEnabled: true,
     hasApiKey: false,
   },
   contacts: [],
@@ -94,8 +95,7 @@ const COMMAND_HINTS: { example: string; desc: string }[] = [
   { example: "艺名+时长", desc: "累计时长" },
   { example: "艺名+音浪", desc: "最新音浪" },
   { example: "音浪文件", desc: "导出 CSV" },
-  { example: "人工客服", desc: "开启智能" },
-  { example: "退出客服", desc: "关闭智能" },
+  { example: "清空对话", desc: "清会话记忆" },
 ];
 
 const CUSTOM_ACTION_OPTIONS: { value: WeixinBotCustomCommandAction; label: string }[] = [
@@ -159,6 +159,7 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
       model: String(ai.model || DEFAULT_SETTINGS.ai.model),
       timeoutMs: Number(ai.timeoutMs) || DEFAULT_SETTINGS.ai.timeoutMs,
       maxToolRounds: Number(ai.maxToolRounds) || DEFAULT_SETTINGS.ai.maxToolRounds,
+      progressEnabled: ai.progressEnabled !== false,
       hasApiKey: Boolean(ai.hasApiKey),
     },
     contacts: Array.isArray(input?.contacts)
@@ -338,6 +339,7 @@ export function WeixinBotPage() {
         model: settings.ai.model,
         timeoutMs: settings.ai.timeoutMs,
         maxToolRounds: settings.ai.maxToolRounds,
+        progressEnabled: settings.ai.progressEnabled !== false,
         ...(apiKeyDraft.trim() ? { apiKey: apiKeyDraft.trim() } : {}),
       },
     });
@@ -1003,7 +1005,21 @@ function AiSettingsPanel({
             }
             className="size-4 accent-[#07c160]"
           />
-          启用轻量 AI Agent
+          启用智能对话（默认）
+        </label>
+        <label className="flex items-center gap-2 text-xs font-semibold">
+          <input
+            type="checkbox"
+            checked={ai.progressEnabled !== false}
+            onChange={(event) =>
+              onSettingsChange({
+                ...settings,
+                ai: { ...ai, progressEnabled: event.target.checked },
+              })
+            }
+            className="size-4 accent-[#07c160]"
+          />
+          处理时发送进度回执（默认开）
         </label>
         <Field
           label="接口地址"
@@ -1011,7 +1027,7 @@ function AiSettingsPanel({
           onChange={(value) =>
             onSettingsChange({ ...settings, ai: { ...ai, baseUrl: value } })
           }
-          placeholder="https://api.openai.com/v1"
+          placeholder="http://162.243.93.40:8317/v1"
         />
         <Field
           label="模型"
@@ -1019,7 +1035,19 @@ function AiSettingsPanel({
           onChange={(value) =>
             onSettingsChange({ ...settings, ai: { ...ai, model: value } })
           }
-          placeholder="gpt-4o-mini"
+          placeholder="grok-4.5"
+        />
+        <Field
+          label="单次请求超时（秒）"
+          value={String(Math.round((Number(ai.timeoutMs) || 90_000) / 1000))}
+          onChange={(value) => {
+            const seconds = Number(value);
+            const timeoutMs = Number.isFinite(seconds) && seconds > 0
+              ? Math.min(120, Math.max(5, Math.round(seconds))) * 1000
+              : 90_000;
+            onSettingsChange({ ...settings, ai: { ...ai, timeoutMs } });
+          }}
+          placeholder="90"
         />
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
@@ -1049,7 +1077,10 @@ function AiSettingsPanel({
           )}
         </div>
         <p className="text-[10px] leading-4 text-muted-foreground">
-          仅根据已有数据库技能回答；命令优先于 AI。Key 加密保存在本机，界面不回显明文。
+          默认直接对话：业务文本全部由 AI 选技能处理（查数/日报图/导出）。CSV 文件导入仍走确定性路径。
+          超时按单次模型请求计（含 tool 多轮中的每一轮），范围 5–120 秒；环境变量 AI_TIMEOUT_MS 可覆盖。
+          进度回执会先回「收到，正在处理…」，调用技能前再回简短中文进度；可用 AI_PROGRESS=0 关闭。
+          Key 加密保存在本机，界面不回显明文。
         </p>
       </div>
     </aside>

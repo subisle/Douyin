@@ -120,6 +120,22 @@ function resolveLocalTmpDir(env = process.env) {
   return ensureDir(path.join(resolveRuntimeDir(env), "tmp"));
 }
 
+/**
+ * Per-user Weixin agent memory (threads + habit profiles).
+ * Priority: AI_USER_MEMORY_PATH → <runtime>/memory/weixin-user-memory.json
+ */
+function resolveUserMemoryPath(env = process.env) {
+  const fromEnv = String(env.AI_USER_MEMORY_PATH || "").trim();
+  if (fromEnv) {
+    const abs = path.resolve(fromEnv);
+    ensureDir(path.dirname(abs));
+    return abs;
+  }
+  const dir = path.join(resolveRuntimeDir(env), "memory");
+  ensureDir(dir);
+  return path.join(dir, "weixin-user-memory.json");
+}
+
 function resolveRagCustomPath(env = process.env) {
   const fromEnv = String(env.RAG_CUSTOM_PATH || "").trim();
   if (fromEnv) {
@@ -233,6 +249,7 @@ module.exports = {
   resolveWorkerStatusPath,
   resolveArtifactRoot,
   resolveLocalTmpDir,
+  resolveUserMemoryPath,
   resolveRagCustomPath,
   sessionMaxBytes,
   sessionMaxSessions,

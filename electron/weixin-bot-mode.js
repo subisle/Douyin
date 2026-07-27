@@ -6,26 +6,20 @@
  */
 
 const SYSTEM_ENABLE_RE = /^(?:人工客服|智能客服|客服|开启客服|打开客服)$/i;
-const SYSTEM_DISABLE_RE = /^(?:退出客服|关闭客服|结束客服|取消客服)$/i;
+const SYSTEM_DISABLE_RE = /^(?:退出客服|关闭客服|结束客服|取消客服|清空对话|清除记忆)$/i;
+const SYSTEM_CLEAR_HABITS_RE = /^(?:清除习惯|清除我的习惯|清空习惯)$/i;
 const SYSTEM_HELP_RE = /^(?:\/?help|帮助|菜单|命令|指令)$/i;
 
 const INSTRUCTION_HELP = [
-  "用法很简单：",
-  "· 直接发艺名 → 查库内全部数据",
-  "· 每日报告 → 最新双团报告图",
-  "· 18号报告 / 18号音浪 → 指定日",
-  "· 艺名+时长 / 艺名+音浪 → 单项",
-  "· 发 CSV → 默认昨天；先说「24号数据」可指定日",
-  "· 智能助手：发「人工客服」（需先在设置里配置 AI）",
+  "【智能对话 · 全部由 AI 处理】",
+  "· 直接聊天：查音浪/时长、出日报图、导出等均由助手选技能完成",
+  "· 发 CSV → 默认昨天；先说「24号数据」可指定日（文件导入仍确定性）",
+  "· 「清空对话」→ 仅清除本会话对话记忆（习惯画像保留）",
+  "· 「清除习惯」→ 清除本会话自动学习的习惯画像（对话记忆不动）",
+  "· 无指令模式 / FastRoute 旁路；AI 未配置时才退回固定指令兜底",
 ].join("\n");
 
-const AGENT_HELP = [
-  "【智能客服模式 · 单助手多技能】",
-  "用自然语言问音浪/时长/对比、要报告图、发音浪文件。",
-  "固定高置信指令仍可直接用（快速路由，不经模型）。",
-  "· 退出客服 → 返回指令模式",
-  "· 帮助 → 显示本说明",
-].join("\n");
+const AGENT_HELP = INSTRUCTION_HELP;
 
 function sessionKeyFromContext(context = {}) {
   const accountId = String(context.accountId || "").trim() || "unknown";
@@ -37,9 +31,15 @@ function sessionKeyFromContext(context = {}) {
   return `a:${accountId}|c:${conversationId || "unknown"}`;
 }
 
-function createModeStore({ ttlMs = 2 * 60 * 60_000, maxSessions = 50 } = {}) {
+function createModeStore({
+  ttlMs = 2 * 60 * 60_000,
+  maxSessions = 50,
+  /** @type {'instruction'|'agent'} */
+  defaultMode = "agent",
+} = {}) {
   /** @type {Map<string, { mode: 'instruction'|'agent', updatedAt: number }>} */
   const store = new Map();
+  const fallback = defaultMode === "instruction" ? "instruction" : "agent";
 
   function prune() {
     const now = Date.now();
@@ -55,14 +55,15 @@ function createModeStore({ ttlMs = 2 * 60 * 60_000, maxSessions = 50 } = {}) {
   }
 
   return {
+    defaultMode: fallback,
     getMode(context) {
       prune();
       const key = sessionKeyFromContext(context);
       const item = store.get(key);
-      if (!item) return "instruction";
+      if (!item) return fallback;
       if (Date.now() - (item.updatedAt || 0) > ttlMs) {
         store.delete(key);
-        return "instruction";
+        return fallback;
       }
       item.updatedAt = Date.now();
       return item.mode === "agent" ? "agent" : "instruction";
@@ -71,11 +72,9 @@ function createModeStore({ ttlMs = 2 * 60 * 60_000, maxSessions = 50 } = {}) {
       prune();
       const key = sessionKeyFromContext(context);
       const next = mode === "agent" ? "agent" : "instruction";
-      if (next === "instruction") {
-        store.delete(key);
-        return key;
-      }
-      store.set(key, { mode: "agent", updatedAt: Date.now() });
+      // Persist both modes: default agent means "no row" === agent, so
+      // instruction must be stored explicitly after 退出客服.
+      store.set(key, { mode: next, updatedAt: Date.now() });
       return key;
     },
     isAgent(context) {
@@ -90,6 +89,7 @@ function matchSystemToken(text) {
   if (!t) return null;
   if (SYSTEM_ENABLE_RE.test(t)) return "enable";
   if (SYSTEM_DISABLE_RE.test(t)) return "disable";
+  if (SYSTEM_CLEAR_HABITS_RE.test(t)) return "clear-habits";
   if (SYSTEM_HELP_RE.test(t)) return "help";
   return null;
 }
@@ -158,6 +158,7 @@ function createSessionQueues() {
 module.exports = {
   SYSTEM_ENABLE_RE,
   SYSTEM_DISABLE_RE,
+  SYSTEM_CLEAR_HABITS_RE,
   SYSTEM_HELP_RE,
   INSTRUCTION_HELP,
   AGENT_HELP,

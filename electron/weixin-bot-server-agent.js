@@ -21,6 +21,16 @@ function looksLikeData(text) {
   return /音浪|时长|排名|报告|导出|对比|多少|累计|未播|男团|女队|女团/.test(t);
 }
 
+const DEFAULT_AI_BASE_URL = "http://162.243.93.40:8317/v1";
+const DEFAULT_AI_MODEL = "grok-4.5";
+const ALLOWED_AI_HTTP_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",
+  "::1",
+  "162.243.93.40",
+]);
+
 function normalizeAiBaseUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -30,23 +40,22 @@ function normalizeAiBaseUrl(value) {
   } catch {
     return "";
   }
-  const localhost = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-  const localHttp = url.protocol === "http:" && localhost.has(url.hostname);
+  const localHttp = url.protocol === "http:" && ALLOWED_AI_HTTP_HOSTS.has(url.hostname);
   if (url.protocol !== "https:" && !localHttp) return "";
   return url.toString().replace(/\/$/, "");
 }
 
 function getAiEnvConfig() {
-  const baseUrl = normalizeAiBaseUrl(process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || "");
+  const baseUrl = normalizeAiBaseUrl(process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL || DEFAULT_AI_BASE_URL);
   const apiKey = String(process.env.AI_API_KEY || process.env.OPENAI_API_KEY || "").trim();
-  const model = String(process.env.AI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim();
+  const model = String(process.env.AI_MODEL || process.env.OPENAI_MODEL || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
   const explicitlyEnabled = /^(?:1|true|yes|on)$/i.test(String(process.env.AI_ENABLED || "").trim());
   return {
     enabled: Boolean(explicitlyEnabled && baseUrl && apiKey && model),
     baseUrl,
     apiKey,
     model,
-    timeoutMs: Math.min(120_000, Math.max(5_000, Number(process.env.AI_TIMEOUT_MS) || 45_000)),
+    timeoutMs: Math.min(120_000, Math.max(5_000, Number(process.env.AI_TIMEOUT_MS) || 90_000)),
     maxToolRounds: Math.min(6, Math.max(1, Number(process.env.AI_MAX_TOOL_ROUNDS) || 4)),
   };
 }

@@ -655,14 +655,20 @@ test("mode store + matchFastRoute unit", () => {
   } = require("./weixin-bot-mode");
   const store = createModeStore();
   const ctx = { fromUserId: "u1", conversationId: "u1" };
-  assert.equal(store.getMode(ctx), "instruction");
-  store.setMode(ctx, "agent");
+  // 默认智能模式
+  assert.equal(store.getMode(ctx), "agent");
   assert.equal(store.isAgent(ctx), true);
   store.setMode(ctx, "instruction");
   assert.equal(store.isAgent(ctx), false);
+  store.setMode(ctx, "agent");
+  assert.equal(store.isAgent(ctx), true);
+
+  const legacy = createModeStore({ defaultMode: "instruction" });
+  assert.equal(legacy.getMode(ctx), "instruction");
 
   assert.equal(matchSystemToken("人工客服"), "enable");
   assert.equal(matchSystemToken("退出客服"), "disable");
+  assert.equal(matchSystemToken("清除习惯"), "clear-habits");
   assert.equal(matchSystemToken("帮助"), "help");
   assert.equal(matchSystemToken("每日报告"), null);
 
@@ -690,18 +696,17 @@ test("mode, AI thread, and pending import keys isolate bot accounts", () => {
   const accountB = { ...accountA, accountId: "account-b@im.bot" };
   const store = createModeStore();
 
-  store.setMode(accountA, "agent");
-  assert.equal(store.getMode(accountA), "agent");
-  assert.equal(store.getMode(accountB), "instruction");
+  store.setMode(accountA, "instruction");
+  assert.equal(store.getMode(accountA), "instruction");
+  // 另一账号未写入时默认 agent
+  assert.equal(store.getMode(accountB), "agent");
   assert.notEqual(sessionKeyFromContext(accountA), sessionKeyFromContext(accountB));
   assert.notEqual(threadKeyFromContext(accountA), threadKeyFromContext(accountB));
   assert.notEqual(pendingImportKey(accountA), pendingImportKey(accountB));
 });
 
-test("agent mode: after 人工客服, 每日报告 still handled via FastRoute", async () => {
+test("agent mode: AI-ready business text falls through to agent, not FastRoute", async () => {
   const replies = [];
-  const images = [];
-  const genders = [];
   const mockAgent = {
     enableSession() {},
     disableSession() {},
@@ -713,20 +718,27 @@ test("agent mode: after 人工客服, 每日报告 still handled via FastRoute",
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
       exportWaveSnapshots: async () => [{ 音浪: 100 }],
-      getDailyWaveReport: async (date, gender) => {
-        genders.push(gender);
-        return {
-          date,
-          gender,
-          summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
-          rows: [{ name: "甲", isLive: true, dailyWave: 100, totalWave: 100, dailyDuration: 10 }],
-        };
+      getDailyWaveReport: async () => {
+        throw new Error("AI 就绪时不应再走固定日报命令");
       },
     },
-    renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
+    renderReportPng: async () => Buffer.from("PNG"),
     agent: mockAgent,
   });
   const ctx = { fromUserId: "agent-user", conversationId: "agent-user" };
+  // 默认即为 agent；无需先发人工客服
+  assert.equal(handler.modeStore.isAgent(ctx), true);
+
+  const report = await handler({
+    ...ctx,
+    text: "每日报告",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async () => {},
+  });
+  assert.equal(report.handled, false);
+  assert.equal(report.via, "ai");
+
   const enable = await handler({
     ...ctx,
     text: "人工客服",
@@ -734,23 +746,10 @@ test("agent mode: after 人工客服, 每日报告 still handled via FastRoute",
     replyText: async (text) => { replies.push(text); },
   });
   assert.equal(enable.handled, true);
-  assert.equal(handler.modeStore.isAgent(ctx), true);
-  assert.match(replies.at(-1), /智能客服/);
-
-  const report = await handler({
-    ...ctx,
-    text: "每日报告",
-    items: [],
-    replyText: async (text) => { replies.push(text); },
-    replyImage: async (image) => { images.push(image); },
-  });
-  assert.equal(report.handled, true);
-  assert.equal(report.via, "fast-route");
-  assert.deepEqual(genders, ["male", "female"]);
-  assert.ok(images.length >= 2);
+  assert.match(replies.at(-1), /智能对话|全部|AI/);
 });
 
-test("agent mode: free text not matched returns handled false for agent fallback", async () => {
+test("default agent: free text returns handled false for agent fallback", async () => {
   const handler = createWeixinCommandHandler({
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18" }),
@@ -764,12 +763,6 @@ test("agent mode: free text not matched returns handled false for agent fallback
     },
   });
   const ctx = { fromUserId: "agent-user-2", conversationId: "agent-user-2" };
-  await handler({
-    ...ctx,
-    text: "人工客服",
-    items: [],
-    replyText: async () => {},
-  });
   const free = await handler({
     ...ctx,
     text: "帮我对比一下最近谁音浪好",
@@ -777,8 +770,97 @@ test("agent mode: free text not matched returns handled false for agent fallback
     replyText: async () => {},
   });
   assert.equal(free.handled, false);
+  assert.equal(free.via, "ai");
 });
 
+test("AI not ready still runs deterministic commands as fallback", async () => {
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 1 }],
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+        rows: [{ name: "甲", isLive: true, dailyWave: 1, totalWave: 1, dailyDuration: 1 }],
+      }),
+    },
+    renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
+    agent: {
+      enableSession() {},
+      disableSession() {},
+      getPublicStatus() { return { enabled: false, configured: true }; },
+    },
+  });
+  const ctx = { fromUserId: "no-ai-user", conversationId: "no-ai-user" };
+  const report = await handler({
+    ...ctx,
+    text: "每日报告",
+    items: [],
+    replyText: async (t) => { replies.push(t); },
+    replyImage: async () => {},
+  });
+  assert.equal(report.handled, true);
+  // AI 未就绪时走固定指令兜底
+  assert.notEqual(report.via, "ai");
+  assert.notEqual(report.via, "fast-route");
+});
+
+test("退出客服 clears memory but keeps agent preference", async () => {
+  const replies = [];
+  let disabled = false;
+  const handler = createWeixinCommandHandler({
+    db: { getDashboardSummary: async () => ({}) },
+    renderReportPng: async () => Buffer.alloc(0),
+    agent: {
+      enableSession() {},
+      disableSession() { disabled = true; },
+      getPublicStatus() { return { enabled: true, configured: true }; },
+    },
+  });
+  const ctx = { fromUserId: "mem-user", conversationId: "mem-user" };
+  await handler({
+    ...ctx,
+    text: "退出客服",
+    items: [],
+    replyText: async (t) => { replies.push(t); },
+  });
+  assert.equal(disabled, true);
+  assert.equal(handler.modeStore.isAgent(ctx), true);
+  assert.match(replies.at(-1), /清空|智能对话|智能模式/);
+});
+
+test("清除习惯 clears profile only via agent.clearProfile", async () => {
+  const replies = [];
+  const cleared = [];
+  const handler = createWeixinCommandHandler({
+    db: { getDashboardSummary: async () => ({}) },
+    renderReportPng: async () => Buffer.alloc(0),
+    agent: {
+      enableSession() {},
+      disableSession() {},
+      clearProfile(key) { cleared.push(key); },
+      getPublicStatus() { return { enabled: true, configured: true }; },
+    },
+  });
+  const ctx = { accountId: "acc-1", fromUserId: "habit-user", conversationId: "habit-user" };
+  const { matchSystemToken } = require("./weixin-bot-mode");
+  assert.equal(matchSystemToken("清除习惯"), "clear-habits");
+  assert.equal(matchSystemToken("清除我的习惯"), "clear-habits");
+  assert.equal(matchSystemToken("清空习惯"), "clear-habits");
+
+  await handler({
+    ...ctx,
+    text: "清除习惯",
+    items: [],
+    replyText: async (t) => { replies.push(t); },
+  });
+  assert.equal(cleared.length, 1);
+  assert.equal(cleared[0], threadKeyFromContext(ctx));
+  assert.match(replies.at(-1), /习惯画像/);
+  assert.match(replies.at(-1), /对话记忆未改/);
+});
 
 test("CSV怎么导入 not fast-route as anchor profile", () => {
   const { matchFastRoute, parseBotCommand } = require("./weixin-bot-commands");

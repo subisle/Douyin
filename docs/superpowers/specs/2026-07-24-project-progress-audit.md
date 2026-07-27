@@ -2,11 +2,11 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 版本 | v1.1.0 |
-| 日期 | 2026-07-24 |
+| 版本 | v1.2.0 |
+| 日期 | 2026-07-27 |
 | 分支 | `615`（相对 origin 领先；以本地 HEAD 为准） |
 | 方法 | 代码优先 + 多代理对照设计文档 + Verify 对抗校验；冲突时 **代码 / migrations / CLAUDE.md > 进度表 > 旧设计段落** |
-| 关联 | 路线图 S0–S8 · 单 Agent 规格 · `ilink-implementation-progress.md` · ADR 0001 · 执行切片 `2026-07-24-next-execution-slice.md` |
+| 关联 | 路线图 S0–S8 · 单 Agent 规格 · `ilink-implementation-progress.md` · ADR 0001 · 执行切片 `2026-07-24-next-execution-slice.md` · 进度回执 / 用户记忆设计（2026-07-27） |
 
 ---
 
@@ -14,7 +14,7 @@
 
 | 维度 | 结论 |
 | --- | --- |
-| 用户智能 | **桌面单 Agent + 11 技能 + 微信 iLink**，与规格对齐，可演示 |
+| 用户智能 | **桌面单 Agent + 11 技能 + 微信 iLink**（默认 agent；AI 就绪后业务文本进 Agent）；进度回执 / 用户记忆一期已落地，可演示 |
 | 服务器 Worker | **实验性文本闭环 + S2 登录/凭据主链已接线**；**非生产** |
 | 相对路线图 | **S0 基本完成；S1 剧本齐、真号留证缺；S2 代码大半完成、退出准则未证；S3 仅地基；S4–S8 未开** |
 | 生产标签 | **禁止**写「服务器生产可用」（未过 S7 / G1–G4） |
@@ -65,19 +65,23 @@ getUpdates → persistBatch(Inbox+Cursor) → onText
 
 ## 3. 桌面单 Agent 规格对齐
 
-规格：`docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`
+规格：`docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`  
+扩展：`2026-07-27-weixin-agent-progress-status-design.md` · `2026-07-27-weixin-agent-user-memory-design.md`
 
 | 检查项 | 结果 |
 | --- | --- |
 | 唯一用户通道 iLink | ✅ `CLAUDE.md` + 桌面 `weixin-bot.js`；无第二 IM 主通道 |
 | 恰好一个 Agent | ✅ `main.js` 单例 `WeixinBotAgent` |
 | 11 技能一技能一功能 | ✅ `weixin-bot-skills.js`：`search_anchors` … `rag_search` |
-| instruction / agent 双模式 | ✅ `weixin-bot-mode.js` |
-| FastRoute 确定性优先 | ✅ commands/agent 路径 |
+| 默认 agent（无独立指令模式入口） | ✅ 产品默认 `agent`；`weixin-bot-mode.js` 仍可存 `instruction` 兼容态，**无**独立「指令模式」用户入口 |
+| FastRoute | ⚠️ **非**当前产品主路径：`matchFastRoute` 仅兼容/单测导出；**AI 就绪后业务文本进 Agent**（commands 注释与测一致） |
+| AI 超时默认 90s | ✅ `WeixinBotAgent` / 设置页 / `AI_TIMEOUT_MS` 覆盖（`weixin-bot-agent.js`、security 测） |
+| 进度回执（开场 + 工具） | ✅ 默认开、可关；`progressEnabled` / `AI_PROGRESS`（进度回执规格 + agent 测） |
+| 用户记忆 / 习惯一期 | ✅ 线程落盘加长 + 成功技能自动学习画像注入；「清空对话」只清线程；「清除习惯」清 profile（用户记忆规格 + `weixin-bot-user-memory.js` + commands） |
 | 数字只来自 DB/工具 | ✅ 规格 + analytics；RAG 禁答实时数字 |
 | 多 Agent 默认路径 | ✅ **未实现**（符合冻结） |
 
-**桌面主路径完成度：~80%（产品可用 MVP）**；缺口在共享 Core、会话 MySQL、抖音画像桩等，不阻塞桌面日常使用。
+**桌面主路径完成度：~85%（产品可用 MVP）**；7/27 补齐超时/进度/记忆一期。缺口仍在共享 Core、会话 MySQL、抖音画像桩等，不阻塞桌面日常使用。
 
 ---
 
@@ -139,6 +143,7 @@ getUpdates → persistBatch(Inbox+Cursor) → onText
 | --- | --- |
 | 2026-07-24 | 初版：多代理审计 + 本地代码接线核对 |
 | 2026-07-24 | v1.1：漂移项落地修复；并入 workflow Verify 附录；S2.2 对抗降为「实现 done / 退出 partial」 |
+| 2026-07-27 | v1.2：桌面单 Agent 对齐 7/27 真值——默认 agent、FastRoute 仅兼容/测试、超时 90s、进度回执、用户记忆一期；不升服务器生产标签 |
 
 ---
 
@@ -168,4 +173,4 @@ getUpdates → persistBatch(Inbox+Cursor) → onText
 - **done：** S1.1、S2.1、S2.3、S2.5、S2.A3、pre-S0-text-baseline  
 - **关键 partial：** S1 留证、S2 退出、S3 全链路、S0 残余  
 - **无 claim 被升格为生产完成**；**不修改** §7 下一刀顺序  
-- 桌面单 Agent 四路 Audit 全对齐（11 技能 / 双模式 / FastRoute / iLink），详见 journal `area=desktop-single-agent`
+- 桌面单 Agent 基线对齐（11 技能 / 默认 agent / iLink）；**注意：** 附录当时的「双模式 / FastRoute 优先」表述已被 v1.2 正文 §3 纠正为当前产品行为

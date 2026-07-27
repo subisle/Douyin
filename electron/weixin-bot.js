@@ -33,12 +33,13 @@ const HISTORY_LIMIT = 200;
 const SEEN_MESSAGE_LIMIT = 500;
 const RUNNER_LEASE_TTL_MS = 120_000;
 
-const DEFAULT_AI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_AI_MODEL = "gpt-4o-mini";
+const DEFAULT_AI_BASE_URL = "http://162.243.93.40:8317/v1";
+const DEFAULT_AI_MODEL = "grok-4.5";
 const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
+  "162.243.93.40",
 ]);
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -49,11 +50,12 @@ const DEFAULT_SETTINGS = Object.freeze({
   allowGroupIds: [],
   customCommands: [],
   ai: {
-    enabled: false,
+    enabled: true,
     baseUrl: DEFAULT_AI_BASE_URL,
     model: DEFAULT_AI_MODEL,
-    timeoutMs: 45_000,
+    timeoutMs: 90_000,
     maxToolRounds: 4,
+    progressEnabled: true,
   },
 });
 
@@ -74,6 +76,50 @@ function normalizeAiBaseUrl(value, fallback = DEFAULT_AI_BASE_URL) {
 
 function environmentAiApiKey(env = process.env) {
   return String(env.AI_API_KEY || env.OPENAI_API_KEY || "").trim();
+}
+
+function environmentAiEnabled(env = process.env) {
+  const raw = String(env.AI_ENABLED ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  return null;
+}
+
+function environmentAiBaseUrl(env = process.env) {
+  return String(env.AI_BASE_URL || "").trim();
+}
+
+function environmentAiModel(env = process.env) {
+  return String(env.AI_MODEL || "").trim();
+}
+
+function clampAiTimeoutMs(value, fallback = 90_000) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return fallback;
+  return Math.min(120_000, Math.max(5_000, raw));
+}
+
+function environmentAiTimeoutMs(env = process.env) {
+  const raw = String(env.AI_TIMEOUT_MS ?? "").trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return clampAiTimeoutMs(value);
+}
+
+function environmentAiProgressEnabled(env = process.env) {
+  const raw = String(env.AI_PROGRESS ?? "").trim().toLowerCase();
+  if (!raw) return null;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  return null;
+}
+
+function resolveProgressEnabled(settingsValue, env = process.env) {
+  const envProgress = environmentAiProgressEnabled(env);
+  if (envProgress !== null) return envProgress;
+  return settingsValue !== false;
 }
 
 function compactError(error) {
@@ -522,11 +568,12 @@ class WeixinBotService extends EventEmitter {
       allowGroupIds: [...policy.allowGroupIds],
       customCommands: (this.settings.customCommands || []).map((item) => ({ ...item })),
       ai: {
-        enabled: Boolean(this.settings.ai?.enabled),
-        baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
-        model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
-        timeoutMs: Number(this.settings.ai?.timeoutMs) || 45_000,
+        enabled: Boolean(this.getAiRuntimeConfig().enabled),
+        baseUrl: String(this.getAiRuntimeConfig().baseUrl || DEFAULT_AI_BASE_URL),
+        model: String(this.getAiRuntimeConfig().model || DEFAULT_AI_MODEL),
+        timeoutMs: Number(this.getAiRuntimeConfig().timeoutMs) || 90_000,
         maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
+        progressEnabled: Boolean(this.getAiRuntimeConfig().progressEnabled),
         hasApiKey: Boolean(this.encryptedAiKey || environmentAiApiKey()),
       },
       contacts: this.getContacts().filter((item) => !targetAccountId || item.accountId === targetAccountId),
@@ -557,12 +604,30 @@ class WeixinBotService extends EventEmitter {
       }
     }
     if (!apiKey) apiKey = environmentAiApiKey();
+    const envEnabled = environmentAiEnabled();
+    const envBase = environmentAiBaseUrl();
+    const envModel = environmentAiModel();
+    let baseUrl = String(envBase || this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL);
+    try {
+      baseUrl = normalizeAiBaseUrl(baseUrl);
+    } catch {
+      baseUrl = DEFAULT_AI_BASE_URL;
+    }
+    const model = String(envModel || this.settings.ai?.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
+    // 产品：默认开启；env AI_ENABLED 可强制关；有 Key+模型+地址即视为可用
+    const enabled = envEnabled === false
+      ? false
+      : envEnabled === true
+        ? true
+        : Boolean(this.settings.ai?.enabled !== false && apiKey && model && baseUrl);
+    const envTimeoutMs = environmentAiTimeoutMs();
     return {
-      enabled: Boolean(this.settings.ai?.enabled),
-      baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
-      model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
-      timeoutMs: Number(this.settings.ai?.timeoutMs) || 45_000,
+      enabled,
+      baseUrl,
+      model,
+      timeoutMs: envTimeoutMs ?? clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
       maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
+      progressEnabled: resolveProgressEnabled(this.settings.ai?.progressEnabled),
       apiKey,
     };
   }
@@ -587,8 +652,11 @@ class WeixinBotService extends EventEmitter {
       enabled: Boolean(nextAiInput.enabled ?? prevAi.enabled),
       baseUrl: String(nextAiInput.baseUrl ?? prevAi.baseUrl ?? DEFAULT_AI_BASE_URL).trim() || DEFAULT_AI_BASE_URL,
       model: String(nextAiInput.model ?? prevAi.model ?? DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
-      timeoutMs: Math.min(120_000, Math.max(5_000, Number(nextAiInput.timeoutMs ?? prevAi.timeoutMs) || 45_000)),
+      timeoutMs: clampAiTimeoutMs(nextAiInput.timeoutMs ?? prevAi.timeoutMs, 90_000),
       maxToolRounds: Math.min(6, Math.max(1, Number(nextAiInput.maxToolRounds ?? prevAi.maxToolRounds) || 4)),
+      progressEnabled: Object.prototype.hasOwnProperty.call(nextAiInput, "progressEnabled")
+        ? Boolean(nextAiInput.progressEnabled)
+        : prevAi.progressEnabled !== false,
     };
     try {
       ai.baseUrl = normalizeAiBaseUrl(ai.baseUrl);
@@ -606,7 +674,11 @@ class WeixinBotService extends EventEmitter {
       }
     }
     if (ai.enabled && !this.encryptedAiKey && !environmentAiApiKey()) {
-      throw new Error("启用 AI 前请先填写 API Key");
+      // 无 Key 时不允许真正启用；若用户显式打开开关则报错，否则静默降级以免无关保存失败
+      if (Object.prototype.hasOwnProperty.call(nextAiInput, "enabled") && nextAiInput.enabled) {
+        throw new Error("启用 AI 前请先填写 API Key");
+      }
+      ai.enabled = false;
     }
 
     const nextPolicy = { accessMode, allowUserIds, allowGroupIds };
@@ -1824,18 +1896,24 @@ class WeixinBotService extends EventEmitter {
       allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
       customCommands: normalizeCustomCommands(parsed.settings?.customCommands),
       ai: {
-        enabled: ai.enabled === undefined ? false : Boolean(ai.enabled),
+        // 默认开启智能；仅显式 false 时关闭
+        enabled: ai.enabled === undefined ? true : Boolean(ai.enabled),
         baseUrl: String(ai.baseUrl || DEFAULT_AI_BASE_URL),
         model: String(ai.model || DEFAULT_AI_MODEL),
-        timeoutMs: Number(ai.timeoutMs) || 45_000,
+        // 旧默认 45s 对 grok-4.5 tool-call 过紧，加载时抬到 90s
+        timeoutMs: clampAiTimeoutMs(
+          Number(ai.timeoutMs) === 45_000 ? 90_000 : ai.timeoutMs,
+          90_000
+        ),
         maxToolRounds: Number(ai.maxToolRounds) || 4,
+        // 旧 store 无该字段时默认开启进度回执
+        progressEnabled: ai.progressEnabled !== false,
       },
     };
     try {
       this.settings.ai.baseUrl = normalizeAiBaseUrl(this.settings.ai.baseUrl);
     } catch {
       this.settings.ai.baseUrl = DEFAULT_AI_BASE_URL;
-      this.settings.ai.enabled = false;
     }
     this.encryptedAiKey = String(parsed.encryptedAiKey || "");
     this.knownContacts = new Map();
@@ -1924,8 +2002,9 @@ class WeixinBotService extends EventEmitter {
           enabled: Boolean(this.settings.ai?.enabled),
           baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
           model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
-          timeoutMs: Number(this.settings.ai?.timeoutMs) || 45_000,
+          timeoutMs: clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
           maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
+          progressEnabled: this.settings.ai?.progressEnabled !== false,
         },
       },
       defaultAccessPolicy: this.defaultAccessPolicy,

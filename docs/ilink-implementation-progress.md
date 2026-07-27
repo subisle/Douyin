@@ -2,8 +2,8 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 版本 | v1.0.0 |
-| 核对日期 | 2026-07-24 |
+| 版本 | v1.1.0 |
+| 核对日期 | 2026-07-27 |
 | 分支 | `615`（相对 `origin/615` 含实验切片，以本地 HEAD 为准） |
 | 文档角色 | **实现进度真值表**（代码优先）；产品愿景仍以 `ai-agent-production-plan.md` 为准 |
 | 用户智能对话真值 | `docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`（**单 Agent + 多技能**） |
@@ -21,7 +21,7 @@
 | 维度 | 结论 |
 | --- | --- |
 | 用户 AI 对话 | **桌面单 Agent + 多技能 + 微信 iLink**（见 single-agent 规格） |
-| 桌面微信 Bot | **可用**（指令 + FastRoute + Agent + 日报/CSV） |
+| 桌面微信 Bot | **可用**（默认 agent + 技能 + 日报/CSV；AI 就绪后业务文本进 Agent；进度回执 + 用户记忆一期） |
 | 服务器 Worker | **实验性文本闭环已接线**（transport + 可选 DB lease/Inbox/Outbox） |
 | 生产标签 | **不得**标记「服务器生产可用」 |
 | 正确下一阶段 | **S3 Artifact 全链路（S3.1 已做 → S3.2+）**；S1 有 token 再留证；**S2 扫码退出非当前门禁**（env/seed 即可）；勿先 S4/多 Agent |
@@ -36,7 +36,7 @@
 | 模块 | 完成度 | 说明 |
 | --- | ---: | --- |
 | 产品/ADR/路线图 | ~90% | 契约 Accepted；部分基线段落滞后代码 |
-| 桌面 iLink 主链 | ~80% | `electron/weixin-bot*.js` |
+| 桌面 iLink 主链 | ~85% | `electron/weixin-bot*.js`；7/27：超时 90s、进度回执、用户记忆落盘一期（**仍非服务器生产**） |
 | `shared/ilink-adapter` | ~90% | 协议层 + 单测；媒体契约仍可增强 |
 | 服务器文本 transport | ~75% | 默认可关；明文 token 仅开发 |
 | S2 凭据加密落库 | ~80% | store + seed + Worker 读库已接线；env token 仍可作开发优先 |
@@ -81,7 +81,9 @@
 | 路径 | 职责 | 状态 |
 | --- | --- | --- |
 | `electron/weixin-bot.js` | 登录/轮询/收发 | ✅ 生产主用 |
-| `electron/weixin-bot-commands.js` / `mode` / `agent` / `skills` | 指令与 Agent | ✅ |
+| `electron/weixin-bot-commands.js` / `mode` / `agent` / `skills` | 命令分流与单 Agent（默认 agent；FastRoute 仅兼容/测试） | ✅ |
+| `electron/weixin-bot-agent.js` | tool-loop；超时默认 90s；进度回执 | ✅ 桌面 |
+| `electron/weixin-bot-user-memory.js` | 每用户线程落盘 + 习惯画像一期 | ✅ 桌面（非服务器） |
 | `electron/weixin-bot-report.js` | 日报 PNG | ✅ 桌面 |
 | `src/server/bot-core/rag.js` | re-export electron RAG | ⚠️ 非独立 Core |
 
@@ -192,3 +194,4 @@ S8 扩展（Catalog / 调度 / 多 Agent）
 | 2026-07-24 | 刷新：S2 登录/凭据代码已齐；S1 缺留证；S3 规格+进度审计+执行切片 |
 | 2026-07-24 | 进度审计 v1.1：并入多代理 Verify 附录；关键文档漂移已修 |
 | 2026-07-24 | S3.1：Artifact 根目录 `resolveArtifactRoot` + store 默认不再裸写 tmp |
+| 2026-07-27 | 桌面补记：进度回执 + 用户记忆落盘一期 + 超时默认 90s；**不**标服务器生产 |
