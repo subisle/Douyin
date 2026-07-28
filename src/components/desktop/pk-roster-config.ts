@@ -239,7 +239,8 @@ export const BATTLE_STAGE_TAB_OPTIONS: {
   {
     key: "group",
     label: "小组赛分组",
-    description: "内置 7 组固定名单",
+    description:
+      "内置 7 组 · 53 人均衡可打（8×4+7×3）；啸泽首组 / 啸帆末组 / 啸安第2组·21:00；三人不同组",
   },
   {
     key: "promotion",

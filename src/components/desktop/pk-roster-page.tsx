@@ -760,7 +760,7 @@ export function PkRosterPage() {
     return {
       detail: groupStagePreset.detail,
       missing: groupStagePreset.missingNames,
-      note: "内置小组赛 7 组；可在星嗨争霸赛拖动出场顺序",
+      note: "内置小组赛 7 组 · 53 人均衡（8×4+7×3）；啸泽首/啸帆末/啸安·21:00；可在星嗨争霸赛拖动出场顺序",
     };
   }, [
     battleStage,

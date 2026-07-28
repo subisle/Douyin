@@ -95,11 +95,12 @@ const GROUPS_PER_PAGE = 12;
  */
 // v5：内置流水线默认（自动名单切组 + 最优出场 + 总分晋级）
 // v6：默认改用内置固定分组（与 PK名单页同源），避免两边分组不一致
-const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v6";
+// v7：同步 pk-roster-config v6 均衡 53 人组（8×4+7×3）+ 啸泽/帆/安约束
+const GROUP_PLAN_STORAGE_KEY = "star-battle-group-plan-v7";
 // v19：导出头部写明每组晋级1人、无复活赛；晋级 20:15 起
 const EXPORT_NOTES_STORAGE_KEY = "star-battle-export-notes-v19";
-// 小组赛分组拖动顺序；v7：配合内置最优出场
-const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v7";
+// 小组赛分组拖动顺序；v8：新内置 7 组节奏，避免沿用旧拖拽序
+const GROUP_ORDER_STORAGE_KEY = "star-battle-group-order-v8";
 const ACTIVE_ROUND_STORAGE_KEY = "star-battle-active-round-v1";
 
 /** 晋级赛默认组数 / 决赛席位（与内置晋级名单同步，每组出 1 人） */
@@ -128,13 +129,14 @@ function defaultGroupPlan(): GroupPlanConfig {
     // 默认与 PK名单页同一套内置固定分组，避免两处分组各算各的
     sizeMode: "preset",
     sortMode: "wave_desc",
+    // 与 PRESET_BATTLE_GROUPS 53 人结构一致：8+8+8+8+7+7+7
     manualCounts: [
-      { size: 8, count: 5 },
-      { size: 7, count: 2 },
+      { size: 8, count: 4 },
+      { size: 7, count: 3 },
       { size: 6, count: 0 },
       { size: 5, count: 0 },
     ],
-    manualText: "8x5,7x2",
+    manualText: "8x4,7x3",
   };
 }
 
