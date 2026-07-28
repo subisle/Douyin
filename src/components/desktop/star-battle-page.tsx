@@ -91,7 +91,7 @@ const GROUPS_PER_PAGE = 12;
  *
  * 决赛：晋级各组第 1 名单组
  *
- * 时间：小组 12:15 / 晋级 20:15（间隔 15 分钟）/ 决赛 22:15
+ * 时间：小组 08:15（间隔 5 分钟）/ 晋级 20:15（间隔 15 分钟）/ 决赛 22:15
  */
 // v5：内置流水线默认（自动名单切组 + 最优出场 + 总分晋级）
 // v6：默认改用内置固定分组（与 PK名单页同源），避免两边分组不一致
@@ -177,18 +177,19 @@ function loadGroupPlan(): GroupPlanConfig {
 }
 
 /** 连麦时间表：按出场场次顺序固定，与具体人员无关。 */
-const SCHEDULE_MATCH_MINUTES = 10;
-const SCHEDULE_GAP_MINUTES = 5; // 组间间隔
-const SCHEDULE_SLOT_STEP = SCHEDULE_MATCH_MINUTES + SCHEDULE_GAP_MINUTES; // 15
+const SCHEDULE_GAP_MINUTES = 5; // 小组赛：组间开场间隔
+const GROUP_SCHEDULE_STEP_MINUTES = 5; // 08:15 起每组 +5 分钟
+const PROMOTION_SCHEDULE_STEP_MINUTES = 15; // 晋级赛场次间隔
 
 /** 各轮次首场开始时间（项目内置；组数随名单变，时间按场次顺延） */
 const ROUND_FIRST_START: Record<string, string> = {
-  group: "12:15",
-  // 小组末场约 13:45 开打 → 结束后进复活
-  revival: "14:00",
+  // 小组赛：08:15 起，每组间隔 5 分钟 → 7 组末场 08:45
+  group: "08:15",
+  // 小组末场后进复活（可按现场改备注）
+  revival: "09:00",
   // 晋级赛晚场：20:15 起，8 场 × 间隔 15 分钟
   promotion: "20:15",
-  // 晋级第8场 22:00 开打 → 约 22:10 结束，隔 5 分钟进决赛
+  // 晋级第8场 22:00 开打后进决赛
   final: "22:15",
 };
 
@@ -221,11 +222,17 @@ function roundFirstStart(roundKey: string) {
   return ROUND_FIRST_START[roundKey] || ROUND_FIRST_START.group;
 }
 
+function roundScheduleStep(roundKey: string) {
+  if (roundKey === "promotion") return PROMOTION_SCHEDULE_STEP_MINUTES;
+  if (roundKey === "final") return 0;
+  return GROUP_SCHEDULE_STEP_MINUTES;
+}
+
 /** 按场次 1..count 生成固定时间（拖组不改时间轴）。 */
 function buildSequentialSchedule(
   count: number,
   firstStart = ROUND_FIRST_START.group,
-  stepMinutes = SCHEDULE_SLOT_STEP
+  stepMinutes = GROUP_SCHEDULE_STEP_MINUTES
 ) {
   const map = new Map<number, string>();
   const start = parseHm(firstStart);
@@ -240,7 +247,8 @@ function buildSequentialSchedule(
 function defaultExportNotes() {
   const promotionSchedule = buildSequentialSchedule(
     PROMOTION_GROUP_COUNT,
-    ROUND_FIRST_START.promotion
+    ROUND_FIRST_START.promotion,
+    PROMOTION_SCHEDULE_STEP_MINUTES
   );
   const lines = [
     "【规则】每组晋级 1 人",
@@ -2172,7 +2180,11 @@ function parseExportSchedule(notes: string, groupCount = 0, roundKey: string = "
 
   // 默认：按当前轮次首场时间 + 出场顺序自动生成
   const firstStart = roundFirstStart(roundKey);
-  const scheduleByGroup = buildSequentialSchedule(Math.max(groupCount, 1), firstStart);
+  const scheduleByGroup = buildSequentialSchedule(
+    Math.max(groupCount, 1),
+    firstStart,
+    roundScheduleStep(roundKey)
+  );
   const generalLines: string[] = [];
 
   // 备注里可覆盖：小组第1场 / 复活第1场 / 第1场 12:15
