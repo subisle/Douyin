@@ -7,9 +7,17 @@
 
 function formatWave(value) {
   const number = Number(value) || 0;
-  if (number >= 100_000_000) return `${(number / 100_000_000).toFixed(2)} 亿`;
-  if (number >= 10_000) return `${(number / 10_000).toFixed(1)} 万`;
-  return number.toLocaleString("zh-CN");
+  if (number <= 0) return "0";
+  if (number >= 100_000_000) {
+    const yi = number / 100_000_000;
+    const r = Math.round(yi * 10) / 10;
+    return Number.isInteger(r) ? `${r} 亿` : `${r.toFixed(1)} 亿`;
+  }
+  // 统一「万」为单位，精确到 0.1 万（千），不显示千后零碎
+  const wan = number / 10_000;
+  const r = Math.round(wan * 10) / 10;
+  if (r <= 0) return "0";
+  return Number.isInteger(r) ? `${r} 万` : `${r.toFixed(1)} 万`;
 }
 
 function formatDuration(value) {

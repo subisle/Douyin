@@ -77,7 +77,7 @@ export const PRESET_ROSTER_TEXT = `啸辰
 
 /**
  * 小组赛内置固定分组（锁定版）。
- * 56 人 · 7×8 · 08:15 起间隔 5 分钟 · 狼辉第4 / 狼佑第1 · 次强3 / 最强5
+ * 56 人 · 7×8 · 08:15 起间隔 15 分钟 · 狼辉第4 / 狼佑第1 · 次强3 / 最强5
  */
 export const PRESET_BATTLE_GROUPS: string[][] = SHARED_PRESET_BATTLE_GROUPS.map((row) => [...row]);
 

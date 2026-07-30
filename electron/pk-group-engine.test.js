@@ -297,7 +297,7 @@ test("n<16 allows fewer than 4 groups with warning", () => {
   }
 });
 
-test("preset mode loads locked battle groups with 5-min schedule", () => {
+test("preset mode loads locked battle groups with 15-min schedule", () => {
   const { PRESET_BATTLE_GROUPS } = require("../shared/pk-preset-battle-groups");
   const members = PRESET_BATTLE_GROUPS.flat().map((name, i) => ({
     name,
@@ -318,8 +318,8 @@ test("preset mode loads locked battle groups with 5-min schedule", () => {
   assert.equal(result.groupCount, 7);
   assert.deepEqual(result.sizes, [8, 8, 8, 8, 8, 8, 8]);
   assert.equal(result.groups[0].startTime, "08:15");
-  assert.equal(result.groups[1].startTime, "08:20");
-  assert.equal(result.groups[6].startTime, "08:45");
+  assert.equal(result.groups[1].startTime, "08:30");
+  assert.equal(result.groups[6].startTime, "09:45");
   assert.ok(result.groups[0].members.some((m) => m.name === "狼佑"));
   assert.ok(result.groups[3].members.some((m) => m.name === "狼辉"));
   assert.equal(result.groups[0].members.map((m) => m.name).join(","), PRESET_BATTLE_GROUPS[0].join(","));

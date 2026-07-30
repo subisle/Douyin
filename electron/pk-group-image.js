@@ -29,9 +29,8 @@ function formatStrength(value) {
     const r = Math.round(yi * 10) / 10;
     return Number.isInteger(r) ? `${r}亿` : `${r.toFixed(1)}亿`;
   }
-  // 统一用「万」，整数不带小数
+  // 统一「万」为单位，精确到 0.1 万（千），不显示千后零碎
   const wan = n / 10_000;
-  if (wan >= 10) return `${Math.round(wan)}万`;
   const r = Math.round(wan * 10) / 10;
   if (r <= 0) return "0";
   return Number.isInteger(r) ? `${r}万` : `${r.toFixed(1)}万`;

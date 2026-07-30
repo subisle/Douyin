@@ -1250,7 +1250,7 @@ function buildPkGroupsFromNameGroups(options = {}) {
       ? "latestWave"
       : "wave";
   const firstStart = options.firstStart || PRESET_BATTLE_META.firstStart || "08:15";
-  const stepMinutes = Number(options.stepMinutes) || PRESET_BATTLE_META.stepMinutes || 5;
+  const stepMinutes = Number(options.stepMinutes) || PRESET_BATTLE_META.stepMinutes || 15;
   const rawMembers = Array.isArray(options.members) ? options.members : [];
 
   const byKey = new Map();

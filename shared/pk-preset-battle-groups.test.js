@@ -15,7 +15,7 @@ test("preset battle groups: 7x8 unique names", () => {
     assert.equal(g.length, 8);
   }
   assert.equal(PRESET_BATTLE_META.firstStart, "08:15");
-  assert.equal(PRESET_BATTLE_META.stepMinutes, 5);
+  assert.equal(PRESET_BATTLE_META.stepMinutes, 15);
 });
 
 test("preset anchors: 狼佑 G1 / 狼辉 G4 / 最强侧 G5", () => {

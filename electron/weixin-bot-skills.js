@@ -411,7 +411,7 @@ function createWeixinBotSkills({ db, renderReportPng }) {
             },
             sendCsv: { type: "boolean", description: "是否附带 CSV，默认 false" },
             firstStart: { type: "string", description: "首场时间 HH:mm，默认 08:15" },
-            stepMinutes: { type: "number", description: "场间隔分钟，内置默认 5，其它默认 5" },
+            stepMinutes: { type: "number", description: "场间隔分钟，内置默认 15，其它默认 5" },
           },
         },
       },
