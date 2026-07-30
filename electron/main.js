@@ -51,19 +51,43 @@ let mainWindow = null;
 // 单实例：已有进程在跑时，把焦点还给现有窗口，不再新开一个。
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
+  // 常见于上次异常退出后残留 SingletonLock：新实例拿不到锁就静默退出，表现为“启动了但没窗口”
+  console.error("[app] 已有实例占用单例锁，本进程退出。若看不到窗口，请结束残留 Electron/清理 userData 下 SingletonLock 后重试。");
   app.quit();
+}
+
+function logWindowState(tag) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    console.log(`[window] ${tag}: mainWindow missing`);
+    return;
+  }
+  try {
+    const bounds = mainWindow.getBounds();
+    console.log(
+      `[window] ${tag}: visible=${mainWindow.isVisible()} focused=${mainWindow.isFocused()} minimized=${mainWindow.isMinimized()} bounds=${JSON.stringify(bounds)}`
+    );
+  } catch (error) {
+    console.warn(`[window] ${tag}: state read failed`, error?.message || error);
+  }
 }
 
 function focusMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   if (mainWindow.isMinimized()) mainWindow.restore();
-  if (!mainWindow.isVisible()) mainWindow.show();
+  // 开发期偶发 show:false + ready-to-show 丢失，强制拉回前台
+  mainWindow.center();
+  mainWindow.show();
   mainWindow.focus();
+  if (process.platform === "darwin") {
+    if (app.dock) app.dock.show();
+    app.focus({ steal: true });
+  }
   // Windows 上偶发需要先闪一下任务栏再置前
   if (process.platform === "win32") {
     mainWindow.setAlwaysOnTop(true);
     mainWindow.setAlwaysOnTop(false);
   }
+  logWindowState("focusMainWindow");
   return true;
 }
 
@@ -573,6 +597,11 @@ function createWindow() {
     },
   });
 
+  // 固定尺寸窗口在多屏/异常退出后可能落在屏幕外，创建后先居中。
+  mainWindow.center();
+  console.log("[window] BrowserWindow created");
+  logWindowState("created");
+
   const loadAppContent = () => {
     if (appContentLoading || !mainWindow || mainWindow.isDestroyed()) return;
     appContentLoading = true;
@@ -594,16 +623,26 @@ function createWindow() {
       return;
     }
     splashFinished = true;
-    if (!mainWindow.isVisible()) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    console.log("[window] enter app content");
+    focusMainWindow();
   };
 
   mainWindow.once("ready-to-show", () => {
     // 先展示启动 UI，再切到业务页面。
-    mainWindow?.show();
+    console.log("[window] ready-to-show");
+    focusMainWindow();
   });
+
+  // 兜底：部分环境 ready-to-show 不触发时，仍保证窗口可见。
+  setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow.isVisible()) {
+      console.warn("[window] force show after timeout (ready-to-show missed?)");
+      focusMainWindow();
+    } else {
+      logWindowState("visible-check");
+    }
+  }, 1500);
 
   mainWindow.webContents.on("did-finish-load", () => {
     const url = mainWindow?.webContents.getURL() || "";
@@ -684,9 +723,14 @@ app.whenReady().then(() => {
   }
 
   if (process.platform === "darwin" && app.dock) {
+    app.dock.show();
     app.dock.setIcon(APP_ICON_PNG);
   }
   createWindow();
+  // 再保险：创建后主动抢一次前台，避免 macOS 开发态启动后窗口在后台
+  setTimeout(() => {
+    focusMainWindow();
+  }, 300);
 
   // 初始化自动更新（生产环境）
   updater.init();
