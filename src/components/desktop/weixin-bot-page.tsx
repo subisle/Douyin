@@ -42,6 +42,7 @@ import type {
   WeixinBotContact,
   WeixinBotCustomCommand,
   WeixinBotCustomCommandAction,
+  WeixinBotDailyReportPushSettings,
   WeixinBotPhase,
   WeixinBotSettings,
   WeixinBotSettingsSavePayload,
@@ -68,6 +69,14 @@ const EMPTY_STATUS: WeixinBotStatus = {
   accounts: [],
 };
 
+const DEFAULT_DAILY_PUSH: WeixinBotDailyReportPushSettings = {
+  enabled: false,
+  adminUserIds: [],
+  recipientUserIds: [],
+  recipientGroupIds: [],
+  lastPush: null,
+};
+
 const DEFAULT_SETTINGS: WeixinBotSettings = {
   accountId: null,
   autoReplyEnabled: false,
@@ -86,6 +95,7 @@ const DEFAULT_SETTINGS: WeixinBotSettings = {
     hasApiKey: false,
   },
   contacts: [],
+  dailyReportPush: DEFAULT_DAILY_PUSH,
 };
 
 const COMMAND_HINTS: { example: string; desc: string }[] = [
@@ -95,6 +105,9 @@ const COMMAND_HINTS: { example: string; desc: string }[] = [
   { example: "艺名+时长", desc: "累计时长" },
   { example: "艺名+音浪", desc: "最新音浪" },
   { example: "音浪文件", desc: "导出 CSV" },
+  { example: "开启日报推送", desc: "管理员开" },
+  { example: "关闭日报推送", desc: "管理员关" },
+  { example: "日报推送状态", desc: "查看开关" },
   { example: "清空对话", desc: "清会话记忆" },
 ];
 
@@ -129,7 +142,8 @@ type BusyAction =
   | "save-ai"
   | "save-access"
   | "save-commands"
-  | "save-reply";
+  | "save-reply"
+  | "save-push";
 
 type ConfirmAction = { kind: "disconnect"; accountId: string } | null;
 
@@ -172,8 +186,22 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
           lastContent: String(item?.lastContent || ""),
           lastSeenAt: String(item?.lastSeenAt || ""),
           allowed: Boolean(item?.allowed),
+          hasContext: Boolean(item?.hasContext),
         }))
       : [],
+    dailyReportPush: {
+      enabled: Boolean(input?.dailyReportPush?.enabled),
+      adminUserIds: Array.isArray(input?.dailyReportPush?.adminUserIds)
+        ? input!.dailyReportPush!.adminUserIds.map(String)
+        : [],
+      recipientUserIds: Array.isArray(input?.dailyReportPush?.recipientUserIds)
+        ? input!.dailyReportPush!.recipientUserIds.map(String)
+        : [],
+      recipientGroupIds: Array.isArray(input?.dailyReportPush?.recipientGroupIds)
+        ? input!.dailyReportPush!.recipientGroupIds.map(String)
+        : [],
+      lastPush: input?.dailyReportPush?.lastPush ?? null,
+    },
   };
 }
 
@@ -314,6 +342,12 @@ export function WeixinBotPage() {
     await saveSettingsPatch("save-reply", {
       autoReplyEnabled: settings.autoReplyEnabled,
       autoReplyText: settings.autoReplyText,
+    });
+  }
+
+  async function handleSaveDailyPush() {
+    await saveSettingsPatch("save-push", {
+      dailyReportPush: settings.dailyReportPush,
     });
   }
 
@@ -529,6 +563,12 @@ export function WeixinBotPage() {
               busy={busyAction === "save-access"}
               onChange={setSettings}
               onSave={handleSaveAccess}
+            />
+            <DailyReportPushPanel
+              settings={settings}
+              busy={busyAction === "save-push"}
+              onChange={setSettings}
+              onSave={handleSaveDailyPush}
             />
             <CustomCommandsPanel
               commands={settings.customCommands}
@@ -757,6 +797,153 @@ function CommandGuide() {
             <div className="truncate text-[10px] text-muted-foreground">{item.desc}</div>
           </div>
         ))}
+      </div>
+    </aside>
+  );
+}
+
+
+function DailyReportPushPanel({
+  settings,
+  busy,
+  onChange,
+  onSave,
+}: {
+  settings: WeixinBotSettings;
+  busy: boolean;
+  onChange: (settings: WeixinBotSettings) => void;
+  onSave: () => void;
+}) {
+  const push = settings.dailyReportPush || DEFAULT_DAILY_PUSH;
+  const updatePush = (patch: Partial<WeixinBotDailyReportPushSettings>) => {
+    onChange({
+      ...settings,
+      dailyReportPush: { ...push, ...patch },
+    });
+  };
+
+  const toggleId = (
+    list: string[],
+    id: string,
+    enabled: boolean
+  ) => (enabled ? [...new Set([...list, id])] : list.filter((item) => item !== id));
+
+  const users = settings.contacts.filter((c) => c.kind === "user");
+  const groups = settings.contacts.filter((c) => c.kind === "group");
+
+  return (
+    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
+      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <MessageCircle className="size-3.5 text-[#07c160]" />
+          <span>日报自动推送</span>
+        </div>
+        <IconAction
+          label="保存日报推送"
+          icon={busy ? Loader2 : Save}
+          loading={busy}
+          variant="ghost"
+          size="icon-sm"
+          onClick={onSave}
+          disabled={busy}
+        />
+      </div>
+      <div className="space-y-3 p-2.5 text-xs">
+        <label className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2.5 py-2">
+          <div>
+            <div className="font-medium text-foreground">音浪更新后自动发送</div>
+            <div className="text-[10px] text-muted-foreground">
+              推送前三文案 + 男女报告图；指令：开启/关闭日报推送
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            className="size-4 accent-[#07c160]"
+            checked={Boolean(push.enabled)}
+            onChange={(event) => updatePush({ enabled: event.target.checked })}
+          />
+        </label>
+
+        <div className="space-y-1.5">
+          <div className="font-medium text-foreground">管理员（可指令开关）</div>
+          <div className="max-h-28 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
+            {users.length === 0 ? (
+              <p className="px-1 py-1 text-[11px] text-muted-foreground">暂无用户，先让对方给机器人发一条消息</p>
+            ) : (
+              users.map((contact) => {
+                const checked = push.adminUserIds.includes(contact.id);
+                return (
+                  <label key={`admin-${contact.id}`} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted/40">
+                    <input
+                      type="checkbox"
+                      className="size-3.5 accent-[#07c160]"
+                      checked={checked}
+                      onChange={(event) =>
+                        updatePush({
+                          adminUserIds: toggleId(push.adminUserIds, contact.id, event.target.checked),
+                        })
+                      }
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{compactId(contact.id)}</span>
+                    {contact.hasContext ? (
+                      <span className="text-[10px] text-emerald-600">可推</span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">无会话</span>
+                    )}
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="font-medium text-foreground">推送对象（空=名单内有会话的用户/群）</div>
+          <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
+            {settings.contacts.length === 0 ? (
+              <p className="px-1 py-1 text-[11px] text-muted-foreground">暂无对接联系人</p>
+            ) : (
+              settings.contacts.map((contact) => {
+                const listKey = contact.kind === "group" ? "recipientGroupIds" : "recipientUserIds";
+                const list = contact.kind === "group" ? push.recipientGroupIds : push.recipientUserIds;
+                const checked = list.includes(contact.id);
+                return (
+                  <label key={`recv-${contact.kind}-${contact.id}`} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted/40">
+                    <input
+                      type="checkbox"
+                      className="size-3.5 accent-[#07c160]"
+                      checked={checked}
+                      onChange={(event) =>
+                        updatePush({
+                          [listKey]: toggleId(list, contact.id, event.target.checked),
+                        })
+                      }
+                    />
+                    <span className="text-[10px] text-muted-foreground">{contact.kind === "group" ? "群" : "人"}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{compactId(contact.id)}</span>
+                    {contact.hasContext ? (
+                      <span className="text-[10px] text-emerald-600">可推</span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">无会话</span>
+                    )}
+                  </label>
+                );
+              })
+            )}
+          </div>
+          {(groups.length > 0 || users.length > 0) && (
+            <p className="text-[10px] text-muted-foreground">
+              未勾选推送对象时，默认推送给当前账号允许名单内、且近期有对话的联系人。
+            </p>
+          )}
+        </div>
+
+        {push.lastPush?.at ? (
+          <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 text-[10px] text-muted-foreground">
+            上次：{push.lastPush.date || "—"} · 成功 {push.lastPush.ok || 0} / 失败 {push.lastPush.fail || 0}
+            {push.lastPush.skipped ? `（${push.lastPush.skipped}）` : ""} · {formatClock(push.lastPush.at)}
+          </div>
+        ) : null}
       </div>
     </aside>
   );

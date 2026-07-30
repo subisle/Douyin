@@ -135,8 +135,15 @@ const weixinCommandHandler = createWeixinCommandHandler({
   renderReportPng: renderDailyReportPng,
   agent: weixinBotAgent,
   analytics: weixinBotSkills.analytics,
+  dailyPush: {
+    isAdmin: (userId, accountId) => weixinBot.isDailyPushAdmin(userId, accountId),
+    getStatusText: () => weixinBot.getDailyReportPushStatusText(),
+    setEnabled: (enabled, meta) => weixinBot.setDailyReportPushEnabled(enabled, meta),
+    notifyAfterImport: (date, options) => weixinBot.notifyDailyReportDataUpdated(date, options),
+  },
 });
 weixinBotAgent.modeStore = weixinCommandHandler.modeStore;
+weixinBot.setDailyPushDependencies({ db, renderReportPng: renderDailyReportPng });
 weixinBot.setCommandHandler(weixinCommandHandler);
 if (weixinCommandHandler.modeStore) {
   weixinBot.setModeStore(weixinCommandHandler.modeStore);
@@ -904,7 +911,15 @@ ipcMain.handle("data:getWaveTrendByGender", wrap(() => db.getWaveTrendByGender()
 
 ipcMain.handle(
   "data:importWave",
-  wrap((date, rows, meta) => db.importWaveSnapshots(date, rows, meta))
+  wrap(async (date, rows, meta) => {
+    const result = await db.importWaveSnapshots(date, rows, meta);
+    try {
+      void weixinBot.notifyDailyReportDataUpdated(date);
+    } catch (error) {
+      console.warn("[weixin-daily-push] schedule failed", error);
+    }
+    return result;
+  })
 );
 ipcMain.handle(
   "data:importDuration",

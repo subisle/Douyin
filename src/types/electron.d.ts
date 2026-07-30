@@ -191,6 +191,22 @@ export interface WeixinBotContact {
   lastContent: string;
   lastSeenAt: string;
   allowed: boolean;
+  /** 是否已有可主动推送的会话上下文 */
+  hasContext?: boolean;
+}
+
+export interface WeixinBotDailyReportPushSettings {
+  enabled: boolean;
+  adminUserIds: string[];
+  recipientUserIds: string[];
+  recipientGroupIds: string[];
+  lastPush?: {
+    date: string | null;
+    at: string | null;
+    ok: number;
+    fail: number;
+    skipped: string | null;
+  } | null;
 }
 
 export interface WeixinBotAiSettings {
@@ -213,6 +229,7 @@ export interface WeixinBotSettings {
   customCommands: WeixinBotCustomCommand[];
   ai: WeixinBotAiSettings;
   contacts: WeixinBotContact[];
+  dailyReportPush: WeixinBotDailyReportPushSettings;
 }
 
 /** 写入设置的载荷：字段均可选；AI Key 只写不读 */
@@ -224,6 +241,7 @@ export interface WeixinBotSettingsSavePayload {
   allowUserIds?: string[];
   allowGroupIds?: string[];
   customCommands?: WeixinBotCustomCommand[];
+  dailyReportPush?: Partial<WeixinBotDailyReportPushSettings>;
   ai?: {
     enabled?: boolean;
     baseUrl?: string;

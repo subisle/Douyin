@@ -12,6 +12,14 @@ const {
 } = require("./weixin-bot-media");
 const { createSessionQueues } = require("./weixin-bot-mode");
 const {
+  DEFAULT_DAILY_REPORT_PUSH,
+  normalizeDailyReportPushSettings,
+  buildDailyTop3Text,
+  matchDailyPushCommand,
+  formatDailyPushStatusText,
+  resolveDailyPushTargets,
+} = require("./weixin-bot-daily-push");
+const {
   acquireRunnerLock,
   renewRunnerLock,
   releaseRunnerLock,
@@ -57,6 +65,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     maxToolRounds: 4,
     progressEnabled: true,
   },
+  dailyReportPush: { ...DEFAULT_DAILY_REPORT_PUSH },
 });
 
 function isAllowedAiBaseUrl(url) {
@@ -295,6 +304,10 @@ class WeixinBotService extends EventEmitter {
     this.runnerWorkOperations = new Map();
     this.encryptedAiKey = "";
     this.knownContacts = new Map();
+    this.dailyPushDb = options.db || null;
+    this.dailyPushRenderReportPng = options.renderReportPng || null;
+    this._dailyPushTimers = new Map();
+    this._dailyPushInFlight = new Map();
     this.generateQrDataUrl = options.generateQrDataUrl || ((content) => QRCode.toDataURL(content, {
       width: 256,
       margin: 2,
@@ -337,7 +350,12 @@ class WeixinBotService extends EventEmitter {
     this.accountPolicies = new Map();
     this.defaultAccessPolicy = normalizeAccessPolicy();
     this.activeAccountId = null;
-    this.settings = { ...DEFAULT_SETTINGS };
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      dailyReportPush: normalizeDailyReportPushSettings(DEFAULT_SETTINGS.dailyReportPush),
+      customCommands: [],
+      ai: { ...DEFAULT_SETTINGS.ai },
+    };
     this.messages = [];
     this.contexts = new Map();
     this.seenMessageIds = new Set();
@@ -577,16 +595,25 @@ class WeixinBotService extends EventEmitter {
         hasApiKey: Boolean(this.encryptedAiKey || environmentAiApiKey()),
       },
       contacts: this.getContacts().filter((item) => !targetAccountId || item.accountId === targetAccountId),
+      dailyReportPush: normalizeDailyReportPushSettings(this.settings.dailyReportPush),
     };
   }
 
   getContacts() {
+    // strip tokens from public contact view
     return [...this.knownContacts.values()]
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
       .map((item) => {
         const policy = this._getAccessPolicy(item.accountId);
         return {
-          ...item,
+          accountId: item.accountId,
+          id: item.id,
+          kind: item.kind === "group" ? "group" : "user",
+          conversationId: item.conversationId,
+          groupId: item.groupId || null,
+          lastContent: item.lastContent || "",
+          lastSeenAt: item.lastSeenAt || "",
+          hasContext: Boolean(item.contextToken),
           allowed: item.kind === "group"
             ? policy.allowGroupIds.includes(item.id)
             : policy.allowUserIds.includes(item.id),
@@ -645,6 +672,12 @@ class WeixinBotService extends EventEmitter {
     const allowUserIds = uniqueIds(input.allowUserIds ?? currentPolicy.allowUserIds);
     const allowGroupIds = uniqueIds(input.allowGroupIds ?? currentPolicy.allowGroupIds);
     const customCommands = normalizeCustomCommands(input.customCommands ?? this.settings.customCommands);
+    const dailyReportPush = normalizeDailyReportPushSettings(
+      input.dailyReportPush && typeof input.dailyReportPush === "object"
+        ? input.dailyReportPush
+        : this.settings.dailyReportPush,
+      this.settings.dailyReportPush
+    );
 
     const prevAi = this.settings.ai || {};
     const nextAiInput = input.ai && typeof input.ai === "object" ? input.ai : {};
@@ -695,6 +728,7 @@ class WeixinBotService extends EventEmitter {
       allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
       customCommands,
       ai,
+      dailyReportPush,
     };
     this._writeStore();
     return this.getSettings(targetAccountId);
@@ -1361,6 +1395,8 @@ class WeixinBotService extends EventEmitter {
       groupId: groupId || null,
       lastContent: preview.content,
       lastSeenAt: messageTimestamp(rawMessage.create_time_ms),
+      contextToken,
+      toUserId: fromUserId,
     });
     if (groupId) {
       this._rememberContact({
@@ -1371,6 +1407,8 @@ class WeixinBotService extends EventEmitter {
         groupId,
         lastContent: preview.content,
         lastSeenAt: messageTimestamp(rawMessage.create_time_ms),
+        contextToken,
+        toUserId: fromUserId,
       });
     }
 
@@ -1815,6 +1853,8 @@ class WeixinBotService extends EventEmitter {
       groupId: contact.groupId || prev.groupId || null,
       lastContent: String(contact.lastContent || prev.lastContent || "").slice(0, 200),
       lastSeenAt: String(contact.lastSeenAt || prev.lastSeenAt || new Date().toISOString()),
+      contextToken: String(contact.contextToken || prev.contextToken || "").trim(),
+      toUserId: String(contact.toUserId || prev.toUserId || (contact.kind === "group" ? "" : id)).trim(),
       allowed: contact.kind === "group"
         ? policy.allowGroupIds.includes(id)
         : policy.allowUserIds.includes(id),
@@ -1909,6 +1949,7 @@ class WeixinBotService extends EventEmitter {
         // 旧 store 无该字段时默认开启进度回执
         progressEnabled: ai.progressEnabled !== false,
       },
+      dailyReportPush: normalizeDailyReportPushSettings(parsed.settings?.dailyReportPush),
     };
     try {
       this.settings.ai.baseUrl = normalizeAiBaseUrl(this.settings.ai.baseUrl);
@@ -1923,18 +1964,31 @@ class WeixinBotService extends EventEmitter {
       const accountId = String(
         item?.accountId || parsed.activeAccountId || parsed.credentials?.accountId || "legacy"
       ).trim();
+      const conversationId = String(item.conversationId || id);
+      const contextToken = String(item.contextToken || "").trim();
+      const toUserId = String(item.toUserId || (item.kind === "group" ? "" : id)).trim();
       this.knownContacts.set(accountScopedKey(accountId, id), {
         accountId,
         id,
         kind: item.kind === "group" ? "group" : "user",
-        conversationId: String(item.conversationId || id),
+        conversationId,
         groupId: item.groupId || null,
         lastContent: String(item.lastContent || "").slice(0, 200),
         lastSeenAt: String(item.lastSeenAt || ""),
+        contextToken,
+        toUserId,
         allowed: item.kind === "group"
           ? this._getAccessPolicy(accountId).allowGroupIds.includes(id)
           : this._getAccessPolicy(accountId).allowUserIds.includes(id),
       });
+      if (contextToken) {
+        this.contexts.set(accountScopedKey(accountId, conversationId), {
+          accountId,
+          contextToken,
+          toUserId: toUserId || id,
+          groupId: item.kind === "group" ? (item.groupId || id) : null,
+        });
+      }
     }
 
     this.accounts = new Map();
@@ -1978,6 +2032,231 @@ class WeixinBotService extends EventEmitter {
     this.activeAccountId = String(parsed.activeAccountId || "") || this.accounts.keys().next().value || null;
   }
 
+
+  setDailyPushDependencies({ db, renderReportPng } = {}) {
+    if (db) this.dailyPushDb = db;
+    if (typeof renderReportPng === "function") this.dailyPushRenderReportPng = renderReportPng;
+  }
+
+  isDailyPushAdmin(userId, accountId) {
+    const uid = String(userId || "").trim();
+    if (!uid) return false;
+    const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
+    if (push.adminUserIds.includes(uid)) return true;
+    // 未配置管理员时：允许名单内用户也可开关（避免首次无法操作）
+    if (!push.adminUserIds.length) {
+      const policy = this._getAccessPolicy(accountId || this._getActiveAccount()?.accountId);
+      return policy.allowUserIds.includes(uid);
+    }
+    return false;
+  }
+
+  getDailyReportPushStatusText() {
+    return formatDailyPushStatusText(this.settings.dailyReportPush);
+  }
+
+  setDailyReportPushEnabled(enabled, { actorUserId, accountId } = {}) {
+    if (actorUserId && !this.isDailyPushAdmin(actorUserId, accountId)) {
+      throw new Error("仅管理员可开关日报推送，请在桌面端「微信机器人」设置管理员");
+    }
+    const dailyReportPush = normalizeDailyReportPushSettings({
+      ...normalizeDailyReportPushSettings(this.settings.dailyReportPush),
+      enabled: Boolean(enabled),
+    });
+    this.settings = { ...this.settings, dailyReportPush };
+    this._writeStore();
+    return dailyReportPush;
+  }
+
+  /**
+   * 音浪数据更新后调用：防抖后向配置的微信用户/群推送日报图 + 当日音浪前三文案。
+   */
+  notifyDailyReportDataUpdated(date, options = {}) {
+    const day = String(date || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return Promise.resolve({ ok: false, skipped: "invalid_date" });
+    }
+    const delayMs = Math.max(0, Number(options.delayMs ?? 2500) || 0);
+    const existing = this._dailyPushTimers.get(day);
+    if (existing) clearTimeout(existing);
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this._dailyPushTimers.delete(day);
+        this._runDailyReportPush(day, options).then(resolve).catch((error) => {
+          resolve({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }, delayMs);
+      this._dailyPushTimers.set(day, timer);
+    });
+  }
+
+  async _runDailyReportPush(date, options = {}) {
+    const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
+    if (!push.enabled && !options.force) {
+      return { ok: true, skipped: "disabled", date };
+    }
+
+    const db = options.db || this.dailyPushDb;
+    const renderReportPng = options.renderReportPng || this.dailyPushRenderReportPng;
+    if (!db || typeof db.getDailyWaveReport !== "function") {
+      return { ok: false, skipped: "no_db", date };
+    }
+    if (typeof renderReportPng !== "function") {
+      return { ok: false, skipped: "no_renderer", date };
+    }
+
+    if (this._dailyPushInFlight.get(date)) {
+      return this._dailyPushInFlight.get(date);
+    }
+
+    const task = this._deliverDailyReportPush(date, db, renderReportPng, options);
+    this._dailyPushInFlight.set(date, task);
+    try {
+      return await task;
+    } finally {
+      this._dailyPushInFlight.delete(date);
+    }
+  }
+
+  async _deliverDailyReportPush(date, db, renderReportPng, options = {}) {
+    const account = options.accountId
+      ? this.accounts.get(String(options.accountId))
+      : this._getActiveAccount();
+    if (!account?.credentials?.token) {
+      return { ok: false, skipped: "not_connected", date };
+    }
+    const accountId = account.accountId;
+    const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
+    const policy = this._getAccessPolicy(accountId);
+
+    // 用内部联系人（含 contextToken）
+    const internalContacts = [...this.knownContacts.values()].filter((c) => c.accountId === accountId);
+    const targets = resolveDailyPushTargets({
+      accountId,
+      contacts: internalContacts,
+      contexts: this.contexts,
+      accessPolicy: policy,
+      pushSettings: push,
+      accountScopedKey,
+    });
+
+    if (!targets.length) {
+      const lastPush = {
+        date,
+        at: new Date().toISOString(),
+        ok: 0,
+        fail: 0,
+        skipped: "no_targets",
+      };
+      this.settings = {
+        ...this.settings,
+        dailyReportPush: normalizeDailyReportPushSettings({ ...push, lastPush }),
+      };
+      this._writeStore();
+      return { ok: true, skipped: "no_targets", date, targets: 0 };
+    }
+
+    let maleReport = null;
+    let femaleReport = null;
+    try {
+      maleReport = await db.getDailyWaveReport(date, "male");
+    } catch {
+      maleReport = { rows: [] };
+    }
+    try {
+      femaleReport = await db.getDailyWaveReport(date, "female");
+    } catch {
+      femaleReport = { rows: [] };
+    }
+
+    const top3Text = buildDailyTop3Text(date, maleReport, femaleReport);
+    const images = [];
+    for (const [gender, report] of [["male", maleReport], ["female", femaleReport]]) {
+      if (!report?.rows?.length) continue;
+      try {
+        const buffer = await renderReportPng(report, {});
+        if (buffer?.length) {
+          images.push({
+            gender,
+            buffer,
+            fileName: `${date}_${gender === "female" ? "女队" : "男团"}_每日报告.png`,
+          });
+        }
+      } catch (error) {
+        // 单团失败不阻断另一团
+        console.warn("[weixin-daily-push] render failed", gender, error);
+      }
+    }
+
+    if (!this.runnerLease) this._acquireRunnerLease();
+    let ok = 0;
+    let fail = 0;
+    const errors = [];
+    try {
+      for (const target of targets) {
+        const context = {
+          accountId,
+          contextToken: target.context.contextToken,
+          toUserId: target.context.toUserId || (target.kind === "user" ? target.id : ""),
+          groupId: target.groupId || null,
+        };
+        if (!context.contextToken || !context.toUserId) {
+          fail += 1;
+          errors.push(`${target.id}: missing context`);
+          continue;
+        }
+        // 刷新内存 context
+        this.contexts.set(accountScopedKey(accountId, target.conversationId), context);
+        try {
+          await this._sendTextWithContext(target.conversationId, top3Text, context, account);
+          for (const image of images) {
+            await this._sendMediaWithContext(
+              target.conversationId,
+              { buffer: image.buffer, fileName: image.fileName, mediaKind: "image" },
+              context,
+              account
+            );
+          }
+          ok += 1;
+        } catch (error) {
+          fail += 1;
+          errors.push(`${target.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } finally {
+      this._releaseRunnerLeaseIfIdle();
+    }
+
+    const lastPush = {
+      date,
+      at: new Date().toISOString(),
+      ok,
+      fail,
+      skipped: null,
+    };
+    this.settings = {
+      ...this.settings,
+      dailyReportPush: normalizeDailyReportPushSettings({
+        ...normalizeDailyReportPushSettings(this.settings.dailyReportPush),
+        lastPush,
+      }),
+    };
+    this._writeStore();
+    return {
+      ok: fail === 0,
+      date,
+      targets: targets.length,
+      sent: ok,
+      failed: fail,
+      images: images.length,
+      errors: errors.slice(0, 5),
+    };
+  }
+
   _writeStore() {
     const file = this.storagePath();
     const accounts = [...this.accounts.values()].map((item) => ({
@@ -2015,7 +2294,17 @@ class WeixinBotService extends EventEmitter {
         ])
       ),
       encryptedAiKey: this.encryptedAiKey || "",
-      contacts: this.getContacts(),
+      contacts: [...this.knownContacts.values()].map((item) => ({
+        accountId: item.accountId,
+        id: item.id,
+        kind: item.kind === "group" ? "group" : "user",
+        conversationId: item.conversationId,
+        groupId: item.groupId || null,
+        lastContent: item.lastContent || "",
+        lastSeenAt: item.lastSeenAt || "",
+        contextToken: item.contextToken || "",
+        toUserId: item.toUserId || "",
+      })),
       activeAccountId: this.activeAccountId,
       accounts,
       // 兼容旧版读取：保留当前活动账号快照

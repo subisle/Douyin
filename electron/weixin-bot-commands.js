@@ -11,6 +11,7 @@ const {
   SYSTEM_DISABLE_RE: AGENT_DISABLE_RE,
 } = require("./weixin-bot-mode");
 const { threadKeyFromContext } = require("./weixin-bot-agent");
+const { matchDailyPushCommand } = require("./weixin-bot-daily-push");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -781,7 +782,7 @@ function resolveInboundImportDate(args, pendingDates) {
   return { date: localYesterdayIso(), source: "yesterday" };
 }
 
-async function handleInboundFile(args, db, pendingDates) {
+async function handleInboundFile(args, db, pendingDates, dailyPush = null) {
   args.assertLease?.();
   const file = await args.downloadMedia(args.fileItem);
   args.assertLease?.();
@@ -819,6 +820,13 @@ async function handleInboundFile(args, db, pendingDates) {
       ? "（按你预告的日期）"
       : "（按消息指定日期）";
   await args.replyText(`已导入 ${date} ${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
+  if (kind === "wave" && dailyPush && typeof dailyPush.notifyAfterImport === "function") {
+    try {
+      void dailyPush.notifyAfterImport(date, { delayMs: 1500 });
+    } catch {
+      // ignore schedule errors
+    }
+  }
 }
 
 
@@ -886,7 +894,7 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ana
   return true;
 }
 
-function createWeixinCommandHandler({ db, renderReportPng, agent = null, analytics: sharedAnalytics = null } = {}) {
+function createWeixinCommandHandler({ db, renderReportPng, agent = null, analytics: sharedAnalytics = null, dailyPush = null } = {}) {
   if (!db) throw new Error("微信机器人命令处理缺少数据库");
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
   const pendingImportDates = createPendingImportDateStore();
@@ -899,7 +907,7 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       const items = Array.isArray(args.items) ? args.items : [];
       const fileItem = items.find((item) => item?.type === 4 && item.file_item);
       if (fileItem) {
-        await handleInboundFile({ ...args, fileItem }, db, pendingImportDates);
+        await handleInboundFile({ ...args, fileItem }, db, pendingImportDates, dailyPush);
         return { handled: true };
       }
 
@@ -909,6 +917,42 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
         pendingImportDates.set(args, importDateHint);
         await args.replyText(`已记住导入日期 ${importDateHint}（10 分钟内有效）。请现在发送 CSV 文件。`);
         return { handled: true };
+      }
+
+      const pushCommand = matchDailyPushCommand(args.text);
+      if (pushCommand) {
+        if (!dailyPush) {
+          await args.replyText("日报推送能力未就绪。");
+          return { handled: true };
+        }
+        const actorUserId = String(args.fromUserId || args.userId || "").trim();
+        const accountId = String(args.accountId || "").trim();
+        try {
+          if (pushCommand.type === "status") {
+            const text = typeof dailyPush.getStatusText === "function"
+              ? dailyPush.getStatusText()
+              : "无法读取推送状态";
+            await args.replyText(text);
+            return { handled: true };
+          }
+          if (typeof dailyPush.isAdmin === "function" && !dailyPush.isAdmin(actorUserId, accountId)) {
+            await args.replyText("仅管理员可开关日报推送。请在桌面端「微信机器人 → 日报推送」设置管理员。");
+            return { handled: true };
+          }
+          if (pushCommand.type === "enable") {
+            dailyPush.setEnabled(true, { actorUserId, accountId });
+            await args.replyText("已开启日报自动推送。音浪数据更新后将发送前三文案与报告图。发「关闭日报推送」可关闭。");
+            return { handled: true };
+          }
+          if (pushCommand.type === "disable") {
+            dailyPush.setEnabled(false, { actorUserId, accountId });
+            await args.replyText("已关闭日报自动推送。");
+            return { handled: true };
+          }
+        } catch (error) {
+          await args.replyText(error instanceof Error ? error.message : String(error));
+          return { handled: true };
+        }
       }
 
       const systemToken = matchSystemToken(args.text);
@@ -1056,4 +1100,5 @@ module.exports = {
   createModeStore,
   matchFastRoute,
   matchSystemToken,
+  matchDailyPushCommand,
 };
