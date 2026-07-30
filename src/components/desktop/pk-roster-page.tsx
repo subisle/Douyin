@@ -7,6 +7,7 @@ import {
   Loader2,
   RefreshCw,
   RotateCcw,
+  Save,
   Upload,
   X,
 } from "lucide-react";
@@ -32,9 +33,14 @@ import {
   PRESET_BATTLE_FIRST_START,
   PRESET_BATTLE_STEP_MINUTES,
   PRESET_ROSTER_TEXT,
+  buildBattleGroupsResultFromNameGroups,
   buildPresetBattleGroupsResult,
+  clearSavedGroupsLayout,
+  groupsToNameGroups,
   loadRosterText,
+  loadSavedGroupsLayout,
   resolveRosterNames,
+  saveGroupsLayout,
   saveRosterText,
 } from "./pk-roster-config";
 import {
@@ -44,6 +50,7 @@ import {
 
 type ScoreDisplay = "total" | "latest";
 type UiGroup = BuildPkGroupsGroup & { key: string };
+type DragPerson = { groupKey: string; personId: number | null; name: string };
 
 const MODE_OPTIONS: { key: PkGroupMode; label: string }[] = [
   { key: "preset", label: "内置" },
@@ -62,6 +69,10 @@ function memberScore(m: { wave?: number; latestWave?: number }, display: ScoreDi
   return Number(m.wave || 0);
 }
 
+function personRowKey(groupKey: string, m: { personId?: number | null; name?: string; index?: number }) {
+  return `${groupKey}:${m.personId ?? m.name ?? ""}:${m.index ?? 0}`;
+}
+
 function cloneGroups(groups: UiGroup[]): UiGroup[] {
   return groups.map((g) => ({
     ...g,
@@ -69,19 +80,57 @@ function cloneGroups(groups: UiGroup[]): UiGroup[] {
   }));
 }
 
-function relabelGroups(groups: UiGroup[]): UiGroup[] {
-  return groups.map((g, i) => ({
-    ...g,
-    order: i + 1,
-    label: `第${i + 1}组`,
-  }));
+function relabelGroups(groups: UiGroup[], scoreDisplay: ScoreDisplay): UiGroup[] {
+  return groups.map((g, i) => {
+    const strengths = g.members
+      .map((m) => memberScore(m, scoreDisplay))
+      .sort((a, b) => b - a);
+    const top4 = strengths.slice(0, 4).reduce((s, n) => s + n, 0);
+    const average =
+      g.members.length > 0
+        ? g.members.reduce((s, m) => s + memberScore(m, scoreDisplay), 0) / g.members.length
+        : 0;
+    return {
+      ...g,
+      key: `g-${i + 1}`,
+      order: i + 1,
+      label: `第${i + 1}组`,
+      count: g.members.length,
+      top4: Math.round(top4),
+      average: Math.round(average),
+      scheduleLabel: g.startTime ? `${g.startTime} 开始连麦` : g.scheduleLabel,
+      members: g.members.map((m, idx) => ({
+        ...m,
+        index: idx + 1,
+        strength: Math.round(memberScore(m, scoreDisplay)),
+      })),
+    };
+  });
 }
 
 function toUiGroups(result: BuildPkGroupsResult): UiGroup[] {
   return (result.groups || []).map((g, i) => ({
     ...g,
-    key: `g-${i + 1}-${g.members[0]?.personId ?? g.members[0]?.name ?? i}`,
+    key: `g-${i + 1}`,
   }));
+}
+
+function attachScheduleTimes(groups: UiGroup[]): UiGroup[] {
+  const match = String(PRESET_BATTLE_FIRST_START).match(/^(\d{1,2}):(\d{2})$/);
+  const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
+  const step = PRESET_BATTLE_STEP_MINUTES || 15;
+  return groups.map((g, i) => {
+    const total = startMin + i * step;
+    const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+    const h = Math.floor(normalized / 60);
+    const m = normalized % 60;
+    const startTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    return {
+      ...g,
+      startTime,
+      scheduleLabel: `${startTime} 开始连麦`,
+    };
+  });
 }
 
 export function PkRosterPage() {
@@ -99,11 +148,17 @@ export function PkRosterPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importDraft, setImportDraft] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(() => loadSavedGroupsLayout()?.savedAt || null);
+  const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null);
+  const [dragOverPersonKey, setDragOverPersonKey] = useState<string | null>(null);
+  const [draggingPersonKey, setDraggingPersonKey] = useState<string | null>(null);
+  const [draggingGroupKey, setDraggingGroupKey] = useState<string | null>(null);
 
   const undoStack = useRef<UiGroup[][]>([]);
   const exportRef = useRef<HTMLDivElement>(null);
-  const dragPerson = useRef<{ groupKey: string; personId: number | null; name: string } | null>(null);
-  const dragGroupKey = useRef<string | null>(null);
+  const dragPerson = useRef<DragPerson | null>(null);
+  const dragGroupKeyRef = useRef<string | null>(null);
 
   const scoreField: PkScoreField = scoreDisplay === "latest" ? "latestWave" : "wave";
 
@@ -117,10 +172,43 @@ export function PkRosterPage() {
     if (undoStack.current.length > 20) undoStack.current.shift();
   }, []);
 
+  const clearDragVisual = useCallback(() => {
+    setDragOverGroupKey(null);
+    setDragOverPersonKey(null);
+    setDraggingPersonKey(null);
+    setDraggingGroupKey(null);
+    dragPerson.current = null;
+    dragGroupKeyRef.current = null;
+  }, []);
+
+  const persistGroups = useCallback(
+    (nextGroups: UiGroup[], opts?: { silent?: boolean }) => {
+      const nameGroups = groupsToNameGroups(nextGroups);
+      const saved = saveGroupsLayout({
+        nameGroups,
+        period,
+        mode,
+        scoreDisplay,
+      });
+      if (saved) {
+        setSavedAt(saved.savedAt);
+        setDirty(false);
+        if (!opts?.silent) showToast("分组已保存");
+        return true;
+      }
+      if (!opts?.silent) showToast("保存失败：分组为空");
+      return false;
+    },
+    [mode, period, scoreDisplay, showToast]
+  );
+
   const undo = useCallback(() => {
     const prev = undoStack.current.pop();
-    if (prev) setGroups(prev);
-  }, []);
+    if (!prev) return;
+    setGroups(prev);
+    setDirty(true);
+    clearDragVisual();
+  }, [clearDragVisual]);
 
   const resolution = useMemo(
     () => resolveRosterNames(rawMales, includeText),
@@ -131,6 +219,14 @@ export function PkRosterPage() {
     if (!resolution.names.length) return [] as PkMember[];
     return rawMales.filter((m) => resolution.ids.has(m.personId));
   }, [rawMales, resolution]);
+
+  const memberPool = useMemo(() => {
+    // 内置/已保存布局允许用全量男团补齐占位，优先 eligible
+    if (!rawMales.length) return [] as PkMember[];
+    if (!eligible.length) return rawMales;
+    const seen = new Set(eligible.map((m) => m.personId));
+    return [...eligible, ...rawMales.filter((m) => !seen.has(m.personId))];
+  }, [eligible, rawMales]);
 
   const loadRoster = useCallback(async () => {
     const api = getDataApi();
@@ -157,118 +253,170 @@ export function PkRosterPage() {
     }
   }, [period]);
 
-  const rebuildGroups = useCallback(async () => {
-    const api = getDataApi();
-    if (mode !== "preset" && !api?.buildPkGroups) {
-      setError("buildPkGroups 不可用");
-      return;
-    }
-    if (!resolution.names.length) {
-      setGroups([]);
-      setWarning("请先导入参赛名单");
-      return;
-    }
-    // 内置模式允许用名单名占位（库中未命中也按结构展示）
-    if (mode !== "preset" && !eligible.length) {
-      setGroups([]);
-      setWarning(
-        resolution.unmatchedNames.length
-          ? `名单无人命中。未匹配：${resolution.unmatchedNames.slice(0, 8).join("、")}`
-          : "名单无人命中"
-      );
-      return;
-    }
-
-    setBuilding(true);
-    setError(null);
-    setWarning(null);
-    try {
-      if (mode === "preset") {
-        const built = buildPresetBattleGroupsResult(eligible, {
-          scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
-        });
-        setGroups(toUiGroups(built));
-        undoStack.current = [];
-        let warn = built.warning || "";
-        if (resolution.unmatchedNames.length) {
-          const miss = `未匹配 ${resolution.unmatchedNames.length} 人：${resolution.unmatchedNames.slice(0, 6).join("、")}${resolution.unmatchedNames.length > 6 ? "…" : ""}`;
-          warn = warn ? `${warn}；${miss}` : miss;
-        }
-        setWarning(warn || null);
-        return;
-      }
-      const res: IpcResult<BuildPkGroupsResult> = await api.buildPkGroups({
-        members: eligible.map((m) => ({
-          personId: m.personId,
-          name: m.name,
-          wave: m.wave,
-          latestWave: m.latestWave,
-          trimmedAvg: m.trimmedAvg,
-          gender: m.gender,
-          anchorId: m.anchorId,
-        })),
-        mode,
-        groupSize: DEFAULT_PK_GROUP_SIZE,
-        scoreField,
-        firstStart: PRESET_BATTLE_FIRST_START,
-        stepMinutes: mode === "preset" ? PRESET_BATTLE_STEP_MINUTES : 5,
-      });
-      if (!res.success) {
-        setError(res.error || "分组失败");
-        setGroups([]);
-        return;
-      }
-      const built = res.data;
-      if (!built?.ok) {
-        setError(built?.error || "分组失败");
-        setGroups([]);
-        return;
-      }
+  const applyBuiltResult = useCallback(
+    (built: BuildPkGroupsResult) => {
       setGroups(toUiGroups(built));
       undoStack.current = [];
       let warn = built.warning || "";
       if (resolution.unmatchedNames.length) {
-        const miss = `未匹配 ${resolution.unmatchedNames.length} 人：${resolution.unmatchedNames.slice(0, 6).join("、")}${resolution.unmatchedNames.length > 6 ? "…" : ""}`;
+        const miss = `未匹配 ${resolution.unmatchedNames.length} 人：${resolution.unmatchedNames
+          .slice(0, 6)
+          .join("、")}${resolution.unmatchedNames.length > 6 ? "…" : ""}`;
         warn = warn ? `${warn}；${miss}` : miss;
       }
       setWarning(warn || null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setGroups([]);
-    } finally {
-      setBuilding(false);
-    }
-  }, [eligible, mode, scoreField, resolution]);
+    },
+    [resolution.unmatchedNames]
+  );
+
+  const rebuildGroups = useCallback(
+    async (opts?: { clearSaved?: boolean; preferSaved?: boolean }) => {
+      const api = getDataApi();
+      if (mode !== "preset" && !api?.buildPkGroups) {
+        setError("buildPkGroups 不可用");
+        return;
+      }
+      if (!resolution.names.length) {
+        setGroups([]);
+        setWarning("请先导入参赛名单");
+        return;
+      }
+      if (mode !== "preset" && !eligible.length) {
+        setGroups([]);
+        setWarning(
+          resolution.unmatchedNames.length
+            ? `名单无人命中。未匹配：${resolution.unmatchedNames.slice(0, 8).join("、")}`
+            : "名单无人命中"
+        );
+        return;
+      }
+
+      if (opts?.clearSaved) {
+        clearSavedGroupsLayout();
+        setSavedAt(null);
+        setDirty(false);
+      }
+
+      const preferSaved = opts?.preferSaved !== false && !opts?.clearSaved;
+      if (preferSaved) {
+        const saved = loadSavedGroupsLayout();
+        if (saved?.nameGroups?.length) {
+          const built = buildBattleGroupsResultFromNameGroups(saved.nameGroups, memberPool, {
+            scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
+            mode,
+            modeLabel: "已保存分组",
+            source: "已保存拖拽分组",
+            notes: [
+              "来自本地保存的拖拽分组",
+              saved.savedAt ? `保存于 ${new Date(saved.savedAt).toLocaleString("zh-CN")}` : "",
+            ].filter(Boolean),
+          });
+          applyBuiltResult(built);
+          setSavedAt(saved.savedAt || null);
+          setDirty(false);
+          return;
+        }
+      }
+
+      setBuilding(true);
+      setError(null);
+      setWarning(null);
+      try {
+        if (mode === "preset") {
+          const built = buildPresetBattleGroupsResult(memberPool, {
+            scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
+          });
+          applyBuiltResult(built);
+          setDirty(false);
+          return;
+        }
+        if (!api?.buildPkGroups) {
+          setError("buildPkGroups 不可用");
+          setGroups([]);
+          return;
+        }
+        const res: IpcResult<BuildPkGroupsResult> = await api.buildPkGroups({
+          members: eligible.map((m) => ({
+            personId: m.personId,
+            name: m.name,
+            wave: m.wave,
+            latestWave: m.latestWave,
+            trimmedAvg: m.trimmedAvg,
+            gender: m.gender,
+            anchorId: m.anchorId,
+          })),
+          mode,
+          groupSize: DEFAULT_PK_GROUP_SIZE,
+          scoreField,
+          firstStart: PRESET_BATTLE_FIRST_START,
+          stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+        });
+        if (!res.success) {
+          setError(res.error || "分组失败");
+          setGroups([]);
+          return;
+        }
+        if (!res.data) {
+          setError("分组结果为空");
+          setGroups([]);
+          return;
+        }
+        applyBuiltResult(res.data);
+        setDirty(false);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setGroups([]);
+      } finally {
+        setBuilding(false);
+      }
+    },
+    [
+      applyBuiltResult,
+      eligible,
+      memberPool,
+      mode,
+      resolution.names.length,
+      resolution.unmatchedNames,
+      scoreField,
+    ]
+  );
 
   useEffect(() => {
     void loadRoster();
   }, [loadRoster]);
 
+  // 名单/模式/口径变化后自动分组（优先本地已保存布局）
   useEffect(() => {
     if (loadingRoster) return;
-    void rebuildGroups();
-  }, [loadingRoster, rebuildGroups]);
+    void rebuildGroups({ preferSaved: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingRoster, includeText, period, mode, scoreDisplay]);
 
   const applyGroupsIfValid = useCallback(
-    (next: UiGroup[], failMessagePrefix: string) => {
-      const check = validateGroupsGap(next);
+    (next: UiGroup[], failMessagePrefix: string, opts?: { autosave?: boolean }) => {
+      const scheduled = attachScheduleTimes(next);
+      const normalized = relabelGroups(scheduled, scoreDisplay);
+      const check = validateGroupsGap(normalized);
       if (!check.ok) {
         showToast(`${failMessagePrefix}：${formatGapViolation(check.violations[0])}`);
         return false;
       }
       pushUndo(cloneGroups(groups));
-      setGroups(relabelGroups(next));
+      setGroups(normalized);
+      setDirty(true);
+      if (opts?.autosave !== false) {
+        // 拖拽后自动保存
+        persistGroups(normalized, { silent: true });
+        showToast("已调整并保存");
+      }
       return true;
     },
-    [groups, pushUndo, showToast]
+    [groups, persistGroups, pushUndo, scoreDisplay, showToast]
   );
 
   const swapPersons = useCallback(
-    (
-      a: { groupKey: string; personId: number | null; name: string },
-      b: { groupKey: string; personId: number | null; name: string }
-    ) => {
-      if (a.groupKey === b.groupKey && a.name === b.name) return;
+    (a: DragPerson, b: DragPerson) => {
+      if (a.groupKey === b.groupKey && a.name === b.name && a.personId === b.personId) return;
       const next = cloneGroups(groups);
       const ga = next.find((g) => g.key === a.groupKey);
       const gb = next.find((g) => g.key === b.groupKey);
@@ -284,6 +432,29 @@ export function PkRosterPage() {
       ga.members[ia] = gb.members[ib];
       gb.members[ib] = tmp;
       applyGroupsIfValid(next, "无法交换");
+    },
+    [groups, applyGroupsIfValid]
+  );
+
+  /** 拖到组板块（非具体人）时：移入目标组末尾；目标已满则与最后一人对调 */
+  const movePersonToGroup = useCallback(
+    (from: DragPerson, toGroupKey: string) => {
+      if (from.groupKey === toGroupKey) return;
+      const next = cloneGroups(groups);
+      const ga = next.find((g) => g.key === from.groupKey);
+      const gb = next.find((g) => g.key === toGroupKey);
+      if (!ga || !gb) return;
+      const ia = ga.members.findIndex(
+        (m) => (from.personId != null && m.personId === from.personId) || m.name === from.name
+      );
+      if (ia < 0) return;
+      const [picked] = ga.members.splice(ia, 1);
+      if (gb.members.length >= DEFAULT_PK_GROUP_SIZE) {
+        const displaced = gb.members.pop();
+        if (displaced) ga.members.push(displaced);
+      }
+      gb.members.push(picked);
+      applyGroupsIfValid(next, "无法移动");
     },
     [groups, applyGroupsIfValid]
   );
@@ -312,6 +483,19 @@ export function PkRosterPage() {
     setIncludeText(text);
     saveRosterText(text);
     setImportOpen(false);
+  };
+
+  const handleSave = () => {
+    if (!groups.length) {
+      showToast("没有可保存的分组");
+      return;
+    }
+    persistGroups(groups);
+  };
+
+  const handleReset = () => {
+    void rebuildGroups({ clearSaved: true, preferSaved: false });
+    showToast(mode === "preset" ? "已恢复内置分组" : "已重新分组");
   };
 
   const handleExport = async () => {
@@ -343,10 +527,17 @@ export function PkRosterPage() {
       <div className="flex flex-wrap items-center gap-2">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">PK 分组</h1>
-          <p className="text-xs text-muted-foreground">男团 · 内置锁定 / 引擎三模式 · 人拖互换 / 组序拖改</p>
+          <p className="text-xs text-muted-foreground">
+            拖人员互换 / 拖到组板块移动 · 拖组标题调序 · 调整后自动保存
+          </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="h-8 w-[150px]" />
+          <Input
+            type="month"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="h-8 w-[150px]"
+          />
           <Button size="sm" variant="outline" onClick={openImport}>
             <Upload className="mr-1 size-3.5" />
             导入名单
@@ -381,15 +572,28 @@ export function PkRosterPage() {
               </button>
             ))}
           </div>
-          <Button size="sm" variant="outline" onClick={() => void rebuildGroups()} disabled={building}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void rebuildGroups({ preferSaved: true })}
+            disabled={building}
+          >
             {building ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <RefreshCw className="mr-1 size-3.5" />}
-            重新分组
+            刷新
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleReset} disabled={building}>
+            <RotateCcw className="mr-1 size-3.5" />
+            重置
           </Button>
           <Button size="sm" variant="ghost" onClick={undo} title="撤销上一次拖拽">
-            <RotateCcw className="size-3.5" />
+            撤销
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={!groups.length} title="保存当前分组">
+            <Save className="mr-1 size-3.5" />
+            保存分组
           </Button>
           <Button size="sm" onClick={() => void handleExport()} disabled={!groups.length || exporting}>
-            <Download className="mr-1 size-3.5" />
+            {exporting ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Download className="mr-1 size-3.5" />}
             导出
           </Button>
         </div>
@@ -399,11 +603,23 @@ export function PkRosterPage() {
         <Badge variant="secondary">名单 {resolution.names.length}</Badge>
         <Badge variant="secondary">命中 {eligible.length}</Badge>
         <Badge variant="secondary">组数 {groups.length}</Badge>
+        {dirty ? (
+          <Badge variant="outline" className="border-amber-400 text-amber-700">
+            未保存更改
+          </Badge>
+        ) : savedAt ? (
+          <Badge variant="outline">已保存 {new Date(savedAt).toLocaleString("zh-CN")}</Badge>
+        ) : null}
         {building && (
           <span className="inline-flex items-center gap-1">
             <Loader2 className="size-3 animate-spin" />
             分组中…
           </span>
+        )}
+        {dragOverGroupKey && (
+          <Badge className="bg-violet-600 text-white hover:bg-violet-600">
+            目标：{groups.find((g) => g.key === dragOverGroupKey)?.label || dragOverGroupKey}
+          </Badge>
         )}
       </div>
 
@@ -420,93 +636,183 @@ export function PkRosterPage() {
       {toast && <div className="rounded-md border bg-background px-3 py-2 text-xs shadow-sm">{toast}</div>}
 
       {!groups.length && !building ? (
-        <EmptyState label="还没有分组 — 导入名单或点重新分组" />
+        <EmptyState label="还没有分组 — 导入名单或点刷新" />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {groups.map((group) => (
-            <Card
-              key={group.key}
-              className="overflow-hidden"
-              onDragOver={(e) => {
-                if (dragGroupKey.current) e.preventDefault();
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const from = dragGroupKey.current;
-                dragGroupKey.current = null;
-                if (from) reorderGroup(from, group.key);
-              }}
-            >
-              <CardHeader className="space-y-1 border-b bg-muted/30 py-3">
-                <CardTitle
-                  className="flex cursor-grab items-center gap-2 text-sm active:cursor-grabbing"
-                  draggable
-                  onDragStart={() => {
-                    dragGroupKey.current = group.key;
-                  }}
-                  onDragEnd={() => {
-                    dragGroupKey.current = null;
-                  }}
+          {groups.map((group) => {
+            const isGroupTarget = dragOverGroupKey === group.key;
+            const isGroupDragging = draggingGroupKey === group.key;
+            return (
+              <Card
+                key={group.key}
+                className={`overflow-hidden transition-all ${
+                  isGroupTarget
+                    ? "border-violet-500 ring-2 ring-violet-400/70 shadow-lg shadow-violet-500/10 scale-[1.01]"
+                    : isGroupDragging
+                      ? "opacity-60 border-dashed"
+                      : ""
+                }`}
+                onDragOver={(e) => {
+                  if (dragPerson.current || dragGroupKeyRef.current) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = dragPerson.current ? "move" : "move";
+                  }
+                  if (dragPerson.current || dragGroupKeyRef.current) {
+                    setDragOverGroupKey(group.key);
+                  }
+                }}
+                onDragEnter={(e) => {
+                  if (dragPerson.current || dragGroupKeyRef.current) {
+                    e.preventDefault();
+                    setDragOverGroupKey(group.key);
+                  }
+                }}
+                onDragLeave={(e) => {
+                  const related = e.relatedTarget as Node | null;
+                  if (related && e.currentTarget.contains(related)) return;
+                  setDragOverGroupKey((cur) => (cur === group.key ? null : cur));
+                  setDragOverPersonKey(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromGroup = dragGroupKeyRef.current;
+                  const fromPerson = dragPerson.current;
+                  // 组序拖放
+                  if (fromGroup) {
+                    dragGroupKeyRef.current = null;
+                    clearDragVisual();
+                    reorderGroup(fromGroup, group.key);
+                    return;
+                  }
+                  // 人拖到板块（未落到具体人）
+                  if (fromPerson) {
+                    dragPerson.current = null;
+                    clearDragVisual();
+                    movePersonToGroup(fromPerson, group.key);
+                  }
+                }}
+              >
+                <CardHeader
+                  className={`space-y-1 border-b py-3 transition-colors ${
+                    isGroupTarget ? "bg-violet-50 dark:bg-violet-950/30" : "bg-muted/30"
+                  }`}
                 >
-                  <GripVertical className="size-3.5 text-muted-foreground" />
-                  <span>{group.label}</span>
-                  {group.scheduleLabel && (
-                    <span className="font-normal text-muted-foreground">· {group.scheduleLabel}</span>
-                  )}
-                  <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <ul className="divide-y">
-                  {group.members.map((m) => (
-                    <li
-                      key={`${group.key}-${m.personId ?? m.name}-${m.index}`}
-                      draggable
-                      onDragStart={() => {
-                        dragPerson.current = {
-                          groupKey: group.key,
-                          personId: m.personId,
-                          name: m.name,
-                        };
-                      }}
-                      onDragEnd={() => {
-                        dragPerson.current = null;
-                      }}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const from = dragPerson.current;
-                        dragPerson.current = null;
-                        if (!from) return;
-                        swapPersons(from, {
-                          groupKey: group.key,
-                          personId: m.personId,
-                          name: m.name,
-                        });
-                      }}
-                      className="flex cursor-grab items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-muted/40 active:cursor-grabbing"
-                    >
-                      <span className="truncate font-medium">{m.name}</span>
-                      <span className="shrink-0 tabular-nums text-muted-foreground">
-                        {formatWave(memberScore(m, scoreDisplay))}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          ))}
+                  <CardTitle
+                    className="flex cursor-grab items-center gap-2 text-sm active:cursor-grabbing"
+                    draggable
+                    onDragStart={(e) => {
+                      dragGroupKeyRef.current = group.key;
+                      setDraggingGroupKey(group.key);
+                      e.dataTransfer.effectAllowed = "move";
+                      try {
+                        e.dataTransfer.setData("text/plain", `group:${group.key}`);
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                    onDragEnd={() => {
+                      clearDragVisual();
+                    }}
+                  >
+                    <GripVertical className="size-3.5 text-muted-foreground" />
+                    <span>{group.label}</span>
+                    {group.scheduleLabel && (
+                      <span className="font-normal text-muted-foreground">· {group.scheduleLabel}</span>
+                    )}
+                    {typeof group.top4 === "number" && group.top4 > 0 && (
+                      <span className="font-normal text-muted-foreground">· T4 {formatWave(group.top4)}</span>
+                    )}
+                    <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <ul className="divide-y">
+                    {group.members.map((m) => {
+                      const rowKey = personRowKey(group.key, m);
+                      const isOver = dragOverPersonKey === rowKey;
+                      const isDragging = draggingPersonKey === rowKey;
+                      return (
+                        <li
+                          key={rowKey}
+                          draggable
+                          onDragStart={(e) => {
+                            e.stopPropagation();
+                            dragPerson.current = {
+                              groupKey: group.key,
+                              personId: m.personId,
+                              name: m.name,
+                            };
+                            setDraggingPersonKey(rowKey);
+                            setDragOverGroupKey(group.key);
+                            e.dataTransfer.effectAllowed = "move";
+                            try {
+                              e.dataTransfer.setData("text/plain", `person:${m.name}`);
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                          onDragEnd={() => {
+                            clearDragVisual();
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDragOverGroupKey(group.key);
+                            setDragOverPersonKey(rowKey);
+                          }}
+                          onDragEnter={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDragOverGroupKey(group.key);
+                            setDragOverPersonKey(rowKey);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const from = dragPerson.current;
+                            clearDragVisual();
+                            if (!from) return;
+                            swapPersons(from, {
+                              groupKey: group.key,
+                              personId: m.personId,
+                              name: m.name,
+                            });
+                          }}
+                          className={`flex cursor-grab items-center justify-between gap-2 px-3 py-2 text-sm transition-colors active:cursor-grabbing ${
+                            isDragging
+                              ? "opacity-40 bg-muted/60"
+                              : isOver
+                                ? "bg-violet-100 dark:bg-violet-900/40 ring-1 ring-inset ring-violet-400"
+                                : "hover:bg-muted/40"
+                          }`}
+                        >
+                          <span className="truncate font-medium">{m.name}</span>
+                          <span className="shrink-0 tabular-nums text-muted-foreground">
+                            {formatWave(memberScore(m, scoreDisplay))}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
       <div className="pointer-events-none fixed left-[-10000px] top-0">
-        <div ref={exportRef} className="w-[960px] bg-slate-50 p-6 text-slate-900" style={{ fontFamily: "system-ui, sans-serif" }}>
+        <div
+          ref={exportRef}
+          className="w-[960px] bg-slate-50 p-6 text-slate-900"
+          style={{ fontFamily: "system-ui, sans-serif" }}
+        >
           <div className="mb-4 flex items-end justify-between">
             <div>
               <div className="text-2xl font-bold">PK 分组</div>
               <div className="mt-1 text-sm text-slate-500">
-                {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} · {scoreDisplay === "latest" ? "最新日音浪" : "月总分"}
+                {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} ·{" "}
+                {scoreDisplay === "latest" ? "最新日音浪" : "月总分"}
               </div>
             </div>
             <div className="text-sm text-slate-500">
@@ -525,9 +831,14 @@ export function PkRosterPage() {
                 </div>
                 <div className="space-y-1">
                   {group.members.map((m) => (
-                    <div key={`ex-${group.key}-${m.index}-${m.name}`} className="flex justify-between text-sm">
+                    <div
+                      key={`ex-${group.key}-${m.index}-${m.name}`}
+                      className="flex justify-between text-sm"
+                    >
                       <span>{m.name}</span>
-                      <span className="tabular-nums text-slate-500">{formatWave(memberScore(m, scoreDisplay))}</span>
+                      <span className="tabular-nums text-slate-500">
+                        {formatWave(memberScore(m, scoreDisplay))}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -545,7 +856,11 @@ export function PkRosterPage() {
                 <div className="font-semibold">导入名单</div>
                 <div className="text-xs text-muted-foreground">换行 / 逗号分隔；支持编号前缀</div>
               </div>
-              <button type="button" onClick={() => setImportOpen(false)} className="rounded p-1 hover:bg-muted">
+              <button
+                type="button"
+                onClick={() => setImportOpen(false)}
+                className="rounded p-1 hover:bg-muted"
+              >
                 <X className="size-4" />
               </button>
             </div>

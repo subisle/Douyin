@@ -1,4 +1,4 @@
-import type { BuildPkGroupsGroup, BuildPkGroupsResult, PkMember } from "@/types/electron";
+import type { BuildPkGroupsGroup, BuildPkGroupsResult, PkGroupMode, PkMember } from "@/types/electron";
 import {
   PRESET_BATTLE_GROUPS as SHARED_PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_META,
@@ -9,6 +9,8 @@ export const DEFAULT_PK_GROUP_SIZE = 8;
 
 /** 单一名单 storage（分组页） */
 export const ROSTER_STORAGE_KEY = "pk-group-roster-v1";
+/** 拖拽微调后的分组布局（按人名二维数组持久化） */
+export const GROUPS_LAYOUT_STORAGE_KEY = "pk-group-layout-v1";
 /** 旧版双槽配置，仅用于迁移 */
 export const LEGACY_ROSTER_CONFIG_STORAGE_KEY = "pk-roster-list-config-v17";
 /** 兼容更旧 key */
@@ -214,7 +216,7 @@ function resolveNamedBattleGroups(
           latestWave: 0,
           trimmedAvg: 0,
           days: 0,
-        } as PkMember);
+        } as unknown as PkMember);
         return;
       }
       const picked = matches[0];
@@ -281,13 +283,26 @@ export function resolvePresetBattleGroups(
   });
 }
 
-/** 把内置名组解析成 BuildPkGroupsResult，供分组页 / 导出直接用 */
-export function buildPresetBattleGroupsResult(
+/** 任意名组 → BuildPkGroupsResult（内置 / 已保存布局共用） */
+export function buildBattleGroupsResultFromNameGroups(
+  nameGroups: string[][],
   allMembers: PkMember[],
-  options?: { scoreField?: "wave" | "latestWave" }
+  options?: {
+    scoreField?: "wave" | "latestWave";
+    mode?: PkGroupMode | string;
+    modeLabel?: string;
+    source?: string;
+    notes?: string[];
+  }
 ): BuildPkGroupsResult {
-  const resolved = resolvePresetBattleGroups(allMembers, options);
   const scoreField = options?.scoreField || "wave";
+  const source = options?.source || "自定义分组";
+  const resolved = resolveNamedBattleGroups(nameGroups, allMembers, source, {
+    labelPrefix: "第",
+    firstStart: PRESET_BATTLE_FIRST_START,
+    stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+    scoreField,
+  });
   const groups: BuildPkGroupsGroup[] = resolved.groups.map((g, gi) => ({
     label: g.label,
     order: gi + 1,
@@ -311,22 +326,107 @@ export function buildPresetBattleGroupsResult(
     .map((g, i) => ({ i: i + 1, top4: g.top4 }))
     .sort((a, b) => b.top4 - a.top4);
 
+  const mode = (options?.mode || "preset") as BuildPkGroupsResult["mode"];
+  const modeLabel = options?.modeLabel || (mode === "preset" ? PRESET_BATTLE_META.label : "自定义分组");
+  const notes = options?.notes || (mode === "preset" ? [...PRESET_BATTLE_NOTES] : ["已保存的拖拽分组"]);
+
   return {
     ok: true,
-    mode: "preset",
-    modeLabel: PRESET_BATTLE_META.label,
+    mode,
+    modeLabel,
     total: groups.reduce((s, g) => s + g.count, 0),
     groupCount: groups.length,
     sizes: groups.map((g) => g.count),
     scoreField,
     strongestSlot: 5,
     strongestGroup: byTop4[0]?.i || 5,
-    constraints: [...PRESET_BATTLE_NOTES, resolved.detail],
+    constraints: [...notes, resolved.detail],
     warning: resolved.missingNames.length
-      ? `内置缺人：${resolved.missingNames.join("、")}`
+      ? `缺人：${resolved.missingNames.join("、")}`
       : undefined,
     groups,
   };
+}
+
+/** 把内置名组解析成 BuildPkGroupsResult，供分组页 / 导出直接用 */
+export function buildPresetBattleGroupsResult(
+  allMembers: PkMember[],
+  options?: { scoreField?: "wave" | "latestWave" }
+): BuildPkGroupsResult {
+  return buildBattleGroupsResultFromNameGroups(PRESET_BATTLE_GROUPS, allMembers, {
+    scoreField: options?.scoreField,
+    mode: "preset",
+    modeLabel: PRESET_BATTLE_META.label,
+    source: PRESET_BATTLE_META.source,
+    notes: [...PRESET_BATTLE_NOTES],
+  });
+}
+
+export type SavedGroupsLayout = {
+  version: 1;
+  period?: string;
+  mode?: string;
+  scoreDisplay?: string;
+  nameGroups: string[][];
+  savedAt: string;
+};
+
+export function groupsToNameGroups(groups: Array<{ members?: Array<{ name?: string }> }>): string[][] {
+  return (groups || []).map((g) =>
+    (g.members || []).map((m) => String(m?.name || "").trim()).filter(Boolean)
+  );
+}
+
+export function loadSavedGroupsLayout(): SavedGroupsLayout | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(GROUPS_LAYOUT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SavedGroupsLayout;
+    if (!parsed || !Array.isArray(parsed.nameGroups) || parsed.nameGroups.length === 0) return null;
+    const nameGroups = parsed.nameGroups
+      .map((row) => (Array.isArray(row) ? row.map((n) => String(n || "").trim()).filter(Boolean) : []))
+      .filter((row) => row.length > 0);
+    if (!nameGroups.length) return null;
+    return {
+      version: 1,
+      period: parsed.period,
+      mode: parsed.mode,
+      scoreDisplay: parsed.scoreDisplay,
+      nameGroups,
+      savedAt: parsed.savedAt || "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveGroupsLayout(input: {
+  nameGroups: string[][];
+  period?: string;
+  mode?: string;
+  scoreDisplay?: string;
+}): SavedGroupsLayout | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = (input.nameGroups || [])
+    .map((row) => (Array.isArray(row) ? row.map((n) => String(n || "").trim()).filter(Boolean) : []))
+    .filter((row) => row.length > 0);
+  if (!nameGroups.length) return null;
+  const payload: SavedGroupsLayout = {
+    version: 1,
+    period: input.period,
+    mode: input.mode,
+    scoreDisplay: input.scoreDisplay,
+    nameGroups,
+    savedAt: new Date().toISOString(),
+  };
+  window.localStorage.setItem(GROUPS_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+  return payload;
+}
+
+export function clearSavedGroupsLayout() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(GROUPS_LAYOUT_STORAGE_KEY);
 }
 
 /** 开发期校验：TS 白名单与 shared 内置组扁平顺序一致 */
