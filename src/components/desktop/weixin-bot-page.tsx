@@ -803,6 +803,106 @@ function CommandGuide() {
 }
 
 
+function parseManualIds(raw: string): string[] {
+  return [
+    ...new Set(
+      String(raw || "")
+        .split(/[\s,，;；|、]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function ManualIdChips({
+  ids,
+  knownIds,
+  emptyText,
+  onRemove,
+}: {
+  ids: string[];
+  knownIds?: Set<string>;
+  emptyText: string;
+  onRemove: (id: string) => void;
+}) {
+  if (ids.length === 0) {
+    return <p className="px-1 py-1 text-[11px] text-muted-foreground">{emptyText}</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1">
+      {ids.map((id) => {
+        const known = knownIds ? knownIds.has(id) : true;
+        return (
+          <span
+            key={id}
+            className={cn(
+              "inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px]",
+              known
+                ? "border-border/60 bg-background/70 text-foreground"
+                : "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+            )}
+            title={known ? id : `${id}（未出现在联系人，仍可保存）`}
+          >
+            <span className="truncate">{compactId(id)}</span>
+            {!known ? <span className="shrink-0 text-[9px] opacity-80">手录</span> : null}
+            <button
+              type="button"
+              className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => onRemove(id)}
+              aria-label={`移除 ${id}`}
+            >
+              <X className="size-3" />
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function ManualIdEntry({
+  draft,
+  onDraftChange,
+  onAdd,
+  placeholder,
+  disabled,
+}: {
+  draft: string;
+  onDraftChange: (value: string) => void;
+  onAdd: () => void;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        value={draft}
+        onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onAdd();
+          }
+        }}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-[11px] outline-none focus:border-ring disabled:opacity-60"
+      />
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-8 shrink-0 px-2 text-[11px]"
+        onClick={onAdd}
+        disabled={disabled || !draft.trim()}
+      >
+        <Plus className="mr-1 size-3" />
+        添加
+      </Button>
+    </div>
+  );
+}
+
 function DailyReportPushPanel({
   settings,
   busy,
@@ -815,6 +915,10 @@ function DailyReportPushPanel({
   onSave: () => void;
 }) {
   const push = settings.dailyReportPush || DEFAULT_DAILY_PUSH;
+  const [adminDraft, setAdminDraft] = useState("");
+  const [recipientUserDraft, setRecipientUserDraft] = useState("");
+  const [recipientGroupDraft, setRecipientGroupDraft] = useState("");
+
   const updatePush = (patch: Partial<WeixinBotDailyReportPushSettings>) => {
     onChange({
       ...settings,
@@ -822,6 +926,7 @@ function DailyReportPushPanel({
     });
   };
 
+  const mergeIds = (list: string[], extra: string[]) => [...new Set([...list, ...extra])];
   const toggleId = (
     list: string[],
     id: string,
@@ -830,6 +935,29 @@ function DailyReportPushPanel({
 
   const users = settings.contacts.filter((c) => c.kind === "user");
   const groups = settings.contacts.filter((c) => c.kind === "group");
+  const knownUserIds = new Set(users.map((c) => c.id));
+  const knownGroupIds = new Set(groups.map((c) => c.id));
+
+  const addAdminIds = () => {
+    const ids = parseManualIds(adminDraft);
+    if (!ids.length) return;
+    updatePush({ adminUserIds: mergeIds(push.adminUserIds, ids) });
+    setAdminDraft("");
+  };
+
+  const addRecipientUserIds = () => {
+    const ids = parseManualIds(recipientUserDraft);
+    if (!ids.length) return;
+    updatePush({ recipientUserIds: mergeIds(push.recipientUserIds, ids) });
+    setRecipientUserDraft("");
+  };
+
+  const addRecipientGroupIds = () => {
+    const ids = parseManualIds(recipientGroupDraft);
+    if (!ids.length) return;
+    updatePush({ recipientGroupIds: mergeIds(push.recipientGroupIds, ids) });
+    setRecipientGroupDraft("");
+  };
 
   return (
     <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
@@ -866,9 +994,28 @@ function DailyReportPushPanel({
 
         <div className="space-y-1.5">
           <div className="font-medium text-foreground">管理员（可指令开关）</div>
+          <ManualIdEntry
+            draft={adminDraft}
+            onDraftChange={setAdminDraft}
+            onAdd={addAdminIds}
+            placeholder="手动录入用户 ID，支持逗号/空格批量"
+            disabled={busy}
+          />
+          <div className="rounded-md border border-border/50 p-1.5">
+            <ManualIdChips
+              ids={push.adminUserIds}
+              knownIds={knownUserIds}
+              emptyText="尚未设置管理员，可勾选联系人或手动录入 ID"
+              onRemove={(id) =>
+                updatePush({ adminUserIds: push.adminUserIds.filter((item) => item !== id) })
+              }
+            />
+          </div>
           <div className="max-h-28 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
             {users.length === 0 ? (
-              <p className="px-1 py-1 text-[11px] text-muted-foreground">暂无用户，先让对方给机器人发一条消息</p>
+              <p className="px-1 py-1 text-[11px] text-muted-foreground">
+                暂无联系人。可先手动录入用户 ID，或让对方给机器人发一条消息。
+              </p>
             ) : (
               users.map((contact) => {
                 const checked = push.adminUserIds.includes(contact.id);
@@ -899,9 +1046,49 @@ function DailyReportPushPanel({
 
         <div className="space-y-1.5">
           <div className="font-medium text-foreground">推送对象（空=名单内有会话的用户/群）</div>
+          <ManualIdEntry
+            draft={recipientUserDraft}
+            onDraftChange={setRecipientUserDraft}
+            onAdd={addRecipientUserIds}
+            placeholder="手动录入推送用户 ID"
+            disabled={busy}
+          />
+          <ManualIdEntry
+            draft={recipientGroupDraft}
+            onDraftChange={setRecipientGroupDraft}
+            onAdd={addRecipientGroupIds}
+            placeholder="手动录入推送群 ID"
+            disabled={busy}
+          />
+          <div className="rounded-md border border-border/50 p-1.5">
+            <div className="mb-1 text-[10px] text-muted-foreground">已选用户</div>
+            <ManualIdChips
+              ids={push.recipientUserIds}
+              knownIds={knownUserIds}
+              emptyText="未指定用户"
+              onRemove={(id) =>
+                updatePush({
+                  recipientUserIds: push.recipientUserIds.filter((item) => item !== id),
+                })
+              }
+            />
+            <div className="mb-1 mt-2 text-[10px] text-muted-foreground">已选群</div>
+            <ManualIdChips
+              ids={push.recipientGroupIds}
+              knownIds={knownGroupIds}
+              emptyText="未指定群"
+              onRemove={(id) =>
+                updatePush({
+                  recipientGroupIds: push.recipientGroupIds.filter((item) => item !== id),
+                })
+              }
+            />
+          </div>
           <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
             {settings.contacts.length === 0 ? (
-              <p className="px-1 py-1 text-[11px] text-muted-foreground">暂无对接联系人</p>
+              <p className="px-1 py-1 text-[11px] text-muted-foreground">
+                暂无对接联系人，仍可手动录入上方用户/群 ID。
+              </p>
             ) : (
               settings.contacts.map((contact) => {
                 const listKey = contact.kind === "group" ? "recipientGroupIds" : "recipientUserIds";
@@ -931,11 +1118,9 @@ function DailyReportPushPanel({
               })
             )}
           </div>
-          {(groups.length > 0 || users.length > 0) && (
-            <p className="text-[10px] text-muted-foreground">
-              未勾选推送对象时，默认推送给当前账号允许名单内、且近期有对话的联系人。
-            </p>
-          )}
+          <p className="text-[10px] text-muted-foreground">
+            支持手动录入尚未出现在联系人里的 ID；未指定推送对象时，默认推送给允许名单内且近期有对话的联系人。
+          </p>
         </div>
 
         {push.lastPush?.at ? (
