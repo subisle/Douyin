@@ -236,6 +236,61 @@ export interface WeixinBotSettingsSavePayload {
   };
 }
 
+export type QqBotPhase = "idle" | "connecting" | "ready" | "reconnecting" | "error";
+
+export interface QqBotStatus {
+  channel: "qqbot";
+  phase: QqBotPhase;
+  connected: boolean;
+  error?: string | null;
+  appId?: string;
+  hasCredentials: boolean;
+  startedAt?: string | null;
+  messageCount: number;
+  sessionId?: string | null;
+  tokenExpiresAt?: number | null;
+}
+
+export interface QqBotMessage {
+  id: string;
+  direction: "in" | "out";
+  chatType?: "group" | "c2c" | string;
+  conversationId?: string;
+  fromUserId?: string;
+  groupId?: string | null;
+  text?: string;
+  at?: string;
+}
+
+export type QqBotAccessMode = "open" | "allowlist";
+
+export interface QqBotSettings {
+  appId: string;
+  clientSecret: string;
+  apiBase: string;
+  intents: number;
+  autoConnect: boolean;
+  autoReplyEnabled: boolean;
+  autoReplyText: string;
+  accessMode: QqBotAccessMode;
+  allowUserIds: string[];
+  allowGroupIds: string[];
+}
+
+export interface QqBotSettingsSavePayload {
+  appId?: string;
+  clientSecret?: string;
+  apiBase?: string;
+  intents?: number;
+  autoConnect?: boolean;
+  autoReplyEnabled?: boolean;
+  autoReplyText?: string;
+  accessMode?: QqBotAccessMode;
+  allowUserIds?: string[];
+  allowGroupIds?: string[];
+}
+
+
 export interface LivePkRankItem {
   rank: number;
   anchorId?: string;
@@ -856,6 +911,16 @@ declare global {
     onWeixinBotStatus: (callback: (status: WeixinBotStatus) => void) => () => void;
     onWeixinBotMessage: (callback: (message: WeixinBotMessage) => void) => () => void;
     onWeixinBotMessagesCleared: (callback: () => void) => () => void;
+    getQqBotStatus: () => Promise<IpcResult<QqBotStatus>>;
+    getQqBotMessages: () => Promise<IpcResult<QqBotMessage[]>>;
+    getQqBotSettings: () => Promise<IpcResult<QqBotSettings>>;
+    saveQqBotSettings: (payload: QqBotSettingsSavePayload) => Promise<IpcResult<QqBotSettings>>;
+    connectQqBot: () => Promise<IpcResult<QqBotStatus>>;
+    disconnectQqBot: () => Promise<IpcResult<QqBotStatus>>;
+    clearQqBotMessages: () => Promise<IpcResult<{ cleared: boolean }>>;
+    onQqBotStatus: (callback: (status: QqBotStatus) => void) => () => void;
+    onQqBotMessage: (callback: (message: QqBotMessage) => void) => () => void;
+    onQqBotMessagesCleared: (callback: () => void) => () => void;
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;

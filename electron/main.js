@@ -32,6 +32,7 @@ const { renderDailyReportPng } = require("./weixin-bot-report");
 const { createWeixinBotSkills } = require("./weixin-bot-skills");
 const { WeixinBotAgent } = require("./weixin-bot-agent");
 const { createWeixinUserMemory } = require("./weixin-bot-user-memory");
+const { QqBotService } = require("./qq-bot");
 const { resolveUserMemoryPath } = require("./local-paths");
 const {
   captureSignedUserProfile,
@@ -141,6 +142,24 @@ if (weixinCommandHandler.modeStore) {
   weixinBot.setModeStore(weixinCommandHandler.modeStore);
 }
 weixinBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
+
+const qqBot = new QqBotService({
+  storagePath: () => path.join(app.getPath("userData"), "qq-bot.v1.json"),
+});
+qqBot.setCommandHandler(weixinCommandHandler);
+qqBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
+if (weixinCommandHandler.modeStore) {
+  qqBot.setModeStore(weixinCommandHandler.modeStore);
+}
+qqBot.on("status", (status) => {
+  sendToMainWindow("qq-bot:status-changed", status);
+});
+qqBot.on("message", (message) => {
+  sendToMainWindow("qq-bot:message", message);
+});
+qqBot.on("messages-cleared", () => {
+  sendToMainWindow("qq-bot:messages-cleared");
+});
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";
@@ -737,6 +756,9 @@ app.whenReady().then(() => {
   void weixinBot.initialize().catch((error) => {
     console.error("[weixin-bot] 初始化失败", error?.message || String(error));
   });
+  void qqBot.initialize().catch((error) => {
+    console.error("[qq-bot] 初始化失败", error?.message || String(error));
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -755,6 +777,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   void weixinBot.shutdown();
+  void qqBot.shutdown();
 });
 
 // 窗口控制 IPC
@@ -851,6 +874,14 @@ ipcMain.handle("weixin-bot:set-active-account", wrap((accountId) => weixinBot.se
 ipcMain.handle("weixin-bot:send", wrap((payload) => weixinBot.sendText(payload)));
 ipcMain.handle("weixin-bot:save-settings", wrap((payload) => weixinBot.saveSettings(payload)));
 ipcMain.handle("weixin-bot:clear-messages", wrap(() => weixinBot.clearMessages()));
+
+ipcMain.handle("qq-bot:status", wrap(() => qqBot.getStatus()));
+ipcMain.handle("qq-bot:messages", wrap(() => qqBot.getMessages()));
+ipcMain.handle("qq-bot:settings", wrap(() => qqBot.getSettings()));
+ipcMain.handle("qq-bot:save-settings", wrap((payload) => qqBot.saveSettings(payload || {})));
+ipcMain.handle("qq-bot:connect", wrap(() => qqBot.connect()));
+ipcMain.handle("qq-bot:disconnect", wrap(() => qqBot.disconnect()));
+ipcMain.handle("qq-bot:clear-messages", wrap(() => qqBot.clearMessages()));
 
 // 数据 IPC：统一返回 { success, data?, error? }
 function wrap(fn) {

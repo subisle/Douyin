@@ -14,10 +14,10 @@ import { FlowingFlagCard } from "./flowing-flag-card";
 import { PkRosterPage } from "./pk-roster-page";
 import { DouyinMonitorPage } from "./douyin-monitor-page";
 import { RewardPage } from "./reward-page";
-import { StarBattlePage } from "./star-battle-page";
 import { SettingsPage } from "./settings-page";
 import { PosterBoardPage } from "./poster-board-page";
 import { WeixinBotPage } from "./weixin-bot-page";
+import { QqBotPage } from "./qq-bot-page";
 import { LockScreen } from "./lock-screen";
 import { type PageId, type AppRole } from "./types";
 import type { DroppedImportFile } from "./import-page";
@@ -45,7 +45,6 @@ export function DesktopShell() {
   const [showStartup, setShowStartup] = useState(true);
   const [unlocked, setUnlocked] = useState(false);
   const [monitorMounted, setMonitorMounted] = useState(false);
-  const [battleMounted, setBattleMounted] = useState(false);
   const [userRole, setUserRole] = useState<AppRole>("admin");
   const [droppedImportFile, setDroppedImportFile] = useState<DroppedImportFile | null>(null);
 
@@ -86,7 +85,6 @@ export function DesktopShell() {
 
   useEffect(() => {
     if (currentPage === "douyin-monitor") setMonitorMounted(true);
-    if (currentPage === "star-battle") setBattleMounted(true);
   }, [currentPage]);
 
   useEffect(() => {
@@ -197,10 +195,7 @@ export function DesktopShell() {
               {(monitorMounted || currentPage === "douyin-monitor") && (
                 <DouyinMonitorPage active={currentPage === "douyin-monitor"} />
               )}
-              {(battleMounted || currentPage === "star-battle") && (
-                <StarBattlePage active={currentPage === "star-battle"} />
-              )}
-              {currentPage === "douyin-monitor" || currentPage === "star-battle" ? null : currentPage === "datacenter" ? (
+              {currentPage === "douyin-monitor" ? null : currentPage === "datacenter" ? (
                 <DashboardPage />
               ) : currentPage === "anchors" ? (
                 <AnchorsPage />
@@ -221,6 +216,8 @@ export function DesktopShell() {
                 <PosterBoardPage />
               ) : currentPage === "weixin-bot" ? (
                 <WeixinBotPage />
+              ) : currentPage === "qq-bot" ? (
+                <QqBotPage />
               ) : currentPage === "settings" ? (
                 <SettingsPage />
               ) : null}

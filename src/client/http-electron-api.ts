@@ -69,6 +69,27 @@ async function request<T>(
 
 const noopAsync = async () => undefined;
 
+const WEB_QQ_STATUS = {
+  channel: "qqbot" as const,
+  phase: "idle" as const,
+  connected: false,
+  error: "Web 模式不支持 QQ 机器人，请使用桌面端",
+  hasCredentials: false,
+  messageCount: 0,
+};
+
+const WEB_QQ_SETTINGS = {
+  appId: "",
+  clientSecret: "",
+  apiBase: "https://api.sgroup.qq.com",
+  intents: 1 << 25,
+  autoConnect: false,
+  autoReplyEnabled: false,
+  autoReplyText: "消息已收到。",
+  accessMode: "allowlist" as const,
+  allowUserIds: [] as string[],
+  allowGroupIds: [] as string[],
+};
 const WEB_WEIXIN_STATUS = {
   available: false,
   phase: "disconnected" as const,
@@ -236,6 +257,18 @@ export function createHttpElectronApi(): ElectronAPI {
     onWeixinBotStatus: () => () => undefined,
     onWeixinBotMessage: () => () => undefined,
     onWeixinBotMessagesCleared: () => () => undefined,
+    getQqBotStatus: () => Promise.resolve({ success: true, data: WEB_QQ_STATUS }),
+    getQqBotMessages: () => Promise.resolve({ success: true, data: [] }),
+    getQqBotSettings: () => Promise.resolve({ success: true, data: WEB_QQ_SETTINGS }),
+    saveQqBotSettings: () =>
+      Promise.resolve({ success: false, error: "Web 模式不支持 QQ 机器人" }),
+    connectQqBot: () =>
+      Promise.resolve({ success: false, error: "Web 模式不支持 QQ 机器人，请使用桌面端" }),
+    disconnectQqBot: () => Promise.resolve({ success: true, data: WEB_QQ_STATUS }),
+    clearQqBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),
+    onQqBotStatus: () => () => undefined,
+    onQqBotMessage: () => () => undefined,
+    onQqBotMessagesCleared: () => () => undefined,
 
     getAnchors: () => request("/anchors"),
     getFamilyTree: () => request("/family-tree"),
@@ -278,6 +311,7 @@ export function createHttpElectronApi(): ElectronAPI {
     saveTierRules: (rules) => request("/reports/tier-rules", { method: "PUT", body: { rules } }),
     getDailyWaveReport: (date, gender) => request(`/reports/daily-wave${qs({ date, gender })}`),
     getPkRoster: (period, groupSize) => request(`/pk/roster${qs({ period, groupSize })}`),
+    buildPkGroups: (payload) => request("/pk/groups", { method: "POST", body: payload }),
     getStarBattleScores: (period) => request(`/star-battle/scores${qs({ period })}`),
     saveStarBattleScore: (payload) =>
       request("/star-battle/scores", { method: "POST", body: payload }),

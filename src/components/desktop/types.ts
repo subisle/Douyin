@@ -6,12 +6,12 @@ import {
   Database,
   Flag,
   MonitorPlay,
-  Sparkles,
   Swords,
   Settings,
   Trophy,
   Image,
   Bot,
+  MessageCircle,
 } from "lucide-react";
 
 export type PageId =
@@ -22,10 +22,10 @@ export type PageId =
   | "flag"
   | "pk"
   | "douyin-monitor"
-  | "star-battle"
   | "reward"
   | "poster-board"
   | "weixin-bot"
+  | "qq-bot"
   | "settings";
 
 export type AppRole = "admin" | "guest";
@@ -69,9 +69,9 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "pk",
-    label: "PK",
+    label: "PK 分组",
     icon: Swords,
-    description: "按月音浪分组",
+    description: "男团自动分组",
     adminOnly: true,
   },
   {
@@ -79,13 +79,6 @@ export const NAV_ITEMS: NavItem[] = [
     label: "监控",
     icon: MonitorPlay,
     description: "分数监控、直播画面与事件流",
-    adminOnly: true,
-  },
-  {
-    id: "star-battle",
-    label: "争霸",
-    icon: Sparkles,
-    description: "赛事阵营与赛程",
     adminOnly: true,
   },
   {
@@ -111,9 +104,16 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     id: "weixin-bot",
-    label: "机器人",
+    label: "微信机器人",
     icon: Bot,
-    description: "微信消息连接与回复",
+    description: "微信 iLink 消息连接与回复",
+    adminOnly: true,
+  },
+  {
+    id: "qq-bot",
+    label: "QQ 机器人",
+    icon: MessageCircle,
+    description: "官方 QQ 开放平台机器人",
     adminOnly: true,
   },
   {

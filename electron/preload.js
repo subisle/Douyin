@@ -97,6 +97,28 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("weixin-bot:messages-cleared", handler);
     return () => ipcRenderer.removeListener("weixin-bot:messages-cleared", handler);
   },
+  getQqBotStatus: () => ipcRenderer.invoke("qq-bot:status"),
+  getQqBotMessages: () => ipcRenderer.invoke("qq-bot:messages"),
+  getQqBotSettings: () => ipcRenderer.invoke("qq-bot:settings"),
+  saveQqBotSettings: (payload) => ipcRenderer.invoke("qq-bot:save-settings", payload),
+  connectQqBot: () => ipcRenderer.invoke("qq-bot:connect"),
+  disconnectQqBot: () => ipcRenderer.invoke("qq-bot:disconnect"),
+  clearQqBotMessages: () => ipcRenderer.invoke("qq-bot:clear-messages"),
+  onQqBotStatus: (callback) => {
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on("qq-bot:status-changed", handler);
+    return () => ipcRenderer.removeListener("qq-bot:status-changed", handler);
+  },
+  onQqBotMessage: (callback) => {
+    const handler = (_event, message) => callback(message);
+    ipcRenderer.on("qq-bot:message", handler);
+    return () => ipcRenderer.removeListener("qq-bot:message", handler);
+  },
+  onQqBotMessagesCleared: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("qq-bot:messages-cleared", handler);
+    return () => ipcRenderer.removeListener("qq-bot:messages-cleared", handler);
+  },
 
   // 数据
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),
