@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { type ComponentProps, useEffect, useState } from "react";
+import { type ComponentProps, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -351,6 +351,22 @@ export function WeixinBotPage() {
     });
   }
 
+  async function handleToggleDailyAdmin(userId: string, enabled: boolean) {
+    const push = settings.dailyReportPush || DEFAULT_DAILY_PUSH;
+    const adminUserIds = enabled
+      ? [...new Set([...push.adminUserIds, userId])]
+      : push.adminUserIds.filter((id) => id !== userId);
+    const dailyReportPush = { ...push, adminUserIds };
+    setSettings((current) => ({
+      ...current,
+      dailyReportPush: {
+        ...(current.dailyReportPush || DEFAULT_DAILY_PUSH),
+        adminUserIds,
+      },
+    }));
+    await saveSettingsPatch("save-push", { dailyReportPush });
+  }
+
   async function handleSaveAccess() {
     await saveSettingsPatch("save-access", {
       accessMode: settings.accessMode,
@@ -548,11 +564,13 @@ export function WeixinBotPage() {
             accounts={accounts}
             contacts={contacts}
             activeAccountId={status.accountId}
+            adminUserIds={settings.dailyReportPush?.adminUserIds || []}
             busy={busyAction !== null}
             onSelectAccount={handleSelectAccount}
             onStartAccount={(id) => handleStart(id)}
             onStopAccount={(id) => handleStop(id)}
             onDisconnectAccount={(id) => handleDisconnect(id)}
+            onToggleDailyAdmin={handleToggleDailyAdmin}
           />
 
           <div className="flex min-h-[560px] flex-col gap-3">
@@ -604,23 +622,67 @@ function UserListPanel({
   accounts,
   contacts,
   activeAccountId,
+  adminUserIds,
   busy,
   onSelectAccount,
   onStartAccount,
   onStopAccount,
   onDisconnectAccount,
+  onToggleDailyAdmin,
 }: {
   accounts: WeixinBotAccountSummary[];
   contacts: WeixinBotContact[];
   activeAccountId: string | null;
+  adminUserIds: string[];
   busy: boolean;
   onSelectAccount: (id: string) => void;
   onStartAccount: (id: string) => void;
   onStopAccount: (id: string) => void;
   onDisconnectAccount: (id: string) => void;
+  onToggleDailyAdmin: (userId: string, enabled: boolean) => void | Promise<void>;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    contact: WeixinBotContact;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setContextMenu(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    const onScroll = () => setContextMenu(null);
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [contextMenu]);
+
+  const openContactMenu = (event: ReactMouseEvent, contact: WeixinBotContact) => {
+    if (contact.kind !== "user") return;
+    event.preventDefault();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      contact,
+    });
+  };
+
+  const isAdmin = (id: string) => adminUserIds.includes(id);
+
   return (
-    <section className="flex min-h-[560px] flex-col overflow-hidden rounded-lg border border-border/70 bg-card/70">
+    <section className="relative flex min-h-[560px] flex-col overflow-hidden rounded-lg border border-border/70 bg-card/70">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/70 px-3 text-sm font-semibold">
         <UsersRound className="size-4 text-[#07c160]" />
         用户列表
@@ -684,46 +746,103 @@ function UserListPanel({
         <div className="space-y-1 border-t border-border/60 pt-2">
           <div className="px-1 text-[10px] font-semibold tracking-wide text-muted-foreground">
             对接会话
+            <span className="ml-1 font-normal">右键用户可设管理员</span>
           </div>
           {contacts.length === 0 ? (
             <p className="px-1 py-3 text-[11px] text-muted-foreground">
               有人给机器人发消息后会出现在此；重启仍保留。
             </p>
           ) : (
-            contacts.map((contact) => (
-              <div
-                key={`${contact.accountId}:${contact.id}`}
-                className="flex items-start gap-2 rounded-lg border border-transparent px-2.5 py-2 hover:border-border/70 hover:bg-muted/40"
-              >
-                <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted/60">
-                  {contact.kind === "group" ? (
-                    <UsersRound className="size-3.5 text-muted-foreground" />
-                  ) : (
-                    <UserRound className="size-3.5 text-muted-foreground" />
+            contacts.map((contact) => {
+              const admin = contact.kind === "user" && isAdmin(contact.id);
+              return (
+                <div
+                  key={`${contact.accountId}:${contact.id}`}
+                  className={cn(
+                    "flex items-start gap-2 rounded-lg border px-2.5 py-2",
+                    admin
+                      ? "border-[#07c160]/30 bg-[#07c160]/8"
+                      : "border-transparent hover:border-border/70 hover:bg-muted/40",
+                    contact.kind === "user" ? "cursor-context-menu" : ""
                   )}
+                  onContextMenu={(event) => openContactMenu(event, contact)}
+                  title={contact.kind === "user" ? "右键设置日报管理员" : undefined}
+                >
+                  <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted/60">
+                    {contact.kind === "group" ? (
+                      <UsersRound className="size-3.5 text-muted-foreground" />
+                    ) : (
+                      <UserRound className="size-3.5 text-muted-foreground" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium">{contactTitle(contact)}</span>
+                      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                        {contact.kind === "group" ? "群" : "用户"}
+                      </Badge>
+                      {admin ? (
+                        <Badge className="h-5 border-transparent bg-[#07c160]/15 px-1.5 text-[10px] text-[#07c160]">
+                          管理员
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {contact.lastContent || "暂无预览"}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                      {formatRelative(contact.lastSeenAt || null)}
+                    </div>
+                  </div>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-sm font-medium">{contactTitle(contact)}</span>
-                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                      {contact.kind === "group" ? "群" : "用户"}
-                    </Badge>
-                  </div>
-                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                    {contact.lastContent || "暂无预览"}
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {formatRelative(contact.lastSeenAt || null)}
-                  </div>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
       <div className="border-t border-border/70 px-3 py-2 text-[10px] leading-4 text-muted-foreground">
-        账号、对接与权限按当前微信账号统一管理。
+        账号、对接与权限按当前微信账号统一管理。用户右键可设/取消日报管理员。
       </div>
+
+      {contextMenu ? (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-40 overflow-hidden rounded-md border border-border/70 bg-popover p-1 text-popover-foreground shadow-md"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+        >
+          <div className="px-2 py-1.5 text-[10px] text-muted-foreground">
+            {compactId(contextMenu.contact.id)}
+          </div>
+          {isAdmin(contextMenu.contact.id) ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+              disabled={busy}
+              onClick={() => {
+                void onToggleDailyAdmin(contextMenu.contact.id, false);
+                setContextMenu(null);
+              }}
+            >
+              取消日报管理员
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
+              disabled={busy}
+              onClick={() => {
+                void onToggleDailyAdmin(contextMenu.contact.id, true);
+                setContextMenu(null);
+              }}
+            >
+              设为日报管理员
+            </button>
+          )}
+        </div>
+      ) : null}
     </section>
   );
 }
