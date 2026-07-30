@@ -84,11 +84,17 @@ export function QqBotPage() {
   }, []);
 
   const refreshMessages = useCallback(async () => {
+    if (!api) return;
     const result = await api.getQqBotMessages();
     if (result.success) setMessages(result.data || []);
   }, []);
 
   const refreshAll = useCallback(async () => {
+    if (!api) {
+      setError("当前环境不支持 QQ 机器人接口");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -108,12 +114,19 @@ export function QqBotPage() {
   }, [refreshMessages]);
 
   useEffect(() => {
+    if (!api) {
+      setLoading(false);
+      setError("当前环境不支持 QQ 机器人接口");
+      return;
+    }
     void refreshAll();
     const offStatus = api.onQqBotStatus((next) => setStatus(next));
     const offMessage = api.onQqBotMessage(() => {
       void refreshMessages();
     });
-    const offCleared = api.onQqBotMessagesCleared(() => setMessages([]));
+    const offCleared = api.onQqBotMessagesCleared
+      ? api.onQqBotMessagesCleared(() => setMessages([]))
+      : () => undefined;
     return () => {
       offStatus();
       offMessage();
@@ -151,6 +164,10 @@ export function QqBotPage() {
   }
 
   async function handleSave() {
+    if (!api) {
+      setError("当前环境不支持 QQ 机器人接口");
+      return;
+    }
     await runAction("save", async () => {
       const payload = {
         ...settings,
@@ -348,7 +365,10 @@ export function QqBotPage() {
               variant="default"
               className="bg-violet-600 hover:bg-violet-600/90"
               disabled={busy === "connect" || status.connected}
-              onClick={() => void runAction("connect", () => api.connectQqBot())}
+              onClick={() => {
+                if (!api) return;
+                void runAction("connect", () => api.connectQqBot());
+              }}
             >
               {busy === "connect" ? (
                 <Loader2 className="mr-1 size-3.5 animate-spin" />
@@ -361,7 +381,10 @@ export function QqBotPage() {
               size="sm"
               variant="outline"
               disabled={busy === "disconnect" || (!status.connected && status.phase === "idle")}
-              onClick={() => void runAction("disconnect", () => api.disconnectQqBot())}
+              onClick={() => {
+                if (!api) return;
+                void runAction("disconnect", () => api.disconnectQqBot());
+              }}
             >
               {busy === "disconnect" ? (
                 <Loader2 className="mr-1 size-3.5 animate-spin" />
@@ -384,13 +407,14 @@ export function QqBotPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() =>
+                onClick={() => {
+                  if (!api) return;
                   void runAction("clear", async () => {
                     const result = await api.clearQqBotMessages();
                     if (result.success) setMessages([]);
                     return result;
-                  })
-                }
+                  });
+                }}
               >
                 <Trash2 className="mr-1 size-3.5" />
                 清空

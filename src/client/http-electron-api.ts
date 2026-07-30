@@ -128,6 +128,13 @@ const WEB_WEIXIN_SETTINGS = {
     hasApiKey: false,
   },
   contacts: [] as [],
+  dailyReportPush: {
+    enabled: false,
+    adminUserIds: [] as string[],
+    recipientUserIds: [] as string[],
+    recipientGroupIds: [] as string[],
+    lastPush: null,
+  },
 };
 
 export function createHttpElectronApi(): ElectronAPI {
@@ -251,6 +258,23 @@ export function createHttpElectronApi(): ElectronAPI {
             clearApiKey: undefined,
           },
           contacts: WEB_WEIXIN_SETTINGS.contacts,
+          dailyReportPush: {
+            ...WEB_WEIXIN_SETTINGS.dailyReportPush,
+            ...(payload.dailyReportPush || {}),
+            adminUserIds:
+              payload.dailyReportPush?.adminUserIds
+              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.adminUserIds,
+            recipientUserIds:
+              payload.dailyReportPush?.recipientUserIds
+              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.recipientUserIds,
+            recipientGroupIds:
+              payload.dailyReportPush?.recipientGroupIds
+              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.recipientGroupIds,
+            lastPush:
+              payload.dailyReportPush && "lastPush" in payload.dailyReportPush
+                ? payload.dailyReportPush.lastPush ?? null
+                : WEB_WEIXIN_SETTINGS.dailyReportPush.lastPush,
+          },
         },
       }),
     clearWeixinBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),

@@ -76,3 +76,7 @@ references/
 
 # brainstorm visual companion
 .superpowers/
+
+# Electron static build temp
+.api-backup/
+.api-backup-electron-build/

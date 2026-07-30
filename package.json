@@ -23,7 +23,7 @@
     "db:migrate:status": "node scripts/migrate.js status",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
-    "electron:build": "cross-env ELECTRON=true next build",
+    "electron:build": "node scripts/electron-next-build.mjs",
     "dist": "npm run electron:build && electron-builder --mac --win --x64",
     "dist:mac": "npm run electron:build && electron-builder --mac",
     "dist:win": "npm run electron:build && electron-builder --win --x64",

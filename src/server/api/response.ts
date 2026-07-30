@@ -9,6 +9,9 @@ export type ApiErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "AUTH_NOT_CONFIGURED"
   | "RATE_LIMITED"
+  | "LOGIN_START_FAILED"
+  | "LOGIN_STATUS_FAILED"
+  | "LOGIN_CANCEL_FAILED"
   | "INTERNAL_ERROR";
 
 export function apiOk(data: unknown, status = 200) {
