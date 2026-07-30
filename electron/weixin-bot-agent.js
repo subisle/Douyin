@@ -28,7 +28,17 @@ const SYSTEM_PERSONA = [
   "1) 查主播音浪、时长、对比",
   "2) 生成每日报告图（男团/女队）",
   "3) 导出音浪 CSV",
+  "4) PK/争霸赛分组（make_pk_groups：默认 preset=内置锁定分组；也可 high_to_low 顺序 / balanced 均衡 / score_capable 能出分；默认导出分组图）",
   "功能与固定命令一致，但可用自然语言理解用户意图。",
+  "",
+  "【分组规则】调用 make_pk_groups 时：",
+  "- 用户说「内置分组 / 锁定分组 / 固定分组 / 分组」→ mode=preset（56人锁定表，狼辉第4/狼佑第1，次强3/最强5，08:15×5min）
+- 用户说「顺序分组 / 从高到低 / 强弱切块 / 总分」→ mode=high_to_low（按月音浪总量 wave）",
+  "- 用户要「均衡/平均/蛇形」→ mode=balanced
+- 用户要「能出分」→ mode=score_capable",
+  "- 默认 sendImage=true 导出分组 PNG；用户说不要图时再关",
+  "- 硬约束已内置：浩阳与浩沐间隔≥4、啸泽与啸帆间隔≥3；次强第3场 / 最强第4场；四人先抽出再插回",
+  "- 默认用15号白名单；回复用工具返回的 text/replyText，不要自己编名单",
   "",
   "【边界 / 禁止】",
   "- 禁止编造任何数字、排名、日期、主播信息；工具无结果就说没有。",
@@ -91,6 +101,7 @@ const TOOL_PROGRESS_LABELS = Object.freeze({
   get_daily_report_data: "正在查询日报数据…",
   export_daily_report_image: "正在生成日报图…",
   export_wave_file: "正在导出音浪文件…",
+  make_pk_groups: "正在计算 PK 分组并出图…",
   rag_search: "正在检索说明…",
 });
 
@@ -156,22 +167,22 @@ class WeixinBotAgent {
   }
 
   disableSession(context = {}) {
-    // 产品取消「仅指令」模式：退出客服只清线程，仍保持智能
+    // 切到纯指令：关会话入口并清线程；mode 由调用方/modeStore 写 instruction
     const key = threadKeyFromContext(context);
-    this.sessions.set(key, { enabled: true, updatedAt: Date.now() });
+    this.sessions.set(key, { enabled: false, updatedAt: Date.now() });
     this.clearThread(key);
     if (this.modeStore && typeof this.modeStore.setMode === "function") {
-      this.modeStore.setMode(context, "agent");
+      this.modeStore.setMode(context, "instruction");
     }
     return key;
   }
 
   isSessionEnabled(context = {}) {
-    // 默认始终可进 Agent（不再依赖先发「人工客服」）
-    if (this.isEnabled()) return true;
+    // 以 modeStore 为准：仅 agent 模式可进模型
     if (this.modeStore && typeof this.modeStore.isAgent === "function") {
       return this.modeStore.isAgent(context);
     }
+    if (!this.isEnabled()) return false;
     const key = threadKeyFromContext(context);
     const session = this.sessions.get(key);
     if (!session?.enabled) return false;

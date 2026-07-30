@@ -1,7 +1,50 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const { createWeixinAnalytics } = require("./weixin-bot-analytics");
 const { ragSearch } = require("./weixin-bot-rag");
+const {
+  buildPkGroups,
+  formatGroupsText,
+  groupsToCsv,
+  canonicalName,
+  DEFAULT_GROUP_SIZE,
+  DEFAULT_MIN_GAP,
+} = require("./pk-group-engine");
+const { renderPkGroupsPng } = require("./pk-group-image");
+const {
+  PRESET_BATTLE_GROUPS,
+  PRESET_BATTLE_META,
+  flattenPresetRosterNames,
+} = require("../shared/pk-preset-battle-groups");
+
+
+function loadPresetRosterNames() {
+  try {
+    const shared = flattenPresetRosterNames();
+    if (shared.length) return shared;
+  } catch {
+    /* fall through to TS regex */
+  }
+  try {
+    const file = path.join(__dirname, "../src/components/desktop/pk-roster-config.ts");
+    const text = fs.readFileSync(file, "utf8");
+    const match = text.match(/PRESET_ROSTER_TEXT = `([\s\S]*?)`;/);
+    if (!match) return [];
+    return match[1]
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function currentPeriod() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
 
 function createWeixinBotSkills({ db, renderReportPng }) {
   if (!db) throw new Error("技能模块缺少数据库");
@@ -13,6 +56,172 @@ function createWeixinBotSkills({ db, renderReportPng }) {
     const q = String(query || "").trim();
     if (!q) return { ok: false, error: "query 不能为空" };
     return ragSearch(q, { topK, collection });
+  }
+
+  async function makePkGroupsTool(args = {}) {
+    const modeRaw = String(args.mode || "preset").trim().toLowerCase();
+    const mode =
+      modeRaw === "balanced" ||
+      modeRaw === "balance" ||
+      modeRaw === "蛇形" ||
+      modeRaw === "均衡" ||
+      modeRaw === "平均"
+        ? "balanced"
+        : modeRaw === "score_capable" ||
+            modeRaw === "score-capable" ||
+            modeRaw === "neng_chu_fen" ||
+            modeRaw === "能出分" ||
+            modeRaw === "出分"
+          ? "score_capable"
+          : modeRaw === "preset" ||
+              modeRaw === "builtin" ||
+              modeRaw === "built-in" ||
+              modeRaw === "内置" ||
+              modeRaw === "固定" ||
+              modeRaw === "锁定" ||
+              modeRaw === "内置分组"
+            ? "preset"
+            : modeRaw === "high_to_low" ||
+                modeRaw === "顺序" ||
+                modeRaw === "order"
+              ? "high_to_low"
+              : "preset";
+    const period = String(args.period || currentPeriod()).trim();
+    const groupSize = Number(args.groupSize) || DEFAULT_GROUP_SIZE;
+    const minGap = Number(args.minGap) || DEFAULT_MIN_GAP;
+    const usePreset =
+      args.usePresetRoster !== false &&
+      args.usePresetRoster !== "false" &&
+      args.usePresetRoster !== 0;
+
+    if (typeof db.getPkRoster !== "function") {
+      return { ok: false, error: "数据库未提供 getPkRoster" };
+    }
+
+    const roster = await db.getPkRoster(period, groupSize);
+    // 产品：仅男团
+    const pool = [...(roster.males || [])];
+    let selected = pool;
+    let rosterSource = "全库当月有音浪男主播";
+    let missingNames = [];
+
+    if (Array.isArray(args.names) && args.names.length) {
+      const want = new Set(args.names.map((n) => canonicalName(n)));
+      selected = pool.filter((m) => want.has(canonicalName(m.name)));
+      rosterSource = `指定 ${args.names.length} 人`;
+    } else if (usePreset) {
+      const preset = loadPresetRosterNames();
+      if (preset.length) {
+        const want = new Set(preset.map((n) => canonicalName(n)));
+        selected = pool.filter((m) => want.has(canonicalName(m.name)));
+        rosterSource = `白名单 ${preset.length} 人（命中 ${selected.length}）`;
+        const hit = new Set(selected.map((m) => canonicalName(m.name)));
+        missingNames = preset.filter((n) => !hit.has(canonicalName(n)));
+      }
+    }
+
+    if (!selected.length) {
+      return {
+        ok: false,
+        error: `没有可分组成员（period=${period}，来源=${rosterSource}）`,
+      };
+    }
+
+    const isPreset = mode === "preset" || mode === "builtin" || mode === "内置";
+    const built = buildPkGroups({
+      members: selected,
+      mode: isPreset ? "preset" : mode,
+      groupSize,
+      minGap,
+      firstStart: args.firstStart || (isPreset ? PRESET_BATTLE_META.firstStart : "08:15"),
+      stepMinutes:
+        Number(args.stepMinutes) ||
+        (isPreset ? PRESET_BATTLE_META.stepMinutes : 5),
+      scoreField: args.scoreField || "wave",
+      nameGroups: isPreset ? PRESET_BATTLE_GROUPS : undefined,
+    });
+
+    if (!built.ok) {
+      return {
+        ok: false,
+        error: built.error || "分组失败",
+        period,
+        rosterSource,
+        missingNames,
+      };
+    }
+
+    const text = formatGroupsText(built);
+    const csv = groupsToCsv(built);
+    const sendCsv = args.sendCsv === true || args.sendCsv === "true" || args.sendCsv === 1;
+    // 默认出图；显式 false / 0 / "false" 可关
+    const sendImage =
+      args.sendImage === undefined ||
+      args.sendImage === null ||
+      args.sendImage === "" ||
+      !(args.sendImage === false || args.sendImage === "false" || args.sendImage === 0);
+    const periodLabel = roster.period || period;
+    const csvFileName = `PK分组_${built.modeLabel}_${periodLabel}_${built.groupCount}组.csv`;
+    const imageFileName = `PK分组_${built.modeLabel}_${periodLabel}_${built.groupCount}组.png`;
+
+    const artifacts = [];
+    let imageError;
+    if (sendImage) {
+      try {
+        const png = await renderPkGroupsPng(built, {
+          period: periodLabel,
+          title: `PK 分组 · ${built.modeLabel}`,
+          constraints: built.constraints,
+          rosterSource,
+        });
+        artifacts.push({
+          kind: "image",
+          fileName: imageFileName,
+          buffer: png,
+        });
+      } catch (error) {
+        imageError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (sendCsv) {
+      artifacts.push({
+        kind: "file",
+        fileName: csvFileName,
+        buffer: Buffer.from(csv, "utf8"),
+      });
+    }
+
+    return {
+      ok: true,
+      period: periodLabel,
+      rosterSource,
+      missingNames,
+      mode: built.mode,
+      modeLabel: built.modeLabel,
+      total: built.total,
+      groupCount: built.groupCount,
+      sizes: built.sizes,
+      constraints: built.constraints,
+      strongestGroup: built.strongestGroup,
+      groups: built.groups,
+      text,
+      csv,
+      csvFileName,
+      imageFileName: sendImage ? imageFileName : undefined,
+      sendCsv,
+      sendImage,
+      imageError,
+      artifacts: artifacts.length ? artifacts : undefined,
+      replyText: [
+        text,
+        missingNames.length ? `\n未命中白名单：${missingNames.join("、")}` : "",
+        sendImage && !imageError ? "\n（附分组图）" : "",
+        imageError ? `\n分组图生成失败：${imageError}` : "",
+        sendCsv ? "\n（附 CSV 文件）" : "",
+      ]
+        .filter(Boolean)
+        .join(""),
+    };
   }
 
   const tools = [
@@ -169,6 +378,44 @@ function createWeixinBotSkills({ db, renderReportPng }) {
         },
       },
       execute: analytics.exportWaveFile,
+    },
+    {
+      type: "function",
+      function: {
+        name: "make_pk_groups",
+        description:
+          "PK 分组并默认导出分组图。preset=内置锁定分组（狼辉第4/狼佑第1，次强3/最强5，08:15×5min）；high_to_low=顺序；balanced=均衡；score_capable=能出分。硬约束：阳↔沐≥4、泽↔帆≥3。默认白名单男团。用户说「内置分组/锁定分组/顺序/均衡/能出分」「导出分组图」时调用。",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              description: "preset | high_to_low | balanced | score_capable",
+              enum: ["preset", "high_to_low", "balanced", "score_capable"],
+            },
+            period: { type: "string", description: "YYYY-MM，默认本月" },
+            groupSize: { type: "number", description: "目标每组人数，默认8" },
+            minGap: { type: "number", description: "硬约束最小组间隔，默认3" },
+            usePresetRoster: {
+              type: "boolean",
+              description: "是否只用15号白名单，默认 true",
+            },
+            names: {
+              type: "array",
+              items: { type: "string" },
+              description: "可选，显式名单（提供则覆盖白名单）",
+            },
+            sendImage: {
+              type: "boolean",
+              description: "是否导出分组 PNG，默认 true",
+            },
+            sendCsv: { type: "boolean", description: "是否附带 CSV，默认 false" },
+            firstStart: { type: "string", description: "首场时间 HH:mm，默认 08:15" },
+            stepMinutes: { type: "number", description: "场间隔分钟，内置默认 5，其它默认 5" },
+          },
+        },
+      },
+      execute: makePkGroupsTool,
     },
     {
       type: "function",

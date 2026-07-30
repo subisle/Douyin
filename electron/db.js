@@ -2331,9 +2331,16 @@ async function getPkRoster(period, groupSize) {
     const key = fmtDay(r.import_date);
     dm.set(key, (dm.get(key) || 0) + (Number(r.wave_value) || 0));
   }
+  const { latestWaveFromDayMap } = require("../shared/pk-roster-stats");
+  // personId -> 过滤阈值后的 [date, wave] 日序列（保留日期供 latestWave）
+  const dayEntriesByPerson = new Map();
   const waveByPerson = new Map(); // personId -> [dailyWave...]
   for (const [pid, dm] of dayByPerson) {
-    waveByPerson.set(pid, Array.from(dm.values()).filter((value) => value >= LIVE_WAVE_THRESHOLD));
+    const entries = [...dm.entries()]
+      .map(([date, w]) => [date, Number(w) || 0])
+      .filter(([, w]) => w >= LIVE_WAVE_THRESHOLD);
+    dayEntriesByPerson.set(pid, entries);
+    waveByPerson.set(pid, entries.map(([, w]) => w));
   }
 
   // 3. 获取当月总时长：取当月范围内最近一次累计快照，再按人取最长账号
@@ -2354,10 +2361,12 @@ async function getPkRoster(period, groupSize) {
   const females = [];
   for (const p of persons) {
     const days = waveByPerson.get(p.person_id) || [];
+    const dayEntries = dayEntriesByPerson.get(p.person_id) || [];
     const totalWave = days.reduce((s, v) => s + v, 0);
     const waveDays = days.length;
     const maxWave = waveDays > 0 ? Math.max(...days) : 0;
     const minWave = waveDays > 0 ? Math.min(...days) : 0;
+    const { latestWave, latestWaveDate } = latestWaveFromDayMap(new Map(dayEntries));
     // Trimmed mean: 去掉最高单日后取日均
     let trimmedAvg = 0;
     if (waveDays > 1) {
@@ -2372,7 +2381,7 @@ async function getPkRoster(period, groupSize) {
       personId: p.person_id, name: p.name, gender: p.gender, anchorId: p.anchorIds[0] || "",
       anchorIds: p.anchorIds,
       douyinNos: p.douyinNos,
-      wave: totalWave, trimmedAvg, maxWave, minWave, waveDays, duration, rank: 0,
+      wave: totalWave, trimmedAvg, maxWave, minWave, waveDays, latestWave, latestWaveDate, duration, rank: 0,
     };
     if (p.gender === "male") males.push(member);
     else females.push(member);
@@ -2698,6 +2707,11 @@ async function hasAppPassword() {
   return { hasPassword: rows.length > 0 };
 }
 
+function buildPkGroups(payload) {
+  const { buildPkGroups: engineBuild } = require("./pk-group-engine");
+  return engineBuild(payload || {});
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -2734,6 +2748,7 @@ module.exports = {
   saveTierRules,
   getDailyWaveReport,
   getPkRoster,
+  buildPkGroups,
   getStarBattleScores,
   saveStarBattleScore,
   getFlagWinner,

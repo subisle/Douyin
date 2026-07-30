@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   saveTierRules: (rules) => ipcRenderer.invoke("data:saveTierRules", rules),
   getDailyWaveReport: (date, gender) => ipcRenderer.invoke("data:getDailyWaveReport", date, gender),
   getPkRoster: (period, groupSize) => ipcRenderer.invoke("data:getPkRoster", period, groupSize),
+  buildPkGroups: (payload) => ipcRenderer.invoke("data:buildPkGroups", payload),
   getStarBattleScores: (period) => ipcRenderer.invoke("data:getStarBattleScores", period),
   saveStarBattleScore: (payload) => ipcRenderer.invoke("data:saveStarBattleScore", payload),
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),

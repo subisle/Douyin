@@ -145,6 +145,45 @@ function parseBotCommand(input) {
   if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
   if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
 
+  // PK 分组：内置 / 顺序 / 均衡 / 能出分（可选 2026-07 / 7月）
+  const pkGroupMatch = withoutGender.match(
+    /^(?:\/?(?:内置分组|锁定分组|固定分组|顺序分组|从高到低分组|高低分组|强弱分组|均衡分组|平均分组|蛇形分组|能出分分组|出分分组|PK分组|争霸赛分组|自动分组|分组))(?:\s*(.+))?$/i
+  );
+  if (
+    pkGroupMatch ||
+    /^(?:内置|锁定|固定|顺序|从高到低|高低|强弱|均衡|平均|蛇形|能出分|出分)\s*分组/.test(withoutGender)
+  ) {
+    const raw = withoutGender;
+    // 默认内置锁定分组
+    let mode = "preset";
+    if (/顺序|从高到低|高低|强弱|高到低/.test(raw)) mode = "high_to_low";
+    if (/均衡|平均|蛇形/.test(raw)) mode = "balanced";
+    if (/能出分|出分/.test(raw)) mode = "score_capable";
+    if (/内置|锁定|固定/.test(raw)) mode = "preset";
+    const rest = (pkGroupMatch && pkGroupMatch[1]) || "";
+    const periodMatch =
+      rest.match(/(20\d{2})[年./-](\d{1,2})(?:月)?/) ||
+      raw.match(/(20\d{2})[年./-](\d{1,2})(?:月)?/) ||
+      rest.match(/(\d{1,2})\s*月/) ||
+      raw.match(/(\d{1,2})\s*月/);
+    let period = null;
+    if (periodMatch) {
+      if (periodMatch[2]) {
+        period = `${periodMatch[1]}-${String(Number(periodMatch[2])).padStart(2, "0")}`;
+      } else {
+        const now = new Date();
+        period = `${now.getFullYear()}-${String(Number(periodMatch[1])).padStart(2, "0")}`;
+      }
+    }
+    return {
+      type: "pk-groups",
+      mode,
+      period,
+      sendCsv: /csv|CSV|表格|文件/.test(original),
+      sendImage: !/(?:不要图|无图|不出图|不要图片)/.test(original),
+    };
+  }
+
   const reportMatch = withoutGender.match(/^(?:\/?(?:每日报告|日报|报告))(?:\s*(.+))?$/i);
   if (reportMatch) {
     return {
@@ -629,6 +668,50 @@ async function handleExportWaveFile(args, command, db) {
   await args.replyFile({ buffer, fileName: `${date}_音浪数据.csv` });
 }
 
+async function handlePkGroups(args, command, db) {
+  const { createWeixinBotSkills } = require("./weixin-bot-skills");
+  const skills = createWeixinBotSkills({
+    db,
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+  const result = await skills.execute("make_pk_groups", {
+    mode: command.mode || "preset",
+    period: command.period || undefined,
+    sendCsv: Boolean(command.sendCsv),
+    // 默认出图；显式 noimage/无图 可关
+    sendImage: command.sendImage !== false,
+    usePresetRoster: true,
+  });
+  if (!result?.ok) {
+    await args.replyText(result?.error || "分组失败");
+    return;
+  }
+  const text = String(result.replyText || result.text || "").slice(0, 3500);
+  if (text) await args.replyText(text);
+
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  for (const artifact of artifacts) {
+    if (artifact?.kind === "image" && artifact.buffer && typeof args.replyImage === "function") {
+      await args.replyImage({
+        buffer: artifact.buffer,
+        fileName: artifact.fileName || result.imageFileName || "PK分组.png",
+      });
+    } else if (artifact?.kind === "file" && artifact.buffer && typeof args.replyFile === "function") {
+      await args.replyFile({
+        buffer: artifact.buffer,
+        fileName: artifact.fileName || result.csvFileName || "PK分组.csv",
+      });
+    }
+  }
+  // 兼容旧字段：仅有 csv 无 artifacts
+  if (!artifacts.length && result.csv && typeof args.replyFile === "function") {
+    await args.replyFile({
+      buffer: Buffer.from(String(result.csv), "utf8"),
+      fileName: result.csvFileName || `PK分组_${result.modeLabel || "分组"}.csv`,
+    });
+  }
+}
+
 function pendingImportKey(args = {}) {
   const accountId = String(args.accountId || "").trim() || "unknown";
   const groupId = String(args.groupId || "").trim();
@@ -790,6 +873,7 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ana
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
+  else if (command.type === "pk-groups") await handlePkGroups(args, command, db);
   else return false;
   return true;
 }
@@ -822,14 +906,15 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       const systemToken = matchSystemToken(args.text);
       const aiStatus = typeof agent?.getPublicStatus === "function" ? agent.getPublicStatus() : {};
       const aiReady = Boolean(aiStatus.configured && aiStatus.enabled);
-      // 产品：AI 就绪后文本全部进 Agent；无 FastRoute / 固定业务指令旁路
-      const agentMode = aiReady;
+      // 模式仅由用户显式切换；不因 AI 就绪与否自动改 mode。
+      // 无 agent 实例时无法进模型，按纯指令路径执行（不改写 modeStore）。
+      const agentMode = Boolean(agent) && modeStore.isAgent(args);
 
       if (systemToken === "help") {
-        await args.replyText(AGENT_HELP);
-        if (!aiReady) {
+        await args.replyText(agentMode ? AGENT_HELP : INSTRUCTION_HELP);
+        if (agentMode && !aiReady) {
           await args.replyText(
-            "提示：请在桌面启用 AI 并配置 Key；当前仅固定指令兜底可用。"
+            "提示：当前是 AI 模式，但桌面 AI 未就绪；业务文本可能无法回答。可发「纯指令」切回固定指令，或去桌面配置 Key。"
           );
         }
         return { handled: true };
@@ -841,27 +926,46 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
         }
         if (!aiReady) {
           await args.replyText(
-            "AI 未就绪：请确认桌面已保存接口地址、模型与 API Key，并开启 AI。"
+            "AI 未就绪：请确认桌面已保存接口地址、模型与 API Key，并开启 AI。配置好后再发「智能模式」。"
           );
           return { handled: true };
         }
         modeStore.setMode(args, "agent");
         agent.enableSession(args);
         await args.replyText([
-          "智能对话已就绪（默认开启）。",
-          "全部业务文本由 AI 处理；直接聊天即可。",
+          "已切换到【AI 模型模式】。",
+          "业务文本由 AI 处理；发「纯指令」可切回固定指令。",
+          "模式不会自动切换。",
         ].join("\n"));
         return { handled: true };
       }
       if (systemToken === "disable") {
-        // 不清退到指令模式；只清会话线程
-        modeStore.setMode(args, "agent");
+        modeStore.setMode(args, "instruction");
         if (agent && typeof agent.disableSession === "function") agent.disableSession(args);
-        await args.replyText("已清空本会话对话记忆。智能对话保持开启，文本仍全部由 AI 处理。");
+        await args.replyText([
+          "已切换到【纯指令模式】。",
+          "只认固定指令（每日报告、艺名音浪等），不调 AI 模型。",
+          "发「智能模式」可再开 AI。",
+        ].join("\n"));
+        return { handled: true };
+      }
+      if (systemToken === "clear-memory") {
+        // 仅清对话记忆，不改当前模式
+        const keep = modeStore.getMode(args);
+        if (agent && typeof agent.clearThread === "function") {
+          agent.clearThread(threadKeyFromContext(args));
+        } else if (agent && typeof agent.disableSession === "function") {
+          agent.disableSession(args);
+        }
+        modeStore.setMode(args, keep);
+        await args.replyText(
+          keep === "agent"
+            ? "已清空本会话对话记忆。当前仍为 AI 模式。"
+            : "已清空本会话对话记忆。当前仍为纯指令模式。"
+        );
         return { handled: true };
       }
       if (systemToken === "clear-habits") {
-        modeStore.setMode(args, "agent");
         const key = threadKeyFromContext(args);
         if (agent && typeof agent.clearProfile === "function") {
           agent.clearProfile(key);
@@ -872,16 +976,22 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
             // ignore
           }
         }
-        await args.replyText("已清除本会话习惯画像；对话记忆未改。");
+        await args.replyText("已清除本会话习惯画像；对话记忆与模式未改。");
         return { handled: true };
       }
 
-      // AI 就绪：文本一律交 Agent（含「每日报告」「艺名」等原固定指令）
+      // AI 模式：文本交 Agent（用户显式开启后）
       if (agentMode) {
+        if (!aiReady) {
+          await args.replyText(
+            "当前是 AI 模式，但 AI 未就绪。请配置桌面 AI，或发「纯指令」改用固定指令。"
+          );
+          return { handled: true };
+        }
         return { handled: false, via: "ai" };
       }
 
-      // AI 未就绪：仅确定性命令（兼容无 Key 环境）
+      // 纯指令模式：只跑确定性命令
       const custom = matchCustomCommand(args.text, args.settings?.customCommands);
       if (custom) {
         await handleCustomCommand(args, custom, db, renderReportPng);
@@ -892,7 +1002,7 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       if (!command) return { handled: false };
 
       if (command.type === "help") {
-        await args.replyText(AGENT_HELP);
+        await args.replyText(INSTRUCTION_HELP);
         return { handled: true };
       }
       if (command.type === "agent-enable" || command.type === "agent-disable") {

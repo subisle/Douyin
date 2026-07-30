@@ -1,1194 +1,591 @@
 "use client";
 
-import { getDataApi } from "@/client/http-electron-api";
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Swords, Waves, Download, RefreshCw, X, Crown, Search, ClipboardPaste, ListChecks } from "lucide-react";
-import { LoadingState, ErrorState, EmptyState } from "./states";
-import { downloadDataUrlAsFile, elementToPngDataUrl } from "./export-image";
-import { cn } from "@/lib/utils";
-import type { PkMember, IpcResult } from "@/types/electron";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BATTLE_STAGE_TAB_OPTIONS,
+  Download,
+  GripVertical,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  Upload,
+  X,
+} from "lucide-react";
+import { getDataApi } from "@/client/http-electron-api";
+import type {
+  BuildPkGroupsGroup,
+  BuildPkGroupsResult,
+  IpcResult,
+  PkGroupMode,
+  PkMember,
+  PkRosterData,
+  PkScoreField,
+} from "@/types/electron";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { EmptyState, ErrorState, LoadingState } from "./states";
+import { formatWave } from "./format";
+import { elementToPngDataUrl, downloadDataUrlAsFile } from "./export-image";
+import {
   DEFAULT_PK_GROUP_SIZE,
-  PRESET_PROMOTION_GROUPS,
+  PRESET_BATTLE_FIRST_START,
+  PRESET_BATTLE_STEP_MINUTES,
   PRESET_ROSTER_TEXT,
-  ROSTER_CONFIG_STORAGE_KEY,
-  ROSTER_SLOT_OPTIONS,
-  loadRosterConfigs,
-  resolvePresetBattleGroups,
-  resolvePresetPromotionGroups,
+  buildPresetBattleGroupsResult,
+  loadRosterText,
   resolveRosterNames,
-  type BattleStageTab,
-  type RosterConfig,
-  type RosterSlot,
+  saveRosterText,
 } from "./pk-roster-config";
+import {
+  formatGapViolation,
+  validateGroupsGap,
+} from "../../../shared/pk-group-constraints.js";
 
-/* ---------- 类型 ---------- */
-interface GroupState {
-  key: string;
-  gender: "male" | "female";
-  label: string;
-  members: PkMember[];
-  captainId: number | null;
-}
+type ScoreDisplay = "total" | "latest";
+type UiGroup = BuildPkGroupsGroup & { key: string };
 
-/* ---------- 颜色 ---------- */
-const GROUP_COLORS = [
-  "border-l-red-400",
-  "border-l-blue-400",
-  "border-l-green-400",
-  "border-l-purple-400",
-  "border-l-orange-400",
-  "border-l-pink-400",
-  "border-l-cyan-400",
-  "border-l-yellow-400",
+const MODE_OPTIONS: { key: PkGroupMode; label: string }[] = [
+  { key: "preset", label: "内置" },
+  { key: "high_to_low", label: "顺序" },
+  { key: "balanced", label: "均衡" },
+  { key: "score_capable", label: "能出分" },
 ];
 
-const DEFAULT_GROUP_SIZE = DEFAULT_PK_GROUP_SIZE;
-const LIVE_WAVE_THRESHOLD = 2;
-
-/* ---------- 辅助 ---------- */
-/** PK名单专用：万级取整，不显示小数 */
-function formatPkWave(value: number): string {
-  if (!value) return "0";
-  if (value >= 1_0000_0000) return `${Math.round(value / 1_0000_0000)} 亿`;
-  if (value >= 1_0000) return `${Math.round(value / 1_0000)} 万`;
-  return Math.round(value).toLocaleString("zh-CN");
+function currentPeriod() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function formatPkWaveOrInactive(value: number): string {
-  return value >= LIVE_WAVE_THRESHOLD ? formatPkWave(value) : "未开播";
+function memberScore(m: { wave?: number; latestWave?: number }, display: ScoreDisplay) {
+  if (display === "latest") return Number(m.latestWave || 0);
+  return Number(m.wave || 0);
 }
 
-function comparePkMembers(left: PkMember, right: PkMember) {
-  const scoreDiff = right.trimmedAvg - left.trimmedAvg;
-  if (scoreDiff !== 0) return scoreDiff;
-  const waveDiff = right.wave - left.wave;
-  if (waveDiff !== 0) return waveDiff;
-  return left.personId - right.personId;
-}
-
-/* ---------- 排除人员对话框 ---------- */
-function ExcludeDialog({
-  open,
-  onClose,
-  allMembers,
-  excludedIds,
-  onConfirm,
-}: {
-  open: boolean;
-  onClose: () => void;
-  allMembers: PkMember[];
-  excludedIds: Set<number>;
-  onConfirm: (ids: Set<number>) => void;
-}) {
-  const [selected, setSelected] = useState<Set<number>>(new Set(excludedIds));
-  const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    if (open) {
-      setSelected(new Set(excludedIds));
-      setQuery("");
-    }
-  }, [open, excludedIds]);
-
-  const filteredMembers = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return allMembers;
-    return allMembers.filter((member) => {
-      const fields = [
-        member.name,
-        member.anchorId,
-        String(member.personId),
-        member.gender === "male" ? "男" : member.gender === "female" ? "女" : member.gender,
-      ];
-      return fields.some((field) => field.toLowerCase().includes(q));
-    });
-  }, [allMembers, query]);
-
-  const toggle = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="app-no-drag w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="mb-3 text-lg font-semibold">选择不参与 PK 的人员</h3>
-        <div className="mb-3 space-y-3">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-            <Search className="size-4 shrink-0 text-muted-foreground" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索姓名、主播ID或人员ID"
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="size-4" />
-              </button>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setSelected(new Set(allMembers.map((m) => m.personId)))}>
-              全选
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={filteredMembers.length === 0}
-              onClick={() => {
-                setSelected((prev) => {
-                  const next = new Set(prev);
-                  filteredMembers.forEach((member) => next.add(member.personId));
-                  return next;
-                });
-              }}
-            >
-              排除搜索结果
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setSelected(new Set())}>
-              清空
-            </Button>
-            <Badge variant="secondary">{selected.size} 人已选</Badge>
-            <span className="ml-auto text-xs text-muted-foreground">
-              显示 {filteredMembers.length}/{allMembers.length}
-            </span>
-          </div>
-        </div>
-        <ScrollArea className="h-72 rounded-lg border border-border">
-          {filteredMembers.map((m, idx) => (
-            <div
-              key={`${m.personId}-${idx}`}
-              className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-accent/50"
-              onClick={() => toggle(m.personId)}
-            >
-              <span
-                className={`flex size-4 items-center justify-center rounded border ${
-                  selected.has(m.personId) ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground"
-                }`}
-              >
-                {selected.has(m.personId) && <span className="text-[10px]">✓</span>}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{m.name}</span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {m.anchorId || `人员ID ${m.personId}`}
-                </span>
-              </span>
-              <Badge
-                className={
-                  m.gender === "male"
-                    ? "shrink-0 bg-chart-2/15 text-chart-2 hover:bg-chart-2/15"
-                    : m.gender === "female"
-                      ? "shrink-0 bg-chart-1/15 text-chart-1 hover:bg-chart-1/15"
-                      : "shrink-0 bg-muted text-muted-foreground hover:bg-muted"
-                }
-              >
-                {m.gender === "male" ? "男" : m.gender === "female" ? "女" : "-"}
-              </Badge>
-              <span className="w-16 shrink-0 text-right text-xs text-muted-foreground">{formatPkWaveOrInactive(m.wave)}</span>
-            </div>
-          ))}
-          {filteredMembers.length === 0 && (
-            <div className="px-3 py-10 text-center text-sm text-muted-foreground">
-              未找到匹配人员
-            </div>
-          )}
-        </ScrollArea>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button
-            onClick={() => {
-              onConfirm(selected);
-              onClose();
-            }}
-          >
-            确认（排除 {selected.size} 人）
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- 组卡片 ---------- */
-function GroupCard({
-  group,
-  index,
-}: {
-  group: GroupState;
-  index: number;
-}) {
-  const colorClass = GROUP_COLORS[index % GROUP_COLORS.length];
-  const totalWave = group.members.reduce((s, m) => s + m.wave, 0);
-  const totalTrimmed = group.members.reduce((s, m) => s + m.trimmedAvg, 0);
-  const captainName = group.members.find((m) => m.personId === group.captainId)?.name;
-
-  // 组内按总音浪降序
-  const sorted = [...group.members].sort((a, b) => b.wave - a.wave);
-
-  return (
-    <Card className={`border-l-4 ${colorClass}`}>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base">{group.label}</CardTitle>
-          <Badge variant="secondary">{group.members.length} 人</Badge>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Waves className="size-3" />
-            总音浪 {formatPkWave(totalWave)}
-          </span>
-          <span>日均 {formatPkWave(totalTrimmed)}</span>
-          {captainName && (
-            <span className="flex items-center gap-1 text-amber-500">
-              <Crown className="size-3" />
-              队长：{captainName}
-            </span>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border text-xs text-muted-foreground">
-              <th className="py-1 text-left font-medium w-7">#</th>
-              <th className="py-1 text-left font-medium">姓名</th>
-              <th className="py-1 text-right font-medium">日均</th>
-              <th className="py-1 text-right font-medium">最高</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((m, i) => (
-              <tr
-                key={m.personId}
-                className="border-b border-border/50 last:border-0 hover:bg-accent/50"
-              >
-                <td className="py-1.5 text-muted-foreground w-7">{i + 1}</td>
-                <td className="py-1.5 font-medium">
-                  {m.name}
-                  {group.captainId === m.personId && (
-                    <Crown className="ml-1 inline size-3 text-amber-500" />
-                  )}
-                </td>
-                <td className="py-1.5 text-right tabular-nums text-foreground">
-                  {m.wave >= LIVE_WAVE_THRESHOLD ? formatPkWave(m.trimmedAvg) : "未开播"}
-                </td>
-                <td className="py-1.5 text-right tabular-nums text-muted-foreground">
-                  {m.maxWave >= LIVE_WAVE_THRESHOLD ? formatPkWave(m.maxWave) : "-"}
-                  {m.maxWave > m.trimmedAvg * 3 && m.waveDays > 1 && (
-                    <span className="ml-1 text-amber-500" title="单日异常高值">⚠</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-            {sorted.length === 0 && (
-              <tr>
-                <td colSpan={4} className="py-4 text-center text-muted-foreground text-xs">
-                  暂无成员
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </CardContent>
-    </Card>
-  );
-}
-
-/* ---------- 导出专用：精简分组名单 ---------- */
-function ExportCompareBoard({
-  period,
-  maleGroups,
-  femaleGroups,
-}: {
-  period: string;
-  maleGroups: GroupState[];
-  femaleGroups: GroupState[];
-}) {
-  const TEXT_MAIN = "#0F172A";
-  const TEXT_MUTED = "#64748B";
-  const BORDER = "#E2E8F0";
-  const BLUE = { text: "#0369A1", soft: "#E0F2FE", line: "#38BDF8" };
-  const PINK = { text: "#BE185D", soft: "#FCE7F3", line: "#F472B6" };
-
-  const periodDisplay = (() => {
-    const [y, m] = period.split("-");
-    return `${y}年${parseInt(m, 10)}月`;
-  })();
-
-  const maxGroupCount = Math.max(1, maleGroups.length, femaleGroups.length);
-  const boardWidth = Math.max(1280, maxGroupCount * 230 + 96);
-
-  const renderGroup = (group: GroupState, accent: typeof BLUE) => {
-    const captain = group.members.find((member) => member.personId === group.captainId);
-    const members = [...group.members];
-
-    return (
-      <div
-        key={group.key}
-        style={{
-          background: "#FFFFFF",
-          border: `1px solid ${BORDER}`,
-          borderTop: `5px solid ${accent.line}`,
-          borderRadius: 14,
-          padding: 12,
-        }}
-      >
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ color: accent.text, fontSize: 18, fontWeight: 900 }}>{group.label}</div>
-          {captain && (
-            <div style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              marginTop: 7,
-              padding: "5px 9px",
-              borderRadius: 999,
-              background: accent.soft,
-              color: accent.text,
-              fontSize: 13,
-              fontWeight: 800,
-            }}>
-              <span>队长</span>
-              <span>{captain.name}</span>
-            </div>
-          )}
-        </div>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gap: 7,
-        }}>
-          {members.map((member) => {
-            const isCaptain = group.captainId === member.personId;
-            return (
-              <div
-                key={member.personId}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  border: `1px solid ${isCaptain ? accent.line : "#EEF2F7"}`,
-                  background: isCaptain ? accent.soft : "#F8FAFC",
-                  borderRadius: 9,
-                  padding: "7px 9px",
-                  minHeight: 34,
-                }}
-              >
-                <span style={{
-                  minWidth: 0,
-                  overflow: "hidden",
-                  whiteSpace: "nowrap",
-                  textOverflow: "ellipsis",
-                  color: TEXT_MAIN,
-                  fontSize: 14,
-                  fontWeight: isCaptain ? 900 : 700,
-                }}>
-                  {member.name}
-                </span>
-                {isCaptain && (
-                  <span style={{
-                    flexShrink: 0,
-                    color: accent.text,
-                    fontSize: 11,
-                    fontWeight: 900,
-                  }}>
-                    队长
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
-  const renderBand = (groups: GroupState[], gender: "male" | "female") => {
-    const accent = gender === "male" ? BLUE : PINK;
-    const label = gender === "male" ? "男团" : "女团";
-    return (
-      <div style={{
-        background: "#FFFFFF",
-        border: `1px solid ${BORDER}`,
-        borderRadius: 16,
-        padding: 16,
-      }}>
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 14,
-        }}>
-          <h3 style={{ margin: 0, color: accent.text, fontSize: 23, fontWeight: 950 }}>{label}</h3>
-          <div style={{ color: TEXT_MUTED, fontSize: 14, fontWeight: 700 }}>
-            {groups.length} 组 · {groups.reduce((sum, group) => sum + group.members.length, 0)} 人
-          </div>
-        </div>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(${Math.max(groups.length, 1)}, minmax(210px, 1fr))`,
-          gap: 12,
-          alignItems: "start",
-        }}>
-          {groups.length > 0 ? (
-            groups.map((group) => renderGroup(group, accent))
-          ) : (
-            <div style={{
-              border: `1px dashed ${BORDER}`,
-              color: TEXT_MUTED,
-              borderRadius: 12,
-              padding: "42px 0",
-              textAlign: "center",
-              fontSize: 14,
-            }}>
-              暂无数据
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  const hasCaptains = [...maleGroups, ...femaleGroups].some((group) => group.captainId !== null);
-
-  return (
-    <div style={{
-      width: boardWidth,
-      background: "#F8FAFC",
-      color: TEXT_MAIN,
-      fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-      padding: 30,
-      position: "relative",
-      overflow: "hidden",
-    }}>
-      <div style={{
-        position: "absolute",
-        inset: 0,
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: 18,
-        transform: "rotate(-18deg) scale(1.15)",
-        transformOrigin: "center",
-        opacity: 0.08,
-        pointerEvents: "none",
-      }}>
-        {Array.from({ length: 28 }).map((_, index) => (
-          <div
-            key={index}
-            style={{
-              color: "#334155",
-              fontSize: 30,
-              fontWeight: 950,
-              whiteSpace: "nowrap",
-              textAlign: "center",
-            }}
-          >
-            内部数据 · 请勿外传
-          </div>
-        ))}
-      </div>
-      <div style={{ position: "relative", zIndex: 1 }}>
-        <div style={{
-          textAlign: "center",
-          marginBottom: 22,
-        }}>
-          <h2 style={{ margin: 0, fontSize: 34, lineHeight: 1.1, fontWeight: 950, color: TEXT_MAIN }}>
-            PK名单分组
-          </h2>
-          <p style={{ margin: "8px 0 0", fontSize: 19, color: TEXT_MUTED, fontWeight: 800 }}>
-            {periodDisplay}
-          </p>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {renderBand(maleGroups, "male")}
-          {renderBand(femaleGroups, "female")}
-        </div>
-
-        {hasCaptains && (
-          <div style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            borderTop: `1px solid ${BORDER}`,
-            color: TEXT_MAIN,
-            fontSize: 18,
-            fontWeight: 900,
-            marginTop: 22,
-            paddingTop: 14,
-          }}>
-            <span>PS：</span>
-            <span>一定要跟自己的队长联系，确认自己是哪个队伍。</span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function currentPeriod(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function buildAutoGroups(
-  members: PkMember[],
-  gender: "male" | "female",
-  excludedIds: Set<number>,
-  groupSize = DEFAULT_GROUP_SIZE,
-  assignCaptains = true
-): GroupState[] {
-  const seen = new Set<number>();
-  const eligible = members
-    .filter((member) => {
-      if (excludedIds.has(member.personId) || seen.has(member.personId)) return false;
-      seen.add(member.personId);
-      return true;
-    })
-    .sort(comparePkMembers);
-
-  if (eligible.length === 0) return [];
-
-  const groupCount = Math.max(1, Math.ceil(eligible.length / groupSize));
-  const prefix = gender === "male" ? "男团" : "女团";
-  const groups: GroupState[] = Array.from({ length: groupCount }, (_, index) => ({
-    key: `${gender}-${index}`,
-    gender,
-    label: `${prefix} 第${index + 1}组`,
-    members: [],
-    captainId: null,
+function cloneGroups(groups: UiGroup[]): UiGroup[] {
+  return groups.map((g) => ({
+    ...g,
+    members: g.members.map((m) => ({ ...m })),
   }));
-
-  eligible.forEach((member, index) => {
-    const targetIndex = Math.floor(index / groupSize);
-    groups[targetIndex].members.push(member);
-  });
-
-  return groups.map((group) => {
-    const sortedMembers = [...group.members].sort(comparePkMembers);
-
-    return {
-      ...group,
-      members: sortedMembers,
-      captainId: assignCaptains ? sortedMembers[0]?.personId ?? null : null,
-    };
-  });
 }
 
-/* ================================================================
-   主页面
-   ================================================================ */
+function relabelGroups(groups: UiGroup[]): UiGroup[] {
+  return groups.map((g, i) => ({
+    ...g,
+    order: i + 1,
+    label: `第${i + 1}组`,
+  }));
+}
+
+function toUiGroups(result: BuildPkGroupsResult): UiGroup[] {
+  return (result.groups || []).map((g, i) => ({
+    ...g,
+    key: `g-${i + 1}-${g.members[0]?.personId ?? g.members[0]?.name ?? i}`,
+  }));
+}
+
 export function PkRosterPage() {
-  const [period, setPeriod] = useState(currentPeriod());
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [rosterSlot, setRosterSlot] = useState<RosterSlot>("midmonth");
-  const [rosterConfigs, setRosterConfigs] = useState<Record<RosterSlot, RosterConfig>>(loadRosterConfigs);
-  /** 15号：常规自动分组 / 争霸赛三轮分组 */
-  const [midmonthView, setMidmonthView] = useState<"auto" | "battle">("auto");
-  const [battleStage, setBattleStage] = useState<BattleStageTab>("group");
-
-  // 后端返回的扁平列表
+  const [period, setPeriod] = useState(currentPeriod);
+  const [mode, setMode] = useState<PkGroupMode>("preset");
+  const [scoreDisplay, setScoreDisplay] = useState<ScoreDisplay>("total");
+  const [includeText, setIncludeText] = useState(() => loadRosterText());
   const [rawMales, setRawMales] = useState<PkMember[]>([]);
-  const [rawFemales, setRawFemales] = useState<PkMember[]>([]);
-  const [dataPeriod, setDataPeriod] = useState("");
-
-  // 分组状态
-  const [excludeOpen, setExcludeOpen] = useState(false);
-  const exportRef = useRef<HTMLDivElement>(null);
+  const [groups, setGroups] = useState<UiGroup[]>([]);
+  const [loadingRoster, setLoadingRoster] = useState(true);
+  const [building, setBuilding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importDraft, setImportDraft] = useState("");
   const [exporting, setExporting] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  useEffect(() => {
-    window.localStorage.setItem(ROSTER_CONFIG_STORAGE_KEY, JSON.stringify(rosterConfigs));
-  }, [rosterConfigs]);
+  const undoStack = useRef<UiGroup[][]>([]);
+  const exportRef = useRef<HTMLDivElement>(null);
+  const dragPerson = useRef<{ groupKey: string; personId: number | null; name: string } | null>(null);
+  const dragGroupKey = useRef<string | null>(null);
 
-  const updateActiveConfig = useCallback((patch: Partial<RosterConfig>) => {
-    setRosterConfigs((current) => ({
-      ...current,
-      [rosterSlot]: {
-        ...current[rosterSlot],
-        ...patch,
-      },
-    }));
-  }, [rosterSlot]);
+  const scoreField: PkScoreField = scoreDisplay === "latest" ? "latestWave" : "wave";
 
-  /** 拉取数据 */
-  const fetchRoster = useCallback(async () => {
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  const pushUndo = useCallback((snapshot: UiGroup[]) => {
+    undoStack.current.push(snapshot);
+    if (undoStack.current.length > 20) undoStack.current.shift();
+  }, []);
+
+  const undo = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (prev) setGroups(prev);
+  }, []);
+
+  const resolution = useMemo(
+    () => resolveRosterNames(rawMales, includeText),
+    [rawMales, includeText]
+  );
+
+  const eligible = useMemo(() => {
+    if (!resolution.names.length) return [] as PkMember[];
+    return rawMales.filter((m) => resolution.ids.has(m.personId));
+  }, [rawMales, resolution]);
+
+  const loadRoster = useCallback(async () => {
     const api = getDataApi();
-    if (!api) return;
-    setLoading(true);
+    if (!api?.getPkRoster) {
+      setError("getPkRoster 不可用");
+      setLoadingRoster(false);
+      return;
+    }
+    setLoadingRoster(true);
     setError(null);
     try {
-      const res: IpcResult<{ period: string; males: PkMember[]; females: PkMember[] }> =
-        await api.getPkRoster(period || undefined, 8);
-      if (res.success) {
-        setRawMales(res.data.males);
-        setRawFemales(res.data.females);
-        setDataPeriod(res.data.period);
-      } else {
-        setError(res.error);
+      const res: IpcResult<PkRosterData> = await api.getPkRoster(period, DEFAULT_PK_GROUP_SIZE);
+      if (!res.success) {
+        setError(res.error || "拉取名单失败");
+        setRawMales([]);
+        return;
       }
+      setRawMales(res.data?.males || []);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setRawMales([]);
     } finally {
-      setLoading(false);
+      setLoadingRoster(false);
     }
   }, [period]);
 
+  const rebuildGroups = useCallback(async () => {
+    const api = getDataApi();
+    if (mode !== "preset" && !api?.buildPkGroups) {
+      setError("buildPkGroups 不可用");
+      return;
+    }
+    if (!resolution.names.length) {
+      setGroups([]);
+      setWarning("请先导入参赛名单");
+      return;
+    }
+    // 内置模式允许用名单名占位（库中未命中也按结构展示）
+    if (mode !== "preset" && !eligible.length) {
+      setGroups([]);
+      setWarning(
+        resolution.unmatchedNames.length
+          ? `名单无人命中。未匹配：${resolution.unmatchedNames.slice(0, 8).join("、")}`
+          : "名单无人命中"
+      );
+      return;
+    }
+
+    setBuilding(true);
+    setError(null);
+    setWarning(null);
+    try {
+      if (mode === "preset") {
+        const built = buildPresetBattleGroupsResult(eligible, {
+          scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
+        });
+        setGroups(toUiGroups(built));
+        undoStack.current = [];
+        let warn = built.warning || "";
+        if (resolution.unmatchedNames.length) {
+          const miss = `未匹配 ${resolution.unmatchedNames.length} 人：${resolution.unmatchedNames.slice(0, 6).join("、")}${resolution.unmatchedNames.length > 6 ? "…" : ""}`;
+          warn = warn ? `${warn}；${miss}` : miss;
+        }
+        setWarning(warn || null);
+        return;
+      }
+      const res: IpcResult<BuildPkGroupsResult> = await api.buildPkGroups({
+        members: eligible.map((m) => ({
+          personId: m.personId,
+          name: m.name,
+          wave: m.wave,
+          latestWave: m.latestWave,
+          trimmedAvg: m.trimmedAvg,
+          gender: m.gender,
+          anchorId: m.anchorId,
+        })),
+        mode,
+        groupSize: DEFAULT_PK_GROUP_SIZE,
+        scoreField,
+        firstStart: PRESET_BATTLE_FIRST_START,
+        stepMinutes: mode === "preset" ? PRESET_BATTLE_STEP_MINUTES : 5,
+      });
+      if (!res.success) {
+        setError(res.error || "分组失败");
+        setGroups([]);
+        return;
+      }
+      const built = res.data;
+      if (!built?.ok) {
+        setError(built?.error || "分组失败");
+        setGroups([]);
+        return;
+      }
+      setGroups(toUiGroups(built));
+      undoStack.current = [];
+      let warn = built.warning || "";
+      if (resolution.unmatchedNames.length) {
+        const miss = `未匹配 ${resolution.unmatchedNames.length} 人：${resolution.unmatchedNames.slice(0, 6).join("、")}${resolution.unmatchedNames.length > 6 ? "…" : ""}`;
+        warn = warn ? `${warn}；${miss}` : miss;
+      }
+      setWarning(warn || null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setGroups([]);
+    } finally {
+      setBuilding(false);
+    }
+  }, [eligible, mode, scoreField, resolution]);
+
   useEffect(() => {
-    fetchRoster();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void loadRoster();
+  }, [loadRoster]);
 
-  /** 所有成员（去重，用于排除对话框） */
-  const allMembers = useMemo(() => {
-    const out: PkMember[] = [];
-    const seen = new Set<number>();
-    rawMales.forEach((m) => {
-      if (!seen.has(m.personId)) { seen.add(m.personId); out.push(m); }
-    });
-    rawFemales.forEach((m) => {
-      if (!seen.has(m.personId)) { seen.add(m.personId); out.push(m); }
-    });
-    return out;
-  }, [rawMales, rawFemales]);
+  useEffect(() => {
+    if (loadingRoster) return;
+    void rebuildGroups();
+  }, [loadingRoster, rebuildGroups]);
 
-  const activeConfig = rosterConfigs[rosterSlot];
-  const includeResolution = useMemo(
-    () => resolveRosterNames(allMembers, activeConfig.includeText),
-    [activeConfig.includeText, allMembers]
-  );
-  const excludeResolution = useMemo(
-    () => resolveRosterNames(allMembers, activeConfig.excludeText),
-    [activeConfig.excludeText, allMembers]
-  );
-
-  const rosterMembers = useMemo(() => {
-    const filter = (members: PkMember[]) => members.filter((member) => {
-      if (activeConfig.mode === "include" && includeResolution.names.length > 0 && !includeResolution.ids.has(member.personId)) {
+  const applyGroupsIfValid = useCallback(
+    (next: UiGroup[], failMessagePrefix: string) => {
+      const check = validateGroupsGap(next);
+      if (!check.ok) {
+        showToast(`${failMessagePrefix}：${formatGapViolation(check.violations[0])}`);
         return false;
       }
-      if (excludeResolution.ids.has(member.personId)) return false;
+      pushUndo(cloneGroups(groups));
+      setGroups(relabelGroups(next));
       return true;
-    });
-    return {
-      males: filter(rawMales),
-      females: filter(rawFemales),
-    };
-  }, [activeConfig.mode, excludeResolution.ids, includeResolution.ids, includeResolution.names.length, rawFemales, rawMales]);
-
-  const activeRosterCount = rosterMembers.males.length + rosterMembers.females.length;
-  const excludedCount = allMembers.length - activeRosterCount;
-  const assignCaptains = rosterSlot !== "midmonth";
-
-  const maleGroups = useMemo(
-    () => buildAutoGroups(rosterMembers.males, "male", new Set(), DEFAULT_GROUP_SIZE, assignCaptains),
-    [assignCaptains, rosterMembers.males]
+    },
+    [groups, pushUndo, showToast]
   );
 
-  const femaleGroups = useMemo(
-    () => buildAutoGroups(rosterMembers.females, "female", new Set(), DEFAULT_GROUP_SIZE, assignCaptains),
-    [assignCaptains, rosterMembers.females]
+  const swapPersons = useCallback(
+    (
+      a: { groupKey: string; personId: number | null; name: string },
+      b: { groupKey: string; personId: number | null; name: string }
+    ) => {
+      if (a.groupKey === b.groupKey && a.name === b.name) return;
+      const next = cloneGroups(groups);
+      const ga = next.find((g) => g.key === a.groupKey);
+      const gb = next.find((g) => g.key === b.groupKey);
+      if (!ga || !gb) return;
+      const ia = ga.members.findIndex(
+        (m) => (a.personId != null && m.personId === a.personId) || m.name === a.name
+      );
+      const ib = gb.members.findIndex(
+        (m) => (b.personId != null && m.personId === b.personId) || m.name === b.name
+      );
+      if (ia < 0 || ib < 0) return;
+      const tmp = ga.members[ia];
+      ga.members[ia] = gb.members[ib];
+      gb.members[ib] = tmp;
+      applyGroupsIfValid(next, "无法交换");
+    },
+    [groups, applyGroupsIfValid]
   );
 
-  /** 15号争霸赛：小组 / 复活 / 晋级 内置分组（按当前名单成员匹配） */
-  const battlePool = useMemo(() => {
-    // 争霸赛只看男团 + 白名单过滤后的名单
-    return rosterMembers.males;
-  }, [rosterMembers.males]);
-
-  const groupStagePreset = useMemo(
-    () => resolvePresetBattleGroups(battlePool),
-    [battlePool]
+  const reorderGroup = useCallback(
+    (fromKey: string, toKey: string) => {
+      if (fromKey === toKey) return;
+      const next = cloneGroups(groups);
+      const from = next.findIndex((g) => g.key === fromKey);
+      const to = next.findIndex((g) => g.key === toKey);
+      if (from < 0 || to < 0) return;
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      applyGroupsIfValid(next, "无法调整顺序");
+    },
+    [groups, applyGroupsIfValid]
   );
-  const promotionStagePreset = useMemo(
-    () => resolvePresetPromotionGroups(battlePool),
-    [battlePool]
-  );
 
-  const battleStageGroups = useMemo(() => {
-    if (battleStage === "promotion") {
-      return promotionStagePreset.groups.map((group, index) => ({
-        key: group.key,
-        gender: "male" as const,
-        label: group.label || `晋级${index + 1}组`,
-        members: group.members,
-        captainId: null as number | null,
-      }));
-    }
-    return groupStagePreset.groups.map((group, index) => ({
-      key: group.key,
-      gender: "male" as const,
-      label: group.label || `第${index + 1}组`,
-      members: group.members,
-      captainId: null as number | null,
-    }));
-  }, [battleStage, groupStagePreset.groups, promotionStagePreset.groups]);
+  const openImport = () => {
+    setImportDraft(includeText);
+    setImportOpen(true);
+  };
 
-  const battleStageMeta = useMemo(() => {
-    if (battleStage === "promotion") {
-      return {
-        detail: promotionStagePreset.detail,
-        missing: promotionStagePreset.missingNames,
-        note: `内置晋级 ${PRESET_PROMOTION_GROUPS.length} 组 · 每组晋级 1 人 · 无复活赛 · 全部结束后进决赛`,
-      };
-    }
-    return {
-      detail: groupStagePreset.detail,
-      missing: groupStagePreset.missingNames,
-      note: "内置小组赛 7 组 · 53 人均衡（8×4+7×3）；啸泽首/啸帆末/啸安第2；08:15 起间隔 5 分钟",
-    };
-  }, [
-    battleStage,
-    groupStagePreset.detail,
-    groupStagePreset.missingNames,
-    promotionStagePreset.detail,
-    promotionStagePreset.missingNames,
-  ]);
+  const confirmImport = () => {
+    const text = importDraft.trim() ? importDraft : PRESET_ROSTER_TEXT;
+    setIncludeText(text);
+    saveRosterText(text);
+    setImportOpen(false);
+  };
 
-  /** 确认排除 */
-  const handleConfirmExclude = useCallback((newExcluded: Set<number>) => {
-    const names = allMembers
-      .filter((member) => newExcluded.has(member.personId))
-      .map((member) => member.name)
-      .join("\n");
-    updateActiveConfig({ excludeText: names });
-  }, [allMembers, updateActiveConfig]);
-
-  const currentMonth = useMemo(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  }, []);
-
-  /** 导出图片 */
-  const handleExportImage = useCallback(async () => {
-    if (!exportRef.current) return;
+  const handleExport = async () => {
+    if (!exportRef.current || !groups.length) return;
     setExporting(true);
     try {
       const dataUrl = await elementToPngDataUrl(exportRef.current, {
         backgroundColor: "#f8fafc",
-        pixelRatio: 3,
+        pixelRatio: 2,
       });
-      setPreviewUrl(dataUrl);
+      await downloadDataUrlAsFile(
+        dataUrl,
+        `PK分组_${MODE_OPTIONS.find((m) => m.key === mode)?.label || mode}_${period}.png`
+      );
     } catch (e) {
-      console.error("导出失败", e);
+      showToast(e instanceof Error ? e.message : String(e));
     } finally {
       setExporting(false);
     }
-  }, []);
+  };
 
-  /** 下载预览图 */
-  const handleDownloadPreview = useCallback(() => {
-    if (!previewUrl) return;
-    void downloadDataUrlAsFile(previewUrl, `PK名单分组_${dataPeriod || period || currentMonth}.png`);
-  }, [previewUrl, dataPeriod, period, currentMonth]);
-
-  const displayPeriod = dataPeriod || period || currentMonth;
+  if (loadingRoster) return <LoadingState label="加载 PK 名单…" />;
+  if (error && !rawMales.length) {
+    return <ErrorState message={error} onRetry={() => void loadRoster()} />;
+  }
 
   return (
-    <div className="space-y-5">
-      {/* 工具栏 */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="flex items-center gap-2 text-xl font-bold">
-            <Swords className="size-5 text-primary" />
-            PK 名单
-          </h2>
-          <Badge variant="outline">{displayPeriod}</Badge>
-          <Badge variant="secondary">{ROSTER_SLOT_OPTIONS.find((item) => item.key === rosterSlot)?.label}</Badge>
-          <Badge variant={activeConfig.mode === "include" ? "default" : "outline"}>
-            {activeConfig.mode === "include" ? "只打名单" : "排除名单"}
-          </Badge>
-          {excludedCount > 0 && (
-            <Badge variant="destructive">{excludedCount} 人不参与</Badge>
-          )}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">PK 分组</h1>
+          <p className="text-xs text-muted-foreground">男团 · 内置锁定 / 引擎三模式 · 人拖互换 / 组序拖改</p>
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="month"
-            value={period || currentMonth}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="app-no-drag rounded-lg border border-border bg-card px-3 py-1.5 text-sm outline-none"
-          />
-          <Button variant="outline" size="sm" onClick={() => setExcludeOpen(true)}>
-            <X className="size-4" />
-            排除人员
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="h-8 w-[150px]" />
+          <Button size="sm" variant="outline" onClick={openImport}>
+            <Upload className="mr-1 size-3.5" />
+            导入名单
           </Button>
-          <Button variant="outline" size="sm" onClick={fetchRoster} disabled={loading}>
-            <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
-            刷新
-          </Button>
-          <Button size="sm" onClick={handleExportImage} disabled={exporting}>
-            <Download className="size-4" />
-            {exporting ? "导出中…" : "导出图片"}
-          </Button>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-muted/30 px-4 py-2.5 text-sm text-muted-foreground">
-        💡 {rosterSlot === "midmonth" && midmonthView === "battle"
-          ? "15号争霸赛分组：小组赛 / 晋级赛。晋级赛每组晋级 1 人，全部结束后进入决赛；无复活赛。"
-          : `系统按去最高后日均音浪从高到低自动分组，默认每组最多 ${DEFAULT_GROUP_SIZE} 人；导出图片只保留队伍分组${assignCaptains ? "、队长" : ""}和成员名单。`}
-      </div>
-
-      <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex rounded-md border border-border bg-background p-0.5">
-              {ROSTER_SLOT_OPTIONS.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setRosterSlot(item.key)}
-                  className={cn(
-                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
-                    rosterSlot === item.key
-                      ? "bg-foreground text-background"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  {item.shortLabel}
-                </button>
-              ))}
-            </div>
-            {rosterSlot === "midmonth" && (
-              <div className="flex rounded-md border border-border bg-background p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setMidmonthView("auto")}
-                  className={cn(
-                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
-                    midmonthView === "auto"
-                      ? "bg-foreground text-background"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  自动分组
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMidmonthView("battle")}
-                  className={cn(
-                    "h-8 rounded-[5px] px-3 text-xs font-bold transition",
-                    midmonthView === "battle"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  争霸赛分组
-                </button>
-              </div>
-            )}
-            <div className="flex rounded-md border border-border bg-background p-0.5">
+          <div className="flex rounded-md border p-0.5">
+            {MODE_OPTIONS.map((item) => (
               <button
+                key={item.key}
                 type="button"
-                onClick={() => updateActiveConfig({ mode: "include" })}
-                className={cn(
-                  "h-8 rounded-[5px] px-3 text-xs font-bold transition",
-                  activeConfig.mode === "include"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
+                onClick={() => setMode(item.key)}
+                className={`rounded px-2.5 py-1 text-xs ${
+                  mode === item.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+                }`}
               >
-                只打名单
+                {item.label}
               </button>
+            ))}
+          </div>
+          <div className="flex rounded-md border p-0.5">
+            {([{ key: "total", label: "总分" }, { key: "latest", label: "最新" }] as const).map((item) => (
               <button
+                key={item.key}
                 type="button"
-                onClick={() => updateActiveConfig({ mode: "exclude" })}
-                className={cn(
-                  "h-8 rounded-[5px] px-3 text-xs font-bold transition",
-                  activeConfig.mode === "exclude"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                )}
+                onClick={() => setScoreDisplay(item.key)}
+                className={`rounded px-2.5 py-1 text-xs ${
+                  scoreDisplay === item.key
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
               >
-                排除名单
+                {item.label}
               </button>
-            </div>
+            ))}
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
-            <Badge variant="secondary">参与 {activeRosterCount} 人</Badge>
-            <Badge variant="outline">参赛文本 {includeResolution.names.length} 人</Badge>
-            <Badge variant="outline">排除文本 {excludeResolution.names.length} 人</Badge>
-          </div>
-        </div>
-
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <div className={cn(
-            "rounded-md border p-3",
-            activeConfig.mode === "include" ? "border-primary/50 bg-primary/5" : "border-border bg-muted/15"
-          )}>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-black">
-                <ListChecks className="size-4 text-primary" />
-                参赛名单文本
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => updateActiveConfig({ includeText: PRESET_ROSTER_TEXT, mode: "include" })}
-              >
-                <ClipboardPaste className="size-4" />
-                使用预设
-              </Button>
-            </div>
-            <textarea
-              value={activeConfig.includeText}
-              onChange={(event) => updateActiveConfig({ includeText: event.target.value })}
-              placeholder="粘贴名单，每行一个名字，支持 1. 张三 / 张三 / 逗号分隔"
-              className="app-no-drag h-40 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-[3px] focus:ring-ring/40"
-            />
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
-              <span>匹配 {includeResolution.ids.size}/{includeResolution.names.length}</span>
-              {includeResolution.unmatchedNames.length > 0 && (
-                <span className="truncate text-destructive" title={includeResolution.unmatchedNames.join("、")}>
-                  未匹配：{includeResolution.unmatchedNames.slice(0, 6).join("、")}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className={cn(
-            "rounded-md border p-3",
-            activeConfig.mode === "exclude" ? "border-destructive/50 bg-destructive/5" : "border-border bg-muted/15"
-          )}>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-sm font-black">
-                <X className="size-4 text-destructive" />
-                排除名单文本
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => updateActiveConfig({ excludeText: "" })}
-              >
-                清空
-              </Button>
-            </div>
-            <textarea
-              value={activeConfig.excludeText}
-              onChange={(event) => updateActiveConfig({ excludeText: event.target.value })}
-              placeholder="粘贴不参与名单，每行一个名字；即使使用“只打名单”，这里的人也会被排除"
-              className="app-no-drag h-40 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-[3px] focus:ring-ring/40"
-            />
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
-              <span>匹配 {excludeResolution.ids.size}/{excludeResolution.names.length}</span>
-              {excludeResolution.unmatchedNames.length > 0 && (
-                <span className="truncate text-destructive" title={excludeResolution.unmatchedNames.join("、")}>
-                  未匹配：{excludeResolution.unmatchedNames.slice(0, 6).join("、")}
-                </span>
-              )}
-            </div>
-          </div>
+          <Button size="sm" variant="outline" onClick={() => void rebuildGroups()} disabled={building}>
+            {building ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <RefreshCw className="mr-1 size-3.5" />}
+            重新分组
+          </Button>
+          <Button size="sm" variant="ghost" onClick={undo} title="撤销上一次拖拽">
+            <RotateCcw className="size-3.5" />
+          </Button>
+          <Button size="sm" onClick={() => void handleExport()} disabled={!groups.length || exporting}>
+            <Download className="mr-1 size-3.5" />
+            导出
+          </Button>
         </div>
       </div>
 
-      {/* 内容 */}
-      {loading ? (
-        <LoadingState label="加载 PK 数据中…" />
-      ) : error ? (
-        <ErrorState message={error} onRetry={fetchRoster} />
-      ) : rawMales.length === 0 && rawFemales.length === 0 ? (
-        <EmptyState label={`${displayPeriod} 月暂无音浪数据`} />
-      ) : rosterSlot === "midmonth" && midmonthView === "battle" ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
-            <div className="flex flex-wrap gap-2">
-              {BATTLE_STAGE_TAB_OPTIONS.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setBattleStage(item.key)}
-                  className={cn(
-                    "h-9 rounded-md px-3 text-sm font-bold transition",
-                    battleStage === item.key
-                      ? "bg-primary text-primary-foreground"
-                      : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-muted-foreground">
-              <Badge variant="secondary">
-                {battleStageGroups.length} 组 ·{" "}
-                {battleStageGroups.reduce((sum, group) => sum + group.members.length, 0)} 人
-              </Badge>
-              <Badge variant="outline">{battleStageMeta.detail}</Badge>
-            </div>
-          </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <Badge variant="secondary">名单 {resolution.names.length}</Badge>
+        <Badge variant="secondary">命中 {eligible.length}</Badge>
+        <Badge variant="secondary">组数 {groups.length}</Badge>
+        {building && (
+          <span className="inline-flex items-center gap-1">
+            <Loader2 className="size-3 animate-spin" />
+            分组中…
+          </span>
+        )}
+      </div>
 
-          <div className="rounded-lg border border-border bg-muted/20 px-4 py-2 text-sm text-muted-foreground">
-            {BATTLE_STAGE_TAB_OPTIONS.find((item) => item.key === battleStage)?.description}
-            {" · "}
-            {battleStageMeta.note}
-            {battleStageMeta.missing.length > 0 && (
-              <span className="ml-2 text-destructive">
-                缺：{battleStageMeta.missing.slice(0, 8).join("、")}
-                {battleStageMeta.missing.length > 8 ? "…" : ""}
-              </span>
-            )}
-          </div>
-
-          {battleStageGroups.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {battleStageGroups.map((group, index) => (
-                <GroupCard key={group.key} group={group} index={index} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              label={
-                battleStage === "promotion"
-                  ? "内置晋级名单未匹配到主播，请确认 15 号白名单与当月音浪数据"
-                  : "内置小组赛名单未匹配到主播"
-              }
-            />
-          )}
+      {warning && (
+        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+          {warning}
         </div>
+      )}
+      {error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+      {toast && <div className="rounded-md border bg-background px-3 py-2 text-xs shadow-sm">{toast}</div>}
+
+      {!groups.length && !building ? (
+        <EmptyState label="还没有分组 — 导入名单或点重新分组" />
       ) : (
-        <div className="space-y-6">
-          {/* 男团 */}
-          {rawMales.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h3 className="flex items-center gap-2 text-lg font-semibold">
-                  <span className="size-2 rounded-full bg-chart-2" />
-                  男团
-                </h3>
-                <Badge variant="secondary">
-                  自动 {maleGroups.length} 组 · {maleGroups.reduce((s, g) => s + g.members.length, 0)} 人
-                </Badge>
-              </div>
-
-              {/* 组卡片 */}
-              {maleGroups.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {maleGroups.map((g, i) => (
-                    <GroupCard
-                      key={g.key}
-                      group={g}
-                      index={i}
-                    />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {groups.map((group) => (
+            <Card
+              key={group.key}
+              className="overflow-hidden"
+              onDragOver={(e) => {
+                if (dragGroupKey.current) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const from = dragGroupKey.current;
+                dragGroupKey.current = null;
+                if (from) reorderGroup(from, group.key);
+              }}
+            >
+              <CardHeader className="space-y-1 border-b bg-muted/30 py-3">
+                <CardTitle
+                  className="flex cursor-grab items-center gap-2 text-sm active:cursor-grabbing"
+                  draggable
+                  onDragStart={() => {
+                    dragGroupKey.current = group.key;
+                  }}
+                  onDragEnd={() => {
+                    dragGroupKey.current = null;
+                  }}
+                >
+                  <GripVertical className="size-3.5 text-muted-foreground" />
+                  <span>{group.label}</span>
+                  {group.scheduleLabel && (
+                    <span className="font-normal text-muted-foreground">· {group.scheduleLabel}</span>
+                  )}
+                  <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <ul className="divide-y">
+                  {group.members.map((m) => (
+                    <li
+                      key={`${group.key}-${m.personId ?? m.name}-${m.index}`}
+                      draggable
+                      onDragStart={() => {
+                        dragPerson.current = {
+                          groupKey: group.key,
+                          personId: m.personId,
+                          name: m.name,
+                        };
+                      }}
+                      onDragEnd={() => {
+                        dragPerson.current = null;
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const from = dragPerson.current;
+                        dragPerson.current = null;
+                        if (!from) return;
+                        swapPersons(from, {
+                          groupKey: group.key,
+                          personId: m.personId,
+                          name: m.name,
+                        });
+                      }}
+                      className="flex cursor-grab items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-muted/40 active:cursor-grabbing"
+                    >
+                      <span className="truncate font-medium">{m.name}</span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {formatWave(memberScore(m, scoreDisplay))}
+                      </span>
+                    </li>
                   ))}
-                </div>
-              ) : (
-                <EmptyState label="男团成员已全部排除" />
-              )}
-            </div>
-          )}
-
-          {/* 女团 */}
-          {rawFemales.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h3 className="flex items-center gap-2 text-lg font-semibold">
-                  <span className="size-2 rounded-full bg-chart-1" />
-                  女团
-                </h3>
-                <Badge variant="secondary">
-                  自动 {femaleGroups.length} 组 · {femaleGroups.reduce((s, g) => s + g.members.length, 0)} 人
-                </Badge>
-              </div>
-
-              {/* 组卡片 */}
-              {femaleGroups.length > 0 ? (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {femaleGroups.map((g, i) => (
-                    <GroupCard
-                      key={g.key}
-                      group={g}
-                      index={i}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState label="女团成员已全部排除" />
-              )}
-            </div>
-          )}
+                </ul>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
 
-      {/* 排除对话框 */}
-      <ExcludeDialog
-        open={excludeOpen}
-        onClose={() => setExcludeOpen(false)}
-        allMembers={allMembers}
-        excludedIds={excludeResolution.ids}
-        onConfirm={handleConfirmExclude}
-      />
-
-      {/* 隐藏的导出 DOM */}
-      <div className="fixed -left-[9999px] top-0">
-        <div ref={exportRef}>
-          {(maleGroups.some((g) => g.members.length > 0) || femaleGroups.some((g) => g.members.length > 0)) ? (
-            <ExportCompareBoard
-              period={displayPeriod}
-              maleGroups={maleGroups}
-              femaleGroups={femaleGroups}
-            />
-          ) : (
-            <div className="p-8 text-center text-muted-foreground" style={{ width: 1600 }}>
-              暂无分组数据
+      <div className="pointer-events-none fixed left-[-10000px] top-0">
+        <div ref={exportRef} className="w-[960px] bg-slate-50 p-6 text-slate-900" style={{ fontFamily: "system-ui, sans-serif" }}>
+          <div className="mb-4 flex items-end justify-between">
+            <div>
+              <div className="text-2xl font-bold">PK 分组</div>
+              <div className="mt-1 text-sm text-slate-500">
+                {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} · {scoreDisplay === "latest" ? "最新日音浪" : "月总分"}
+              </div>
             </div>
-          )}
+            <div className="text-sm text-slate-500">
+              {eligible.length} 人 · {groups.length} 组
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {groups.map((group) => (
+              <div key={`ex-${group.key}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="mb-2 flex items-center justify-between text-sm font-semibold">
+                  <span>
+                    {group.label}
+                    {group.startTime ? ` · ${group.startTime}` : ""}
+                  </span>
+                  <span className="font-normal text-slate-500">{group.count}人</span>
+                </div>
+                <div className="space-y-1">
+                  {group.members.map((m) => (
+                    <div key={`ex-${group.key}-${m.index}-${m.name}`} className="flex justify-between text-sm">
+                      <span>{m.name}</span>
+                      <span className="tabular-nums text-slate-500">{formatWave(memberScore(m, scoreDisplay))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* 预览弹窗 */}
-      {previewUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <div
-            className="relative max-h-[90vh] max-w-[90vw] overflow-auto rounded-lg bg-card p-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <h3 className="text-lg font-semibold">导出预览</h3>
-              <div className="flex items-center gap-2">
-                <Button size="sm" onClick={handleDownloadPreview}>
-                  <Download className="size-4" />
-                  下载图片
+      {importOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-xl border bg-background shadow-xl">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <div className="font-semibold">导入名单</div>
+                <div className="text-xs text-muted-foreground">换行 / 逗号分隔；支持编号前缀</div>
+              </div>
+              <button type="button" onClick={() => setImportOpen(false)} className="rounded p-1 hover:bg-muted">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-3 overflow-auto p-4">
+              <textarea
+                value={importDraft}
+                onChange={(e) => setImportDraft(e.target.value)}
+                rows={16}
+                className="w-full rounded-md border bg-background p-3 font-mono text-xs leading-5"
+                placeholder="每行一个名字"
+              />
+              {(() => {
+                const preview = resolveRosterNames(rawMales, importDraft || PRESET_ROSTER_TEXT);
+                return (
+                  <div className="text-xs text-muted-foreground">
+                    将匹配 {preview.matchedNames.length}/{preview.names.length}
+                    {preview.unmatchedNames.length > 0 && (
+                      <span className="text-amber-700 dark:text-amber-300">
+                        {" "}
+                        · 未匹配：{preview.unmatchedNames.slice(0, 8).join("、")}
+                        {preview.unmatchedNames.length > 8 ? "…" : ""}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+            <div className="flex flex-wrap gap-2 border-t px-4 py-3">
+              <Button size="sm" variant="outline" onClick={() => setImportDraft(PRESET_ROSTER_TEXT)}>
+                填入默认白名单
+              </Button>
+              <div className="ml-auto flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setImportOpen(false)}>
+                  取消
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setPreviewUrl(null)}>
-                  关闭
+                <Button size="sm" onClick={confirmImport}>
+                  确认导入
                 </Button>
               </div>
             </div>
-            {/* eslint-disable-next-line @next/next/no-img-element -- 预览图是本地生成的 data URL，不需要 Next Image 优化。 */}
-            <img
-              src={previewUrl}
-              alt="PK名单预览"
-              className="max-h-[80vh] max-w-full rounded"
-            />
           </div>
         </div>
       )}

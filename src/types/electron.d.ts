@@ -624,6 +624,8 @@ export interface PkMember {
   maxWave: number;     // 本月最高单日音浪
   minWave: number;     // 本月最低单日音浪
   waveDays: number;    // 有数据的天数
+  latestWave: number;  // 周期内最近有数据日的当日音浪
+  latestWaveDate?: string | null;
   duration: number;
   rank: number;
 }
@@ -632,6 +634,66 @@ export interface PkRosterData {
   period: string;
   males: PkMember[];   // 男主播列表（按总音浪降序）
   females: PkMember[]; // 女主播列表（按总音浪降序）
+}
+
+export type PkGroupMode = "high_to_low" | "balanced" | "score_capable" | "preset";
+export type PkScoreField = "wave" | "latestWave";
+
+export interface BuildPkGroupsPayload {
+  members: Array<{
+    personId?: number;
+    name: string;
+    wave?: number;
+    latestWave?: number;
+    trimmedAvg?: number;
+    gender?: string;
+    anchorId?: string;
+  }>;
+  mode?: PkGroupMode | string;
+  groupSize?: number;
+  minGap?: number;
+  scoreField?: PkScoreField | string;
+  firstStart?: string;
+  stepMinutes?: number;
+  gapPairs?: Array<{ a: string; b: string; minGap?: number } | [string, string] | [string, string, number]>;
+}
+
+export interface BuildPkGroupsMember {
+  index: number;
+  name: string;
+  personId: number | null;
+  wave: number;
+  latestWave?: number;
+  trimmedAvg: number;
+  strength: number;
+}
+
+export interface BuildPkGroupsGroup {
+  label: string;
+  order: number;
+  startTime?: string;
+  scheduleLabel?: string;
+  count: number;
+  top4: number;
+  average: number;
+  members: BuildPkGroupsMember[];
+}
+
+export interface BuildPkGroupsResult {
+  ok: boolean;
+  error?: string;
+  warning?: string;
+  mode: string;
+  modeLabel: string;
+  total?: number;
+  groupCount?: number;
+  sizes?: number[];
+  minGap?: number;
+  scoreField?: string;
+  strongestSlot?: number;
+  strongestGroup?: number;
+  constraints?: string[];
+  groups: BuildPkGroupsGroup[];
 }
 
 export interface StarBattleScore {
@@ -925,6 +987,9 @@ declare global {
       period?: string,
       groupSize?: number
     ) => Promise<IpcResult<PkRosterData>>;
+    buildPkGroups: (
+      payload: BuildPkGroupsPayload
+    ) => Promise<IpcResult<BuildPkGroupsResult>>;
     getStarBattleScores: (period: string) => Promise<IpcResult<StarBattleScore[]>>;
     saveStarBattleScore: (
       payload: SaveStarBattleScorePayload

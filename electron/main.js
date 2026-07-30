@@ -921,6 +921,13 @@ ipcMain.handle(
   wrap((period, groupSize) => db.getPkRoster(period, groupSize))
 );
 ipcMain.handle(
+  "data:buildPkGroups",
+  wrap((payload) => {
+    const { buildPkGroups } = require("./pk-group-engine");
+    return buildPkGroups(payload || {});
+  })
+);
+ipcMain.handle(
   "data:getStarBattleScores",
   wrap((period) => db.getStarBattleScores(period))
 );
