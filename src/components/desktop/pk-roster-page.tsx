@@ -503,12 +503,12 @@ export function PkRosterPage() {
     setExporting(true);
     try {
       const dataUrl = await elementToPngDataUrl(exportRef.current, {
-        backgroundColor: "#f8fafc",
+        backgroundColor: "#FFF7FB",
         pixelRatio: 2,
       });
       await downloadDataUrlAsFile(
         dataUrl,
-        `PK分组_${MODE_OPTIONS.find((m) => m.key === mode)?.label || mode}_${period}.png`
+        `星嗨艺创_分组_${MODE_OPTIONS.find((m) => m.key === mode)?.label || mode}_${period}.png`
       );
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
@@ -804,46 +804,132 @@ export function PkRosterPage() {
       <div className="pointer-events-none fixed left-[-10000px] top-0">
         <div
           ref={exportRef}
-          className="w-[960px] bg-slate-50 p-6 text-slate-900"
-          style={{ fontFamily: "system-ui, sans-serif" }}
+          className="w-[980px] p-10 text-slate-900"
+          style={{
+            fontFamily:
+              "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif",
+            background:
+              "linear-gradient(135deg, #FFF7FB 0%, #F5F0FF 32%, #ECFEFF 68%, #FFF7ED 100%)",
+          }}
         >
-          <div className="mb-4 flex items-end justify-between">
-            <div>
-              <div className="text-2xl font-bold">PK 分组</div>
-              <div className="mt-1 text-sm text-slate-500">
-                {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} ·{" "}
-                {scoreDisplay === "latest" ? "最新日音浪" : "月总分"}
+          <div
+            className="mb-5 overflow-hidden rounded-[26px] px-6 py-5 text-white shadow-lg"
+            style={{
+              background:
+                "linear-gradient(120deg, #FF2D95 0%, #A855F7 42%, #6366F1 78%, #06B6D4 100%)",
+            }}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="flex size-11 items-center justify-center rounded-full border border-white/50 bg-white/20 text-lg font-black">
+                  星
+                </div>
+                <div>
+                  <div className="text-[11px] font-extrabold tracking-[0.18em] text-white/90">
+                    XINGHAI YICHUANG · PK GROUP
+                  </div>
+                  <div className="mt-1 text-[32px] font-black leading-none tracking-tight">
+                    星嗨艺创
+                  </div>
+                  <div className="mt-2 text-sm font-semibold text-white/90">
+                    {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} · 共{" "}
+                    {eligible.length} 人 · {groups.length} 组
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="text-sm text-slate-500">
-              {eligible.length} 人 · {groups.length} 组
+              <div className="flex gap-2">
+                <div className="flex h-[52px] w-[88px] flex-col items-center justify-center rounded-2xl border border-white/30 bg-white/15">
+                  <div className="text-xl font-black">{groups.length}</div>
+                  <div className="text-[11px] font-bold">组</div>
+                </div>
+                <div className="flex h-[52px] w-[88px] flex-col items-center justify-center rounded-2xl bg-white text-violet-600 shadow-sm">
+                  <div className="text-xl font-black">{eligible.length}</div>
+                  <div className="text-[11px] font-extrabold text-fuchsia-500">人</div>
+                </div>
+              </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            {groups.map((group) => (
-              <div key={`ex-${group.key}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 flex items-center justify-between text-sm font-semibold">
-                  <span>
-                    {group.label}
-                    {group.startTime ? ` · ${group.startTime}` : ""}
-                  </span>
-                  <span className="font-normal text-slate-500">{group.count}人</span>
-                </div>
-                <div className="space-y-1">
-                  {group.members.map((m) => (
+
+          <div className="grid grid-cols-2 gap-4">
+            {groups.map((group, gi) => {
+              const accents = [
+                { main: "#FF2D95", soft: "#FFE4F3", deep: "#BE185D" },
+                { main: "#7C3AED", soft: "#EDE9FE", deep: "#5B21B6" },
+                { main: "#06B6D4", soft: "#CFFAFE", deep: "#0E7490" },
+                { main: "#F59E0B", soft: "#FEF3C7", deep: "#B45309" },
+                { main: "#22C55E", soft: "#DCFCE7", deep: "#15803D" },
+                { main: "#F43F5E", soft: "#FFE4E6", deep: "#BE123C" },
+                { main: "#3B82F6", soft: "#DBEAFE", deep: "#1D4ED8" },
+                { main: "#A855F7", soft: "#F3E8FF", deep: "#7E22CE" },
+              ];
+              const accent = accents[gi % accents.length];
+              const ranked = [...groups]
+                .map((g, i) => ({ order: i, top4: Number(g.top4) || 0 }))
+                .sort((a, b) => b.top4 - a.top4 || a.order - b.order);
+              const badge =
+                ranked[0]?.order === gi ? "最强" : ranked[1]?.order === gi ? "次强" : "";
+              return (
+                <div
+                  key={`ex-${group.key}`}
+                  className="overflow-hidden rounded-[20px] border bg-white shadow-md"
+                  style={{ borderColor: `${accent.main}40` }}
+                >
+                  <div className="h-1.5" style={{ background: accent.main }} />
+                  <div className="p-3.5">
                     <div
-                      key={`ex-${group.key}-${m.index}-${m.name}`}
-                      className="flex justify-between text-sm"
+                      className="mb-3 flex items-center gap-2 rounded-2xl px-3 py-2.5"
+                      style={{ background: accent.soft, color: accent.deep }}
                     >
-                      <span>{m.name}</span>
-                      <span className="tabular-nums text-slate-500">
-                        {formatWave(memberScore(m, scoreDisplay))}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[15px] font-black leading-none">{group.label}</div>
+                        <div className="mt-1 text-[11px] font-bold opacity-80">
+                          {[group.startTime || group.scheduleLabel, `${group.count}人`]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
+                      </div>
+                      {badge ? (
+                        <span
+                          className="rounded-full px-2.5 py-1 text-[11px] font-black"
+                          style={
+                            badge === "最强"
+                              ? { background: accent.main, color: "#fff" }
+                              : {
+                                  background: "#fff",
+                                  color: accent.deep,
+                                  border: `1px solid ${accent.main}`,
+                                }
+                          }
+                        >
+                          {badge}
+                        </span>
+                      ) : null}
                     </div>
-                  ))}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {group.members.map((m) => (
+                        <div
+                          key={`ex-${group.key}-${m.index}-${m.name}`}
+                          className="flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm"
+                          style={{ background: `${accent.soft}99` }}
+                        >
+                          <span
+                            className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-extrabold"
+                            style={{ color: accent.deep, border: `1px solid ${accent.main}55` }}
+                          >
+                            {m.index}
+                          </span>
+                          <span className="truncate font-bold text-slate-900">{m.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+
+          <div className="mt-5 text-center text-[11px] font-semibold text-violet-400/90">
+            星嗨艺创 · 分组导出
           </div>
         </div>
       </div>

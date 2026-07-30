@@ -162,7 +162,7 @@ function createWeixinBotSkills({ db, renderReportPng }) {
       !(args.sendImage === false || args.sendImage === "false" || args.sendImage === 0);
     const periodLabel = roster.period || period;
     const csvFileName = `PK分组_${built.modeLabel}_${periodLabel}_${built.groupCount}组.csv`;
-    const imageFileName = `PK分组_${built.modeLabel}_${periodLabel}_${built.groupCount}组.png`;
+    const imageFileName = `星嗨艺创_分组_${built.modeLabel}_${periodLabel}_${built.groupCount}组.png`;
 
     const artifacts = [];
     let imageError;
@@ -170,7 +170,7 @@ function createWeixinBotSkills({ db, renderReportPng }) {
       try {
         const png = await renderPkGroupsPng(built, {
           period: periodLabel,
-          title: `PK 分组 · ${built.modeLabel}`,
+          title: "星嗨艺创",
           constraints: built.constraints,
           rosterSource,
         });
