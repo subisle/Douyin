@@ -11,7 +11,7 @@ const {
   SYSTEM_DISABLE_RE: AGENT_DISABLE_RE,
 } = require("./weixin-bot-mode");
 const { threadKeyFromContext } = require("./weixin-bot-agent");
-const { matchDailyPushCommand } = require("./weixin-bot-daily-push");
+const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
 const { toDailyReportImagePages } = require("./weixin-bot-report");
 
 const HELP_TEXT = INSTRUCTION_HELP;
@@ -508,16 +508,23 @@ function genderLabel(gender) {
   return gender === "female" ? "女队" : "男团";
 }
 
-async function sendOneGenderReport(args, date, gender, db, renderReportPng) {
+/**
+ * 发送单团日报：今日前三（人名）→ 报告图（可多页）。
+ * @param {{ withDate?: boolean }} [options] withDate 时在文案前加日期标题
+ */
+async function sendOneGenderReport(args, date, gender, db, renderReportPng, options = {}) {
   const label = genderLabel(gender);
   const report = await db.getDailyWaveReport(date, gender);
   if (!report?.rows?.length) {
     await args.replyText(`${date} 没有${label}主播数据。`);
     return false;
   }
-  const liveCount = report.rows.filter((row) => row.isLive).length;
-  const caption = `${date} ${label}每日报告：${report.rows.length} 人，开播 ${liveCount} 人，未播 ${report.summary?.notLiveCount || 0} 人。`;
-  await args.replyText(caption);
+  // 文案：日期（可选）+ 今日前三人名
+  const top3Text = buildGenderTop3Text(date, gender, report, {
+    withDate: Boolean(options.withDate),
+    namesOnly: true,
+  });
+  await args.replyText(top3Text);
   try {
     // 标题交给渲染层按性别默认（男团星嗨艺创 / 女队薇笑传媒），与软件日报一致
     // 人数过多时自动拆成最多两张（与桌面端导出一致）
@@ -544,12 +551,12 @@ async function sendReport(args, command, db, renderReportPng) {
     return;
   }
 
+  // 顺序：男团前三 → 男团图 → 女队前三 → 女队图；日期只出现在首条文案
   const genders = command.gender === "both" ? ["male", "female"] : [command.gender === "female" ? "female" : "male"];
-  if (genders.length > 1) {
-    await args.replyText(`${date} 每日报告：依次发送男团、女队。`);
-  }
+  let first = true;
   for (const gender of genders) {
-    await sendOneGenderReport(args, date, gender, db, renderReportPng);
+    await sendOneGenderReport(args, date, gender, db, renderReportPng, { withDate: first });
+    first = false;
   }
 }
 

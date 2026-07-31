@@ -15,7 +15,7 @@ const { toDailyReportImagePages } = require("./weixin-bot-report");
 const {
   DEFAULT_DAILY_REPORT_PUSH,
   normalizeDailyReportPushSettings,
-  buildDailyTop3Text,
+  buildGenderTop3Text,
   matchDailyPushCommand,
   formatDailyPushStatusText,
   resolveDailyPushTargets,
@@ -2174,29 +2174,43 @@ class WeixinBotService extends EventEmitter {
       femaleReport = { rows: [] };
     }
 
-    const top3Text = buildDailyTop3Text(date, maleReport, femaleReport);
-    const images = [];
+    // 按团预渲染图片：男团前三 → 男团图 → 女队前三 → 女队图
+    const genderPayloads = [];
     for (const [gender, report] of [["male", maleReport], ["female", femaleReport]]) {
-      if (!report?.rows?.length) continue;
-      try {
-        // 人数过多时自动拆成最多两张，与桌面端/指令日报一致
-        const pages = await toDailyReportImagePages(renderReportPng, report, {});
-        const label = gender === "female" ? "女队" : "男团";
-        for (const page of pages) {
-          if (!page?.buffer?.length) continue;
-          images.push({
-            gender,
-            buffer: page.buffer,
-            fileName: `${date}_${label}_每日报告${page.fileNameSuffix || ""}.png`,
-            pageIndex: page.pageIndex,
-            pageCount: page.pageCount,
-          });
+      const images = [];
+      if (report?.rows?.length) {
+        try {
+          // 人数过多时自动拆成最多两张，与桌面端/指令日报一致
+          const pages = await toDailyReportImagePages(renderReportPng, report, {});
+          const label = gender === "female" ? "女队" : "男团";
+          for (const page of pages) {
+            if (!page?.buffer?.length) continue;
+            images.push({
+              gender,
+              buffer: page.buffer,
+              fileName: `${date}_${label}_每日报告${page.fileNameSuffix || ""}.png`,
+              pageIndex: page.pageIndex,
+              pageCount: page.pageCount,
+            });
+          }
+        } catch (error) {
+          // 单团失败不阻断另一团
+          console.warn("[weixin-daily-push] render failed", gender, error);
         }
-      } catch (error) {
-        // 单团失败不阻断另一团
-        console.warn("[weixin-daily-push] render failed", gender, error);
       }
+      // 即使没有图片，只要有数据或空数据也发前三文案（空则“暂无数据”）
+      genderPayloads.push({
+        gender,
+        report,
+        images,
+        top3Text: buildGenderTop3Text(date, gender, report, {
+          // 首团带日期标题
+          withDate: genderPayloads.length === 0,
+          namesOnly: true,
+        }),
+      });
     }
+    const imageCount = genderPayloads.reduce((n, g) => n + g.images.length, 0);
 
     if (!this.runnerLease) this._acquireRunnerLease();
     let ok = 0;
@@ -2218,14 +2232,16 @@ class WeixinBotService extends EventEmitter {
         // 刷新内存 context
         this.contexts.set(accountScopedKey(accountId, target.conversationId), context);
         try {
-          await this._sendTextWithContext(target.conversationId, top3Text, context, account);
-          for (const image of images) {
-            await this._sendMediaWithContext(
-              target.conversationId,
-              { buffer: image.buffer, fileName: image.fileName, mediaKind: "image" },
-              context,
-              account
-            );
+          for (const payload of genderPayloads) {
+            await this._sendTextWithContext(target.conversationId, payload.top3Text, context, account);
+            for (const image of payload.images) {
+              await this._sendMediaWithContext(
+                target.conversationId,
+                { buffer: image.buffer, fileName: image.fileName, mediaKind: "image" },
+                context,
+                account
+              );
+            }
           }
           ok += 1;
         } catch (error) {
@@ -2258,7 +2274,7 @@ class WeixinBotService extends EventEmitter {
       targets: targets.length,
       sent: ok,
       failed: fail,
-      images: images.length,
+      images: imageCount,
       errors: errors.slice(0, 5),
     };
   }

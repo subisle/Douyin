@@ -431,7 +431,8 @@ test("report command with long male roster sends two images", async () => {
   assert.equal(images.length, 2);
   assert.equal(images[0].fileName, "2026-07-18_男团_每日报告_1of2.png");
   assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_2of2.png");
-  assert.match(replies[0], /56 人/);
+  assert.match(replies[0], /2026-07-18 每日报告/);
+  assert.match(replies[0], /【男团】今日前三/);
 });
 
 
@@ -580,9 +581,12 @@ test("report command without gender sends male then female images", async () => 
     replyImage: async (image) => { images.push(image); },
   });
   assert.deepEqual(genders, ["male", "female"]);
-  assert.match(replies[0], /2026-07-18 每日报告：依次发送男团、女队/);
-  assert.match(replies[1], /2026-07-18 男团每日报告/);
-  assert.match(replies[2], /2026-07-18 女队每日报告/);
+  // 顺序：男团前三(含日期) → 男团图 → 女队前三 → 女队图
+  assert.equal(replies.length, 2);
+  assert.match(replies[0], /2026-07-18 每日报告/);
+  assert.match(replies[0], /【男团】今日前三/);
+  assert.match(replies[1], /【女队】今日前三/);
+  assert.doesNotMatch(replies[1], /2026-07-18 每日报告/);
   assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
   assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
   assert.deepEqual(images[0].buffer, Buffer.from("PNG-male"));
@@ -617,7 +621,8 @@ test("report command with explicit gender still sends only one team", async () =
   });
   assert.deepEqual(genders, ["female"]);
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /2026-07-18 女队每日报告/);
+  assert.match(replies[0], /2026-07-18 每日报告/);
+  assert.match(replies[0], /【女队】今日前三/);
   assert.equal(images[0].fileName, "2026-07-18_女队_每日报告.png");
 });
 
@@ -709,9 +714,10 @@ test("report command falls back when dashboard summary is empty", async () => {
     replyText: async (text) => { replies.push(text); },
     replyImage: async (image) => { images.push(image); },
   });
-  assert.match(replies[0], /2026-07-16 每日报告：依次发送男团、女队/);
-  assert.match(replies[1], /2026-07-16 男团每日报告/);
-  assert.match(replies[2], /2026-07-16 女队每日报告/);
+  assert.equal(replies.length, 2);
+  assert.match(replies[0], /2026-07-16 每日报告/);
+  assert.match(replies[0], /【男团】今日前三/);
+  assert.match(replies[1], /【女队】今日前三/);
   assert.equal(images[0].fileName, "2026-07-16_男团_每日报告.png");
   assert.equal(images[1].fileName, "2026-07-16_女队_每日报告.png");
 });

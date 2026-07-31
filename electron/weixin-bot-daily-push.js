@@ -32,34 +32,65 @@ function pickTopByDailyWave(rows, limit = 3) {
 
 const MEDAL = ["1.", "2.", "3."];
 
-function formatTopBlock(label, rows) {
-  const lines = [`【${label}】`];
+/**
+ * @param {string} label
+ * @param {Array<{name:string,dailyWave?:number}>} rows
+ * @param {{ namesOnly?: boolean }} [options]
+ */
+function formatTopBlock(label, rows, options = {}) {
+  const namesOnly = options.namesOnly !== false; // 默认只发人名
+  const lines = [`【${label}】今日前三`];
   if (!rows.length) {
-    lines.push("暂无音浪数据");
+    lines.push("暂无数据");
     return lines.join("\n");
   }
   rows.forEach((row, index) => {
     const medal = MEDAL[index] || `${index + 1}.`;
-    lines.push(`${medal} ${row.name} · ${formatWave(row.dailyWave)}`);
+    if (namesOnly) {
+      lines.push(`${medal} ${row.name}`);
+    } else {
+      lines.push(`${medal} ${row.name} · ${formatWave(row.dailyWave)}`);
+    }
   });
   return lines.join("\n");
 }
 
 /**
+ * 单团今日前三文案。
+ * @param {string} date YYYY-MM-DD
+ * @param {"male"|"female"} gender
+ * @param {{ rows?: any[] } | null} report
+ * @param {{ withDate?: boolean, namesOnly?: boolean }} [options]
+ */
+function buildGenderTop3Text(date, gender, report, options = {}) {
+  const day = String(date || "").trim() || "当日";
+  const label = gender === "female" ? "女队" : "男团";
+  const top = pickTopByDailyWave(report?.rows, 3);
+  const block = formatTopBlock(label, top, { namesOnly: options.namesOnly !== false });
+  if (options.withDate) {
+    return [`${day} 每日报告`, "", block].join("\n");
+  }
+  return block;
+}
+
+/**
+ * 兼容：日期 + 男女两块（自动推送/指令更推荐按团拆开发送）。
  * @param {string} date YYYY-MM-DD
  * @param {{ rows?: any[] } | null} maleReport
  * @param {{ rows?: any[] } | null} femaleReport
+ * @param {{ namesOnly?: boolean }} [options]
  */
-function buildDailyTop3Text(date, maleReport, femaleReport) {
+function buildDailyTop3Text(date, maleReport, femaleReport, options = {}) {
   const day = String(date || "").trim() || "当日";
+  const namesOnly = options.namesOnly !== false;
   const maleTop = pickTopByDailyWave(maleReport?.rows, 3);
   const femaleTop = pickTopByDailyWave(femaleReport?.rows, 3);
   return [
-    `${day} 当日音浪前三`,
+    `${day} 每日报告`,
     "",
-    formatTopBlock("男团", maleTop),
+    formatTopBlock("男团", maleTop, { namesOnly }),
     "",
-    formatTopBlock("女队", femaleTop),
+    formatTopBlock("女队", femaleTop, { namesOnly }),
   ].join("\n");
 }
 
@@ -234,6 +265,8 @@ function resolveDailyPushTargets({
 module.exports = {
   formatWave,
   pickTopByDailyWave,
+  formatTopBlock,
+  buildGenderTop3Text,
   buildDailyTop3Text,
   normalizeDailyReportPushSettings,
   DEFAULT_DAILY_REPORT_PUSH,

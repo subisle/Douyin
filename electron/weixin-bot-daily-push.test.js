@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   buildDailyTop3Text,
+  buildGenderTop3Text,
   matchDailyPushCommand,
   pickTopByDailyWave,
   resolveDailyPushTargets,
@@ -19,17 +20,35 @@ test("pickTopByDailyWave sorts by daily wave", () => {
   assert.deepEqual(top.map((r) => r.name), ["A", "B", "C"]);
 });
 
-test("buildDailyTop3Text includes male and female blocks", () => {
+test("buildDailyTop3Text includes male and female name-only blocks", () => {
   const text = buildDailyTop3Text(
     "2026-07-30",
     { rows: [{ name: "浩鸣", dailyWave: 500_000 }, { name: "狼澈", dailyWave: 230_000 }] },
     { rows: [{ name: "玖妹", dailyWave: 120_000 }] }
   );
-  assert.match(text, /2026-07-30 当日音浪前三/);
-  assert.match(text, /【男团】/);
-  assert.match(text, /浩鸣 · 50 万/);
-  assert.match(text, /【女队】/);
-  assert.match(text, /玖妹 · 12 万/);
+  assert.match(text, /2026-07-30 每日报告/);
+  assert.match(text, /【男团】今日前三/);
+  assert.match(text, /1\. 浩鸣/);
+  assert.doesNotMatch(text, /浩鸣 · 50 万/);
+  assert.match(text, /【女队】今日前三/);
+  assert.match(text, /1\. 玖妹/);
+});
+
+test("buildGenderTop3Text can include date and names only", () => {
+  const withDate = buildGenderTop3Text(
+    "2026-07-30",
+    "male",
+    { rows: [{ name: "浩鸣", dailyWave: 500_000 }, { name: "狼澈", dailyWave: 230_000 }, { name: "啸帆", dailyWave: 100_000 }] },
+    { withDate: true }
+  );
+  assert.match(withDate, /2026-07-30 每日报告/);
+  assert.match(withDate, /【男团】今日前三/);
+  assert.match(withDate, /1\. 浩鸣\n2\. 狼澈\n3\. 啸帆/);
+  assert.doesNotMatch(withDate, /万/);
+
+  const female = buildGenderTop3Text("2026-07-30", "female", { rows: [{ name: "玖妹", dailyWave: 12 }] });
+  assert.equal(female.startsWith("【女队】今日前三"), true);
+  assert.doesNotMatch(female, /2026-07-30/);
 });
 
 test("matchDailyPushCommand parses admin toggles", () => {
