@@ -1,28 +1,26 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
+const { Worker, isMainThread, parentPort } = require('worker_threads');
 
 const AUDIO_DIR = path.join(__dirname, '../data/audio');
-if (!fs.existsSync(AUDIO_DIR)) {
-  fs.mkdirSync(AUDIO_DIR, { recursive: true });
-}
+if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR, { recursive: true });
 
 class AudioCollector {
   constructor() {
     this.workers = new Map();
-    this.pool = [];
   }
 
   startCollection(roomId, url) {
-    if (this.workers.has(roomId)) return;
-    
-    const worker = new Worker(__filename);
+    if (this.workers.has(roomId)) {
+      console.log(`[Audio] Room ${roomId} already collecting`);
+      return;
+    }
+
+    const worker = new Worker(__filename, { workerData: { roomId } });
     this.workers.set(roomId, worker);
-    
-    worker.postMessage({ type: 'start', roomId, url });
-    
-    console.log(`[Audio] Started low-resource multi-thread collection for room ${roomId}`);
+
+    console.log(`[Audio] Started multi-thread low-resource audio collection for ${roomId}`);
   }
 
   stopCollection(roomId) {
@@ -36,58 +34,46 @@ class AudioCollector {
 
 if (isMainThread) {
   const collector = new AudioCollector();
-  
-  // Expose for IPC
+
+  // For Electron IPC
   module.exports = {
-    start: (roomId, url) => {
-      process.send({ type: 'startAudio', roomId, url });
+    startAudio: (roomId, url) => {
+      collector.startCollection(roomId, url);
     },
-    stop: (roomId) => {
-      process.send({ type: 'stopAudio', roomId });
+    stopAudio: (roomId) => {
+      collector.stopCollection(roomId);
     }
   };
 } else {
-  const { type } = workerData;
-  
-  if (type === 'start') {
-    const { roomId, url } = workerData;
-    const audioFile = `${AUDIO_DIR}/audio_${roomId}_${Date.now()}.wav`;
-    
-    // Low priority ffmpeg command for system audio capture (macOS avfoundation)
-    const cmd = `nice -n 19 ffmpeg -f avfoundation -i :0 -ar 16000 -ac 1 -f wav -t 3600 "${audioFile}"`;
-    
-    const ffmpeg = spawn('sh', ['-c', cmd], {
-      detached: true,
-      stdio: 'ignore'
-    });
-    
-    ffmpeg.unref();
-    
-    parentPort.postMessage(`Started audio collection for ${roomId} with low CPU priority`);
-    
-    parentPort.on('message', (msg) => {
-      if (msg.type === 'stop') {
-        if (ffmpeg.pid) {
-          try {
-            process.kill(ffmpeg.pid, 'SIGTERM');
-          } catch (e) {}
-        }
-        process.exit(0);
+  // Worker thread for each room
+  const { roomId } = workerData;
+
+  const audioFile = `${AUDIO_DIR}/audio_${roomId}_${Date.now()}.wav`;
+
+  // Low-priority ffmpeg for system audio (macOS): capture with minimal CPU
+  const cmd = `nice -n 19 ffmpeg -f avfoundation -i :0 -ar 16000 -ac 1 -f wav -t 3600 "${audioFile}"`;
+
+  const ffmpeg = spawn('sh', ['-c', cmd], {
+    detached: true,
+    stdio: ['ignore', 'ignore', 'ignore']
+  });
+
+  ffmpeg.unref();
+
+  console.log(`[Audio Worker ${roomId}] Started with low priority`);
+
+  parentPort.on('message', (msg) => {
+    if (msg.type === 'stop') {
+      if (ffmpeg.pid) {
+        try {
+          process.kill(ffmpeg.pid, 'SIGTERM');
+        } catch (e) {}
       }
-    });
-  }
+      process.exit(0);
+    }
+  });
 }
 
 module.exports = {
-  AudioCollector,
-  startAudio: (roomId, url) => {
-    if (isMainThread) {
-      process.send({ type: 'startAudio', roomId, url });
-    } else {
-      process.send({ type: 'start', roomId, url });
-    }
-  },
-  stopAudio: (roomId) => {
-    process.send({ type: 'stopAudio', roomId });
-  }
+  AudioCollector
 };
