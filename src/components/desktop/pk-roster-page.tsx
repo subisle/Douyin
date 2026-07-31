@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
+  FileSpreadsheet,
   GripVertical,
   Loader2,
   RefreshCw,
   RotateCcw,
   Save,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -37,7 +39,10 @@ import {
   buildBattleGroupsResultFromNameGroups,
   buildPresetBattleGroupsResult,
   clearSavedGroupsLayout,
+  deleteSavedGroupPreset,
+  getActiveGroupPreset,
   groupsToNameGroups,
+  listSavedGroupPresets,
   loadRosterText,
   loadSavedGroupsLayout,
   normalizeFirstStart,
@@ -45,7 +50,13 @@ import {
   normalizeStepMinutes,
   resolveRosterNames,
   saveGroupsLayout,
+  saveNamedGroupPreset,
   saveRosterText,
+  setActiveGroupPreset,
+  suggestNextGroupPresetName,
+  downloadPkGroupsCsv,
+  exportPkGroupsToCsv,
+  type SavedGroupPreset,
 } from "./pk-roster-config";
 import {
   formatGapViolation,
@@ -153,6 +164,20 @@ export function PkRosterPage() {
   const [exporting, setExporting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(() => loadSavedGroupsLayout()?.savedAt || null);
+  const [presets, setPresets] = useState<SavedGroupPreset[]>(() => listSavedGroupPresets());
+  const [activePresetId, setActivePresetId] = useState<string | null>(
+    () => getActiveGroupPreset()?.id || null
+  );
+  const [activePresetName, setActivePresetName] = useState<string | null>(
+    () => getActiveGroupPreset()?.name || null
+  );
+  const [activePresetNote, setActivePresetNote] = useState<string>(
+    () => getActiveGroupPreset()?.note || ""
+  );
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveName, setSaveName] = useState(() => suggestNextGroupPresetName());
+  const [saveNote, setSaveNote] = useState("");
+  const [saveAsNew, setSaveAsNew] = useState(true);
   const [dragOverGroupKey, setDragOverGroupKey] = useState<string | null>(null);
   const [dragOverPersonKey, setDragOverPersonKey] = useState<string | null>(null);
   const [draggingPersonKey, setDraggingPersonKey] = useState<string | null>(null);
@@ -170,6 +195,16 @@ export function PkRosterPage() {
     window.setTimeout(() => setToast(null), 3200);
   }, []);
 
+  const refreshPresets = useCallback(() => {
+    const list = listSavedGroupPresets();
+    setPresets(list);
+    const active = getActiveGroupPreset();
+    setActivePresetId(active?.id || null);
+    setActivePresetName(active?.name || null);
+    setActivePresetNote(active?.note || "");
+    setSavedAt(active?.savedAt || null);
+  }, []);
+
   const pushUndo = useCallback((snapshot: UiGroup[]) => {
     undoStack.current.push(snapshot);
     if (undoStack.current.length > 20) undoStack.current.shift();
@@ -185,27 +220,73 @@ export function PkRosterPage() {
   }, []);
 
   const persistGroups = useCallback(
-    (nextGroups: UiGroup[], opts?: { silent?: boolean }) => {
+    (nextGroups: UiGroup[], opts?: { silent?: boolean; name?: string; note?: string; asNew?: boolean }) => {
       const nameGroups = groupsToNameGroups(nextGroups);
-      const saved = saveGroupsLayout({
-        nameGroups,
-        period,
-        mode,
-        scoreDisplay,
-        firstStart,
-        stepMinutes,
-        groupSize,
-      });
+      if (!nameGroups.length) {
+        if (!opts?.silent) showToast("保存失败：分组为空");
+        return false;
+      }
+      // 拖拽静默保存：仅当已有激活存档时覆盖
+      if (opts?.silent && !opts?.asNew && !opts?.name && !activePresetId) {
+        setDirty(true);
+        return false;
+      }
+      const namedSave = Boolean(opts?.asNew || opts?.name || opts?.note !== undefined);
+      const saved = namedSave
+        ? saveNamedGroupPreset({
+            id: opts?.asNew ? undefined : activePresetId || undefined,
+            name:
+              (opts?.name && opts.name.trim()) ||
+              activePresetName ||
+              suggestNextGroupPresetName(),
+            note: opts?.note !== undefined ? opts.note : activePresetNote,
+            nameGroups,
+            period,
+            mode,
+            scoreDisplay,
+            firstStart,
+            stepMinutes,
+            groupSize,
+            makeActive: true,
+          })
+        : saveGroupsLayout({
+            nameGroups,
+            period,
+            mode,
+            scoreDisplay,
+            firstStart,
+            stepMinutes,
+            groupSize,
+            id: activePresetId || undefined,
+            name: activePresetName || undefined,
+            note: activePresetNote,
+          });
       if (saved) {
         setSavedAt(saved.savedAt);
+        setActivePresetId(saved.id || activePresetId);
+        setActivePresetName(saved.name || activePresetName);
+        setActivePresetNote(saved.note || "");
         setDirty(false);
-        if (!opts?.silent) showToast("分组已保存");
+        refreshPresets();
+        if (!opts?.silent) showToast(`已保存：${saved.name || "分组"}`);
         return true;
       }
       if (!opts?.silent) showToast("保存失败：分组为空");
       return false;
     },
-    [firstStart, groupSize, mode, period, scoreDisplay, showToast, stepMinutes]
+    [
+      activePresetId,
+      activePresetName,
+      activePresetNote,
+      firstStart,
+      groupSize,
+      mode,
+      period,
+      refreshPresets,
+      scoreDisplay,
+      showToast,
+      stepMinutes,
+    ]
   );
 
   const undo = useCallback(() => {
@@ -277,9 +358,15 @@ export function PkRosterPage() {
   );
 
   const rebuildGroups = useCallback(
-    async (opts?: { clearSaved?: boolean; preferSaved?: boolean }) => {
+    async (opts?: {
+      clearSaved?: boolean;
+      preferSaved?: boolean;
+      modeOverride?: PkGroupMode;
+      preset?: SavedGroupPreset | null;
+    }) => {
       const api = getDataApi();
-      if (mode !== "preset" && !api?.buildPkGroups) {
+      const effectiveMode = opts?.modeOverride || mode;
+      if (effectiveMode !== "preset" && !api?.buildPkGroups) {
         setError("buildPkGroups 不可用");
         return;
       }
@@ -288,7 +375,7 @@ export function PkRosterPage() {
         setWarning("请先导入参赛名单");
         return;
       }
-      if (mode !== "preset" && !eligible.length) {
+      if (effectiveMode !== "preset" && !eligible.length) {
         setGroups([]);
         setWarning(
           resolution.unmatchedNames.length
@@ -300,27 +387,68 @@ export function PkRosterPage() {
 
       if (opts?.clearSaved) {
         clearSavedGroupsLayout();
+        setActivePresetId(null);
+        setActivePresetName(null);
+        setActivePresetNote("");
         setSavedAt(null);
         setDirty(false);
+        refreshPresets();
       }
 
-      const preferSaved = opts?.preferSaved !== false && !opts?.clearSaved;
+      // 显式加载某套存档
+      if (opts?.preset?.nameGroups?.length) {
+        const saved = opts.preset;
+        const built = buildBattleGroupsResultFromNameGroups(saved.nameGroups, memberPool, {
+          scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
+          mode: (saved.mode as PkGroupMode) || effectiveMode,
+          modeLabel: saved.name || "已保存分组",
+          source: saved.note ? `${saved.name} · ${saved.note}` : saved.name || "已保存分组",
+          firstStart: saved.firstStart || firstStart,
+          stepMinutes: saved.stepMinutes ?? stepMinutes,
+          notes: [
+            saved.name ? `存档：${saved.name}` : "已保存分组",
+            saved.note || "",
+            saved.savedAt ? `保存于 ${new Date(saved.savedAt).toLocaleString("zh-CN")}` : "",
+          ].filter(Boolean),
+        });
+        if (saved.firstStart) setFirstStart(normalizeFirstStart(saved.firstStart));
+        if (saved.stepMinutes != null) setStepMinutes(normalizeStepMinutes(saved.stepMinutes));
+        if (saved.groupSize != null) setGroupSize(normalizeGroupSize(saved.groupSize));
+        if (saved.mode && ["preset", "high_to_low", "balanced", "score_capable"].includes(saved.mode)) {
+          setMode(saved.mode as PkGroupMode);
+        }
+        applyBuiltResult(built);
+        setActiveGroupPreset(saved.id);
+        setActivePresetId(saved.id);
+        setActivePresetName(saved.name);
+        setActivePresetNote(saved.note || "");
+        setSavedAt(saved.savedAt || null);
+        setDirty(false);
+        refreshPresets();
+        return;
+      }
+
+      const preferSaved = opts?.preferSaved === true && !opts?.clearSaved && !opts?.modeOverride;
       if (preferSaved) {
         const saved = loadSavedGroupsLayout();
         if (saved?.nameGroups?.length) {
           const built = buildBattleGroupsResultFromNameGroups(saved.nameGroups, memberPool, {
             scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
-            mode,
-            modeLabel: "已保存分组",
-            source: "已保存拖拽分组",
-            firstStart,
-            stepMinutes,
+            mode: (saved.mode as PkGroupMode) || effectiveMode,
+            modeLabel: saved.name || "已保存分组",
+            source: saved.note ? `${saved.name} · ${saved.note}` : saved.name || "已保存拖拽分组",
+            firstStart: saved.firstStart || firstStart,
+            stepMinutes: saved.stepMinutes ?? stepMinutes,
             notes: [
-              "来自本地保存的拖拽分组",
+              saved.name ? `存档：${saved.name}` : "来自本地保存的拖拽分组",
+              saved.note || "",
               saved.savedAt ? `保存于 ${new Date(saved.savedAt).toLocaleString("zh-CN")}` : "",
             ].filter(Boolean),
           });
           applyBuiltResult(built);
+          setActivePresetId(saved.id || null);
+          setActivePresetName(saved.name || null);
+          setActivePresetNote(saved.note || "");
           setSavedAt(saved.savedAt || null);
           setDirty(false);
           return;
@@ -331,7 +459,7 @@ export function PkRosterPage() {
       setError(null);
       setWarning(null);
       try {
-        if (mode === "preset") {
+        if (effectiveMode === "preset") {
           const built = buildPresetBattleGroupsResult(memberPool, {
             scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
             firstStart,
@@ -356,7 +484,7 @@ export function PkRosterPage() {
             gender: m.gender,
             anchorId: m.anchorId,
           })),
-          mode,
+          mode: effectiveMode,
           groupSize,
           scoreField,
           firstStart,
@@ -373,7 +501,12 @@ export function PkRosterPage() {
           return;
         }
         applyBuiltResult(res.data);
-        setDirty(false);
+        setDirty(true);
+        // 算法重分后离开当前存档激活态，避免误覆盖
+        setActiveGroupPreset(null);
+        setActivePresetId(null);
+        setActivePresetName(null);
+        setActivePresetNote("");
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setGroups([]);
@@ -388,6 +521,7 @@ export function PkRosterPage() {
       groupSize,
       memberPool,
       mode,
+      refreshPresets,
       resolution.names.length,
       resolution.unmatchedNames,
       scoreField,
@@ -399,12 +533,12 @@ export function PkRosterPage() {
     void loadRoster();
   }, [loadRoster]);
 
-  // 名单/模式/口径变化后自动分组（优先本地已保存布局）
+  // 名单/月份/口径变化后自动分组（优先本地已保存布局）
   useEffect(() => {
     if (loadingRoster) return;
     void rebuildGroups({ preferSaved: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadingRoster, includeText, period, mode, scoreDisplay]);
+  }, [loadingRoster, includeText, period, scoreDisplay]);
 
   // 每组人数变化：非内置模式重新分组；内置模式忽略
   useEffect(() => {
@@ -516,12 +650,95 @@ export function PkRosterPage() {
     setImportOpen(false);
   };
 
-  const handleSave = () => {
+  const selectMode = useCallback(
+    (next: PkGroupMode) => {
+      setMode(next);
+      // 算法重分后脱离当前存档激活态（不删除已保存的多套分组）
+      setActiveGroupPreset(null);
+      setActivePresetId(null);
+      setActivePresetName(null);
+      setActivePresetNote("");
+      setSavedAt(null);
+      setDirty(false);
+      void rebuildGroups({ preferSaved: false, modeOverride: next, clearSaved: false });
+      const label = MODE_OPTIONS.find((m) => m.key === next)?.label || next;
+      showToast(`已按「${label}」自动分组`);
+    },
+    [rebuildGroups, showToast]
+  );
+
+  const openSaveDialog = useCallback(
+    (asNew = false) => {
+      if (!groups.length) {
+        showToast("没有可保存的分组");
+        return;
+      }
+      const createNew = asNew || !activePresetId;
+      setSaveAsNew(createNew);
+      setSaveName(
+        createNew
+          ? suggestNextGroupPresetName()
+          : activePresetName || suggestNextGroupPresetName()
+      );
+      setSaveNote(createNew ? "" : activePresetNote || "");
+      setSaveOpen(true);
+    },
+    [activePresetId, activePresetName, activePresetNote, groups.length, showToast]
+  );
+
+  const confirmSavePreset = useCallback(() => {
     if (!groups.length) {
       showToast("没有可保存的分组");
       return;
     }
-    persistGroups(groups);
+    const name = saveName.trim() || suggestNextGroupPresetName();
+    const ok = persistGroups(groups, {
+      name,
+      note: saveNote.trim(),
+      asNew: saveAsNew || !activePresetId,
+    });
+    if (ok) setSaveOpen(false);
+  }, [
+    activePresetId,
+    groups,
+    persistGroups,
+    saveAsNew,
+    saveName,
+    saveNote,
+    showToast,
+  ]);
+
+  const loadPreset = useCallback(
+    (preset: SavedGroupPreset) => {
+      void rebuildGroups({ preset, preferSaved: false });
+      showToast(`已加载：${preset.name}`);
+    },
+    [rebuildGroups, showToast]
+  );
+
+  const handleDeletePreset = useCallback(
+    (preset: SavedGroupPreset) => {
+      const ok = window.confirm(`确定删除存档「${preset.name}」？`);
+      if (!ok) return;
+      deleteSavedGroupPreset(preset.id);
+      refreshPresets();
+      if (activePresetId === preset.id) {
+        setActivePresetId(null);
+        setActivePresetName(null);
+        setActivePresetNote("");
+        setSavedAt(null);
+      }
+      showToast(`已删除：${preset.name}`);
+    },
+    [activePresetId, refreshPresets, showToast]
+  );
+
+  const handleSave = () => {
+    openSaveDialog(false);
+  };
+
+  const handleSaveAsNew = () => {
+    openSaveDialog(true);
   };
 
   const handleReset = () => {
@@ -537,14 +754,33 @@ export function PkRosterPage() {
         backgroundColor: "#FFF7FB",
         pixelRatio: 2,
       });
+      const tag = activePresetName || MODE_OPTIONS.find((m) => m.key === mode)?.label || mode;
       await downloadDataUrlAsFile(
         dataUrl,
-        `星嗨艺创_分组_${MODE_OPTIONS.find((m) => m.key === mode)?.label || mode}_${period}.png`
+        `星嗨艺创_分组_${tag}_${period}.png`
       );
+      showToast("图片已导出");
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleExportCsv = () => {
+    if (!groups.length) {
+      showToast("没有可导出的分组");
+      return;
+    }
+    try {
+      const csv = exportPkGroupsToCsv(groups, {
+        scoreField: scoreDisplay === "latest" ? "latestWave" : "wave",
+      });
+      const tag = activePresetName || MODE_OPTIONS.find((m) => m.key === mode)?.label || mode;
+      downloadPkGroupsCsv(`星嗨艺创_分组_${tag}_${period}_${groups.length}组.csv`, csv);
+      showToast("CSV 已导出");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -578,10 +814,12 @@ export function PkRosterPage() {
               <button
                 key={item.key}
                 type="button"
-                onClick={() => setMode(item.key)}
+                onClick={() => selectMode(item.key)}
+                disabled={building}
                 className={`rounded px-2.5 py-1 text-xs ${
                   mode === item.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
                 }`}
+                title={`按「${item.label}」自动分组`}
               >
                 {item.label}
               </button>
@@ -656,13 +894,27 @@ export function PkRosterPage() {
           <Button size="sm" variant="ghost" onClick={undo} title="撤销上一次拖拽">
             撤销
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={!groups.length} title="保存当前分组">
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={!groups.length}
+            title={activePresetId ? "覆盖当前存档或填写备注" : "保存为命名分组（可备注）"}
+          >
             <Save className="mr-1 size-3.5" />
             保存分组
           </Button>
-          <Button size="sm" onClick={() => void handleExport()} disabled={!groups.length || exporting}>
+          {activePresetId ? (
+            <Button size="sm" variant="outline" onClick={handleSaveAsNew} disabled={!groups.length} title="另存为新的命名分组">
+              另存为
+            </Button>
+          ) : null}
+          <Button size="sm" variant="outline" onClick={handleExportCsv} disabled={!groups.length} title="导出 CSV 文件">
+            <FileSpreadsheet className="mr-1 size-3.5" />
+            导出CSV
+          </Button>
+          <Button size="sm" onClick={() => void handleExport()} disabled={!groups.length || exporting} title="导出分组图片">
             {exporting ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Download className="mr-1 size-3.5" />}
-            导出
+            导出图片
           </Button>
         </div>
       </div>
@@ -675,6 +927,12 @@ export function PkRosterPage() {
           连麦 {firstStart} · 间隔 {stepMinutes} 分
           {mode !== "preset" ? ` · 每组 ${groupSize}` : ""}
         </Badge>
+        {activePresetName ? (
+          <Badge variant="outline" className="border-violet-300 text-violet-700 dark:text-violet-200">
+            存档 {activePresetName}
+            {activePresetNote ? ` · ${activePresetNote}` : ""}
+          </Badge>
+        ) : null}
         {dirty ? (
           <Badge variant="outline" className="border-amber-400 text-amber-700">
             未保存更改
@@ -694,6 +952,53 @@ export function PkRosterPage() {
           </Badge>
         )}
       </div>
+
+      {presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">已存分组</span>
+          {presets.map((preset) => {
+            const active = preset.id === activePresetId;
+            return (
+              <div key={preset.id} className="inline-flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => loadPreset(preset)}
+                  disabled={building}
+                  title={
+                    [
+                      preset.name,
+                      preset.note || "",
+                      preset.savedAt ? new Date(preset.savedAt).toLocaleString("zh-CN") : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  }
+                  className={`rounded-full px-2.5 py-1 text-xs transition ${
+                    active
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "bg-background text-muted-foreground hover:bg-muted border"
+                  }`}
+                >
+                  {preset.name}
+                  {preset.note ? (
+                    <span className={`ml-1 ${active ? "opacity-80" : "opacity-70"}`}>
+                      · {preset.note.length > 10 ? `${preset.note.slice(0, 10)}…` : preset.note}
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeletePreset(preset)}
+                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  title={`删除 ${preset.name}`}
+                >
+                  <Trash2 className="size-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {warning && (
         <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
@@ -1038,6 +1343,93 @@ export function PkRosterPage() {
                   确认导入
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border bg-background shadow-xl">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div>
+                <div className="font-semibold">{saveAsNew || !activePresetId ? "保存新分组" : "更新分组存档"}</div>
+                <div className="text-xs text-muted-foreground">可命名为分组1 / 分组2，并填写备注</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaveOpen(false)}
+                className="rounded p-1 hover:bg-muted"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-3 p-4">
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">名称</span>
+                <Input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="例如：分组1"
+                  className="h-9"
+                  autoFocus
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">备注（可选）</span>
+                <Input
+                  value={saveNote}
+                  onChange={(e) => setSaveNote(e.target.value)}
+                  placeholder="例如：周六晚场 / 试分版"
+                  className="h-9"
+                />
+              </label>
+              {activePresetId ? (
+                <div className="flex rounded-md border p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSaveAsNew(false);
+                      setSaveName(activePresetName || suggestNextGroupPresetName());
+                      setSaveNote(activePresetNote || "");
+                    }}
+                    className={`flex-1 rounded px-2.5 py-1.5 text-xs ${
+                      !saveAsNew
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    覆盖当前
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSaveAsNew(true);
+                      setSaveName(suggestNextGroupPresetName());
+                      setSaveNote("");
+                    }}
+                    className={`flex-1 rounded px-2.5 py-1.5 text-xs ${
+                      saveAsNew
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    另存为新
+                  </button>
+                </div>
+              ) : null}
+              <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                将保存 {groups.length} 组 · {MODE_OPTIONS.find((m) => m.key === mode)?.label || mode} · 连麦 {firstStart} / 间隔 {stepMinutes} 分
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t px-4 py-3">
+              <Button size="sm" variant="ghost" onClick={() => setSaveOpen(false)}>
+                取消
+              </Button>
+              <Button size="sm" onClick={confirmSavePreset} disabled={!saveName.trim()}>
+                <Save className="mr-1 size-3.5" />
+                确认保存
+              </Button>
             </div>
           </div>
         </div>
