@@ -1014,6 +1014,44 @@ test("CSV怎么导入 not fast-route as anchor profile", () => {
 });
 
 
+test("agent mode still fast-routes 第三组 preset rank", async () => {
+  const replies = [];
+  const males = [
+    { name: "浩冬", wave: 878_000 },
+    { name: "玖玉", wave: 739_000 },
+    { name: "狼赫", wave: 531_000 },
+    { name: "狼明", wave: 446_000 },
+    { name: "狼兴", wave: 415_000 },
+    { name: "狼轩", wave: 409_000 },
+    { name: "啸森", wave: 252_000 },
+    { name: "狼影", wave: 204_000 },
+  ];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-30", latestDataDate: "2026-07-30" }),
+      getPkRoster: async () => ({ males, females: [] }),
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+    agent: {
+      enableSession() {},
+      disableSession() {},
+      getPublicStatus() { return { enabled: true, configured: true }; },
+    },
+  });
+  const ctx = { fromUserId: "g3-user", conversationId: "g3-user" };
+  assert.equal(handler.modeStore.isAgent(ctx), true);
+  const result = await handler({
+    ...ctx,
+    text: "第三组",
+    items: [],
+    replyText: async (t) => { replies.push(t); },
+  });
+  assert.equal(result.handled, true);
+  assert.equal(result.via, "fast-route");
+  assert.match(replies[0] || "", /第3组总分/);
+  assert.match(replies[0] || "", /浩冬/);
+});
+
 test("preset group rank command returns sorted totals for group 5", async () => {
   const replies = [];
   const males = [

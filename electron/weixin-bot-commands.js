@@ -1139,18 +1139,21 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
         return { handled: true };
       }
 
-      // AI 模式：文本交 Agent（用户显式开启后）
+      // AI 模式：短指令可走确定性路径；其余交 Agent
       if (agentMode) {
-        if (!aiReady) {
-          await args.replyText(
-            "当前是 AI 模式，但 AI 未就绪。请配置桌面 AI，或发「纯指令」改用固定指令。"
-          );
-          return { handled: true };
+        // 「3组 / 第3组总分 / 各组」等高置信指令不依赖模型，避免 AI 慢/挂时无输出
+        const agentFast = parseBotCommand(args.text);
+        if (agentFast?.type === "preset-group-rank") {
+          const ok = await dispatchBusinessCommand(args, agentFast, deps);
+          return { handled: ok, via: "fast-route" };
         }
-        return { handled: false, via: "ai" };
+        if (aiReady) {
+          return { handled: false, via: "ai" };
+        }
+        // AI 未就绪：降级为固定指令兜底（不再只回一句“未就绪”）
       }
 
-      // 纯指令模式：只跑确定性命令
+      // 纯指令模式（或 AI 未就绪兜底）：确定性命令
       const custom = matchCustomCommand(args.text, args.settings?.customCommands);
       if (custom) {
         await handleCustomCommand(args, custom, db, renderReportPng);
@@ -1158,10 +1161,18 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       }
 
       const command = parseBotCommand(args.text);
-      if (!command) return { handled: false };
+      if (!command) {
+        if (agentMode && !aiReady) {
+          await args.replyText(
+            "当前是 AI 模式，但 AI 未就绪。请配置桌面 AI，或发「纯指令」改用固定指令。"
+          );
+          return { handled: true };
+        }
+        return { handled: false };
+      }
 
       if (command.type === "help") {
-        await args.replyText(INSTRUCTION_HELP);
+        await args.replyText(agentMode ? AGENT_HELP : INSTRUCTION_HELP);
         return { handled: true };
       }
       if (command.type === "agent-enable" || command.type === "agent-disable") {
@@ -1169,7 +1180,7 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       }
 
       const ok = await dispatchBusinessCommand(args, command, deps);
-      return { handled: ok };
+      return { handled: ok, via: agentMode && !aiReady ? "instruction-fallback" : undefined };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (typeof args.replyText === "function") {
