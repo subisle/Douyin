@@ -88,6 +88,31 @@ function formatClassicDate(date) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+/** 超过该人数导出拆成两张，避免男团日报单图过高 */
+const DAILY_REPORT_EXPORT_SPLIT_THRESHOLD = 30;
+
+function formatDailyReportPageSuffix(pageIndex, pageCount) {
+  const total = Number(pageCount) || 0;
+  const page = Number(pageIndex) || 0;
+  if (total <= 1 || page <= 0) return "";
+  return `（${page}/${total}）`;
+}
+
+function splitDailyReportRowsForExport(rows, options = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return [];
+  const threshold = Math.max(1, Number(options.threshold) || DAILY_REPORT_EXPORT_SPLIT_THRESHOLD);
+  const maxPages = Math.max(1, Math.min(2, Number(options.maxPages) || 2));
+  if (list.length <= threshold || maxPages < 2) {
+    return [{ rows: list, rankOffset: 0, pageIndex: 1, pageCount: 1 }];
+  }
+  const mid = Math.ceil(list.length / 2);
+  return [
+    { rows: list.slice(0, mid), rankOffset: 0, pageIndex: 1, pageCount: 2 },
+    { rows: list.slice(mid), rankOffset: mid, pageIndex: 2, pageCount: 2 },
+  ];
+}
+
 function appleTierColor(tier) {
   const key = String(tier || "").charAt(0).toUpperCase();
   if (key === "A") return { bg: "#FFF7E6", border: "#FDBA74", text: "#9A3412" };
@@ -152,16 +177,26 @@ function renderClassicSvg(report, options = {}) {
   const gender = report.gender === "female" ? "female" : "male";
   const genderText = gender === "male" ? "男" : "女";
   const formattedDate = formatClassicDate(date);
+  const rankOffset = Math.max(0, Number(options.rankOffset) || 0);
+  const pageIndex = Math.max(1, Number(options.pageIndex) || 1);
+  const pageCount = Math.max(1, Number(options.pageCount) || 1);
   const titleBase = getTitle(report, options, "classic");
-  const titleText = `${titleBase} ${formattedDate}`;
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleText = `${titleBase} ${formattedDate}${pageSuffix ? ` ${pageSuffix}` : ""}`;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const summary = report.summary || {};
-  const inactiveStreamers = rows.filter((row) => !row.isLive);
-  const liveRows = rows.filter((row) => row.isLive);
+  const allRows = Array.isArray(options.statsRows) && options.statsRows.length
+    ? options.statsRows
+    : rows;
+  const inactiveStreamers = allRows.filter((row) => !row.isLive);
+  const liveRows = allRows.filter((row) => row.isLive);
   const notLivePeopleCount = Number(summary.notLiveCount ?? inactiveStreamers.length) || 0;
   const notLiveDays = Number(summary.notLiveDays) || 0;
-  const hasInactive = inactiveStreamers.length > 0;
+  const showInactiveFooter = options.showInactiveFooter != null
+    ? Boolean(options.showInactiveFooter)
+    : pageCount <= 1 || pageIndex >= pageCount;
+  const hasInactive = showInactiveFooter && inactiveStreamers.length > 0;
   const maxWave = liveRows.length > 0 ? Math.max(...liveRows.map((row) => Number(row.dailyWave) || 0), 1) : 1;
 
   const width = 1440;
@@ -218,7 +253,7 @@ function renderClassicSvg(report, options = {}) {
   y += tableHeaderHeight;
 
   rows.forEach((row, index) => {
-    const rank = index + 1;
+    const rank = rankOffset + index + 1;
     const isTop3 = rank <= 3;
     const isInactive = !row.isLive;
     const fill = isInactive ? "#FEF2F2"
@@ -292,7 +327,11 @@ function renderClassicSvg(report, options = {}) {
   });
 
   parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${footerHeight}" fill="#E2E8F0"/>`);
-  const summaryText = `${genderText}主播 ${rows.length} 人 · 未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`;
+  const totalCount = allRows.length;
+  const pageCountLabel = pageCount > 1
+    ? `本页 ${rows.length} 人 · 共 ${totalCount} 人`
+    : `${genderText}主播 ${totalCount} 人`;
+  const summaryText = `${pageCountLabel} · 未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`;
   parts.push(textNode(summaryText, tablePaddingX, y + 26, {
     size: 18, fill: "#334155", weight: 700, anchor: "start",
   }));
@@ -325,14 +364,25 @@ function renderAppleSvg(report, options = {}) {
   const date = String(report.date || options.date || "");
   const gender = report.gender === "female" ? "female" : "male";
   const genderText = gender === "male" ? "男团" : "女队";
-  const titleBase = getTitle(report, options, "apple");
+  const rankOffset = Math.max(0, Number(options.rankOffset) || 0);
+  const pageIndex = Math.max(1, Number(options.pageIndex) || 1);
+  const pageCount = Math.max(1, Number(options.pageCount) || 1);
+  const titleBaseRaw = getTitle(report, options, "apple");
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleBase = pageSuffix ? `${titleBaseRaw} ${pageSuffix}` : titleBaseRaw;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const summary = report.summary || {};
-  const liveRows = rows.filter((row) => row.isLive);
-  const inactiveRows = rows.filter((row) => !row.isLive);
+  const allRows = Array.isArray(options.statsRows) && options.statsRows.length
+    ? options.statsRows
+    : rows;
+  const liveRows = allRows.filter((row) => row.isLive);
+  const inactiveRows = allRows.filter((row) => !row.isLive);
   const notLivePeopleCount = Number(summary.notLiveCount ?? inactiveRows.length) || 0;
   const notLiveDays = Number(summary.notLiveDays) || 0;
+  const showInactiveFooter = options.showInactiveFooter != null
+    ? Boolean(options.showInactiveFooter)
+    : pageCount <= 1 || pageIndex >= pageCount;
   const maxWave = liveRows.length > 0 ? Math.max(...liveRows.map((row) => Number(row.dailyWave) || 0), 1) : 1;
 
   const width = 1440;
@@ -346,7 +396,7 @@ function renderAppleSvg(report, options = {}) {
   const footerTextH = 18;
   const warnGap = 20;
   const warnH = 42;
-  const footerH = footerTextGap + footerTextH + (inactiveRows.length > 0 ? warnGap + warnH : 0);
+  const footerH = footerTextGap + footerTextH + (showInactiveFooter && inactiveRows.length > 0 ? warnGap + warnH : 0);
   const tableRowsH = rows.length * rowH + Math.max(0, rows.length - 1) * rowGap;
   const heightLogical = headerH + tableHeaderH + rowGap + tableRowsH + footerH;
   const height = heightLogical * scale;
@@ -408,7 +458,7 @@ function renderAppleSvg(report, options = {}) {
   y += tableHeaderH + rowGap;
 
   rows.forEach((row, index) => {
-    const rank = index + 1;
+    const rank = rankOffset + index + 1;
     const isInactive = !row.isLive;
     const rowFill = isInactive ? "#FFF7F7" : "#FFFFFF";
     const stroke = isInactive ? "#FEE4E2" : "#EAECF0";
@@ -483,7 +533,11 @@ function renderAppleSvg(report, options = {}) {
   });
 
   y += footerTextGap;
-  parts.push(textNode(`数据日期 ${formatAppleDate(date)} · ${genderText} ${rows.length} 人`, tableX + 8, y + 4, {
+  const totalCount = allRows.length;
+  const peopleLabel = pageCount > 1
+    ? `本页 ${rows.length}/${totalCount} 人`
+    : `${genderText} ${totalCount} 人`;
+  parts.push(textNode(`数据日期 ${formatAppleDate(date)} · ${peopleLabel}`, tableX + 8, y + 4, {
     size: 12, fill: "#667085", weight: 600, anchor: "start", family: font,
   }));
   parts.push(textNode(`未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`, tableX + tableW - 8, y + 4, {
@@ -493,7 +547,7 @@ function renderAppleSvg(report, options = {}) {
     size: 12, fill: "#98A2B3", weight: 700, anchor: "middle", family: font,
   }));
 
-  if (inactiveRows.length > 0) {
+  if (showInactiveFooter && inactiveRows.length > 0) {
     const warnY = y + warnGap;
     parts.push(`<rect x="${tableX}" y="${warnY}" width="${tableW}" height="${warnH}" fill="#FFF7F7" stroke="#FEE4E2"/>`);
     const inactiveText = inactiveRows.map((row) => row.name).join("、");
@@ -513,7 +567,7 @@ function renderAppleSvg(report, options = {}) {
  * - female -> 样式一 (classic)
  * No browser dependency so commands continue to work while another page is open.
  */
-async function renderDailyReportPng(report, options = {}) {
+async function renderOneDailyReportPng(report, options = {}) {
   const rows = normalizeRows(report);
   if (rows.length === 0) throw new Error("该日期没有可生成的报告数据");
   const gender = report.gender === "female" ? "female" : "male";
@@ -527,6 +581,74 @@ async function renderDailyReportPng(report, options = {}) {
     .toBuffer();
 }
 
+/**
+ * 单张兼容接口：默认仍渲染「当前传入的全部 rows」为一张图。
+ * 若 options.split === true，则返回第一页（请优先用 renderDailyReportPngPages）。
+ */
+async function renderDailyReportPng(report, options = {}) {
+  if (options && options.split === true) {
+    const pages = await renderDailyReportPngPages(report, options);
+    if (!pages.length) throw new Error("该日期没有可生成的报告数据");
+    return pages[0].buffer;
+  }
+  return renderOneDailyReportPng(report, options);
+}
+
+/**
+ * 人数过多时拆成最多两张 PNG（与桌面端每日报告导出一致）。
+ * @returns {Promise<Array<{ buffer: Buffer, pageIndex: number, pageCount: number, fileNameSuffix: string }>>}
+ */
+async function renderDailyReportPngPages(report, options = {}) {
+  const allRows = normalizeRows(report);
+  if (!allRows.length) throw new Error("该日期没有可生成的报告数据");
+  const gender = report.gender === "female" ? "female" : "male";
+  const pages = splitDailyReportRowsForExport(allRows, {
+    threshold: options.threshold,
+    maxPages: options.maxPages,
+  });
+  const out = [];
+  for (const page of pages) {
+    const buffer = await renderOneDailyReportPng(
+      { ...report, gender, rows: page.rows },
+      {
+        ...options,
+        rankOffset: page.rankOffset,
+        pageIndex: page.pageIndex,
+        pageCount: page.pageCount,
+        statsRows: allRows,
+      }
+    );
+    out.push({
+      buffer,
+      pageIndex: page.pageIndex,
+      pageCount: page.pageCount,
+      fileNameSuffix: page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * 统一产出「可发送/可导出」的日报图片列表。
+ * - 传入真实 renderDailyReportPng / 未传自定义渲染器：自动按人数拆最多 2 页
+ * - 传入测试 mock 等自定义单图渲染器：保持单张兼容
+ */
+async function toDailyReportImagePages(renderFn, report, options = {}) {
+  if (!renderFn || renderFn === renderDailyReportPng) {
+    return renderDailyReportPngPages(report, options);
+  }
+  if (typeof renderFn.renderPages === "function") {
+    return renderFn.renderPages(report, options);
+  }
+  const buffer = await renderFn(report, options);
+  return [{
+    buffer,
+    pageIndex: 1,
+    pageCount: 1,
+    fileNameSuffix: "",
+  }];
+}
+
 module.exports = {
   escapeXml,
   formatWave,
@@ -534,7 +656,11 @@ module.exports = {
   formatDurationShort,
   truncateText,
   resolveReportStyle,
+  splitDailyReportRowsForExport,
+  DAILY_REPORT_EXPORT_SPLIT_THRESHOLD,
   renderClassicSvg,
   renderAppleSvg,
   renderDailyReportPng,
+  renderDailyReportPngPages,
+  toDailyReportImagePages,
 };

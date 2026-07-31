@@ -25,6 +25,7 @@ import {
   drawReportToCanvas,
   formatDailyWaveLabel,
   formatMonthNotLiveDaysLabel,
+  splitDailyReportRowsForExport,
   ALL_COLUMNS,
   DEFAULT_VISIBLE_COLUMNS,
   type ColumnKey,
@@ -269,25 +270,51 @@ export function DailyReportPage() {
   const reportStyle = reportStyles[gender];
   const dailyWaveLabel = formatDailyWaveLabel(date);
 
-  const drawSelectedReport = useCallback((canvas: HTMLCanvasElement) => {
-    const options = {
-      date,
-      rows,
-      gender,
-      customTitle: currentReportTitle,
-      subtitle: `Data Report • ${date}`,
-      notLiveCount: report?.summary.notLiveCount ?? 0,
-      notLiveDays: report?.summary.notLiveDays ?? 0,
-      scale: 2,
-      visibleColumns,
+  const drawSelectedReport = useCallback(
+    (
+      canvas: HTMLCanvasElement,
+      page?: {
+        rows: typeof rows;
+        rankOffset?: number;
+        pageIndex?: number;
+        pageCount?: number;
+      }
+    ) => {
+      const pageRows = page?.rows ?? rows;
+      const options = {
+        date,
+        rows: pageRows,
+        gender,
+        customTitle: currentReportTitle,
+        subtitle: `Data Report • ${date}`,
+        notLiveCount: report?.summary.notLiveCount ?? 0,
+        notLiveDays: report?.summary.notLiveDays ?? 0,
+        scale: 2,
+        visibleColumns,
+        columnWidths,
+        rankOffset: page?.rankOffset ?? 0,
+        pageIndex: page?.pageIndex ?? 1,
+        pageCount: page?.pageCount ?? 1,
+        statsRows: rows,
+      };
+      if (reportStyle === "apple") {
+        drawAppleReportToCanvas(canvas, options);
+        return;
+      }
+      drawReportToCanvas(canvas, options);
+    },
+    [
       columnWidths,
-    };
-    if (reportStyle === "apple") {
-      drawAppleReportToCanvas(canvas, options);
-      return;
-    }
-    drawReportToCanvas(canvas, options);
-  }, [columnWidths, currentReportTitle, date, gender, report?.summary.notLiveCount, report?.summary.notLiveDays, reportStyle, rows, visibleColumns]);
+      currentReportTitle,
+      date,
+      gender,
+      report?.summary.notLiveCount,
+      report?.summary.notLiveDays,
+      reportStyle,
+      rows,
+      visibleColumns,
+    ]
+  );
 
   const saveCurrentTitle = () => {
     const title = titleDraft.trim() || DEFAULT_REPORT_TITLE;
@@ -385,9 +412,22 @@ export function DailyReportPage() {
     try {
       const genderText = gender === "male" ? "男" : "女";
       const styleText = reportStyle === "apple" ? "样式二" : "样式一";
-      await downloadCanvasAsPng(canvas, `${date}_${genderText}_${styleText}_${rows.length}人.png`, () => {
-        drawSelectedReport(canvas);
-      });
+      // 人数过多时自动拆成两张（预览仍是完整一页，仅导出分页）
+      const pages = splitDailyReportRowsForExport(rows);
+      for (const page of pages) {
+        const pageTag =
+          page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "";
+        const filename = `${date}_${genderText}_${styleText}_${rows.length}人${pageTag}.png`;
+        await downloadCanvasAsPng(canvas, filename, () => {
+          drawSelectedReport(canvas, page);
+        });
+        // 连续多次下载时稍等，避免部分浏览器吞掉第二次 click
+        if (pages.length > 1) {
+          await new Promise((r) => window.setTimeout(r, 350));
+        }
+      }
+      // 导出后恢复完整预览
+      drawSelectedReport(canvas);
     } catch (e) {
       console.error("导出图片失败", e);
       alert("导出失败: " + String(e));

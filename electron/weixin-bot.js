@@ -11,6 +11,7 @@ const {
   uploadMediaBuffer,
 } = require("./weixin-bot-media");
 const { createSessionQueues } = require("./weixin-bot-mode");
+const { toDailyReportImagePages } = require("./weixin-bot-report");
 const {
   DEFAULT_DAILY_REPORT_PUSH,
   normalizeDailyReportPushSettings,
@@ -2178,12 +2179,17 @@ class WeixinBotService extends EventEmitter {
     for (const [gender, report] of [["male", maleReport], ["female", femaleReport]]) {
       if (!report?.rows?.length) continue;
       try {
-        const buffer = await renderReportPng(report, {});
-        if (buffer?.length) {
+        // 人数过多时自动拆成最多两张，与桌面端/指令日报一致
+        const pages = await toDailyReportImagePages(renderReportPng, report, {});
+        const label = gender === "female" ? "女队" : "男团";
+        for (const page of pages) {
+          if (!page?.buffer?.length) continue;
           images.push({
             gender,
-            buffer,
-            fileName: `${date}_${gender === "female" ? "女队" : "男团"}_每日报告.png`,
+            buffer: page.buffer,
+            fileName: `${date}_${label}_每日报告${page.fileNameSuffix || ""}.png`,
+            pageIndex: page.pageIndex,
+            pageCount: page.pageCount,
           });
         }
       } catch (error) {

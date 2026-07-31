@@ -296,6 +296,58 @@ export interface DrawReportOptions {
   subtitle?: string;
   notLiveCount?: number;
   notLiveDays?: number;
+  /** 分页时全局排名起点（0-based），第 2 页从中段继续而不是从 1 */
+  rankOffset?: number;
+  /** 当前页码（1-based），仅 pageCount>1 时显示在标题 */
+  pageIndex?: number;
+  /** 总页数 */
+  pageCount?: number;
+  /**
+   * 全量行（分页时传入完整名单）。
+   * 用于全局 maxWave、未开播统计；不传则退回当前 rows。
+   */
+  statsRows?: DailyReportRow[];
+  /** 是否绘制未开播页脚；默认仅末页或未分页时绘制 */
+  showInactiveFooter?: boolean;
+}
+
+/** 超过该人数时，导出自动拆成上下两张，避免单图过高 */
+export const DAILY_REPORT_EXPORT_SPLIT_THRESHOLD = 30;
+
+export type DailyReportExportPage = {
+  rows: DailyReportRow[];
+  rankOffset: number;
+  pageIndex: number;
+  pageCount: number;
+};
+
+/**
+ * 将日报名单拆成导出页。超过阈值时固定拆成 2 页（约一半一半）。
+ * 预览仍可用全量 rows；仅导出走分页。
+ */
+export function splitDailyReportRowsForExport(
+  rows: DailyReportRow[],
+  options?: { threshold?: number; maxPages?: number }
+): DailyReportExportPage[] {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return [];
+  const threshold = Math.max(1, Number(options?.threshold) || DAILY_REPORT_EXPORT_SPLIT_THRESHOLD);
+  const maxPages = Math.max(1, Math.min(2, Number(options?.maxPages) || 2));
+  if (list.length <= threshold || maxPages < 2) {
+    return [{ rows: list, rankOffset: 0, pageIndex: 1, pageCount: 1 }];
+  }
+  const mid = Math.ceil(list.length / 2);
+  return [
+    { rows: list.slice(0, mid), rankOffset: 0, pageIndex: 1, pageCount: 2 },
+    { rows: list.slice(mid), rankOffset: mid, pageIndex: 2, pageCount: 2 },
+  ];
+}
+
+export function formatDailyReportPageSuffix(pageIndex?: number, pageCount?: number): string {
+  const total = Number(pageCount) || 0;
+  const page = Number(pageIndex) || 0;
+  if (total <= 1 || page <= 0) return "";
+  return `（${page}/${total}）`;
 }
 
 export function drawReportToCanvas(
@@ -315,6 +367,10 @@ export function drawReportToCanvas(
     columnWidths = {},
     notLiveCount,
     notLiveDays = 0,
+    rankOffset = 0,
+    pageIndex = 1,
+    pageCount = 1,
+    statsRows,
   } = opts;
 
   const parts = date.split("-");
@@ -325,17 +381,21 @@ export function drawReportToCanvas(
 
   const genderText = gender === "male" ? "男" : "女";
   const titleBase = customTitle.trim() || "星嗨艺创主播数据统计";
-  const titleText = `${titleBase} ${formattedDate}`;
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleText = `${titleBase} ${formattedDate}${pageSuffix ? ` ${pageSuffix}` : ""}`;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const tablePaddingX = 20 * scale;
   const headerHeight = 54 * scale;
   const tableHeaderHeight = 32 * scale;
   const rowHeight = 38 * scale;
-  const inactiveStreamers = rows.filter((r) => !r.isLive);
+  const allRows = statsRows && statsRows.length ? statsRows : rows;
+  const inactiveStreamers = allRows.filter((r) => !r.isLive);
   const notLivePeopleCount = notLiveCount ?? inactiveStreamers.length;
-  const hasInactive = inactiveStreamers.length > 0;
-  const liveRows = rows.filter((r) => r.isLive);
+  const showInactiveFooter =
+    opts.showInactiveFooter ?? (pageCount <= 1 || pageIndex >= pageCount);
+  const hasInactive = showInactiveFooter && inactiveStreamers.length > 0;
+  const liveRows = allRows.filter((r) => r.isLive);
 
   ctx.font = `bold ${22 * scale}px sans-serif`;
   const titleW = ctx.measureText(titleText).width;
@@ -402,7 +462,7 @@ export function drawReportToCanvas(
   const safeMaxWave = maxWave > 0 ? maxWave : 1;
 
   rows.forEach((row, index) => {
-    const rank = index + 1;
+    const rank = rankOffset + index + 1;
     const isTop3 = rank <= 3;
     const isInactive = !row.isLive;
 
@@ -529,7 +589,10 @@ export function drawReportToCanvas(
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.font = `bold ${18 * scale}px sans-serif`;
-  const summaryText = `${genderText}主播 ${rows.length} 人 · 未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`;
+  const totalCount = allRows.length;
+  const pageCountLabel =
+    pageCount > 1 ? `本页 ${rows.length} 人 · 共 ${totalCount} 人` : `${genderText}主播 ${totalCount} 人`;
+  const summaryText = `${pageCountLabel} · 未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`;
   ctx.fillText(truncateCanvasText(ctx, summaryText, containerW - tablePaddingX * 2), tablePaddingX, y + 26 * scale);
   ctx.font = `${12 * scale}px sans-serif`;
   ctx.fillStyle = "#64748B";
@@ -669,16 +732,25 @@ export function drawAppleReportToCanvas(
     columnWidths = {},
     notLiveCount,
     notLiveDays = 0,
+    rankOffset = 0,
+    pageIndex = 1,
+    pageCount = 1,
+    statsRows,
   } = opts;
   const font = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif';
   const mono = '"SF Mono", "Menlo", "Consolas", monospace';
-  const titleBase = customTitle.trim() || "薇笑传媒主播数据统计"; // classic / 女队默认
+  const titleBaseRaw = customTitle.trim() || "薇笑传媒主播数据统计"; // classic / 女队默认
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleBase = pageSuffix ? `${titleBaseRaw} ${pageSuffix}` : titleBaseRaw;
   const genderText = gender === "male" ? "男团" : "女队";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
-  const liveRows = rows.filter((r) => r.isLive);
-  const inactiveRows = rows.filter((r) => !r.isLive);
+  const allRows = statsRows && statsRows.length ? statsRows : rows;
+  const liveRows = allRows.filter((r) => r.isLive);
+  const inactiveRows = allRows.filter((r) => !r.isLive);
   const notLivePeopleCount = notLiveCount ?? inactiveRows.length;
+  const showInactiveFooter =
+    opts.showInactiveFooter ?? (pageCount <= 1 || pageIndex >= pageCount);
   const maxWave = liveRows.length > 0 ? Math.max(...liveRows.map((r) => r.dailyWave)) : 1;
 
   const pagePad = 0;
@@ -691,7 +763,10 @@ export function drawAppleReportToCanvas(
   const footerTextH = 18 * scale;
   const warnGap = 20 * scale;
   const warnH = 42 * scale;
-  const footerH = footerTextGap + footerTextH + (inactiveRows.length > 0 ? warnGap + warnH : 0);
+  const footerH =
+    footerTextGap +
+    footerTextH +
+    (showInactiveFooter && inactiveRows.length > 0 ? warnGap + warnH : 0);
 
   const activeColumnCount = getVisibleColumnDefinitions(
     visibleColumns,
@@ -781,7 +856,7 @@ export function drawAppleReportToCanvas(
   y += tableHeaderH + rowGap;
 
   rows.forEach((row, index) => {
-    const rank = index + 1;
+    const rank = rankOffset + index + 1;
     const isInactive = !row.isLive;
     const rowFill = isInactive ? "#FFF7F7" : "#FFFFFF";
     ctx.fillStyle = rowFill;
@@ -940,7 +1015,10 @@ export function drawAppleReportToCanvas(
   ctx.font = `600 ${12 * scale}px ${font}`;
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText(`数据日期 ${formatAppleDate(date)} · ${genderText} ${rows.length} 人`, tableX + 8 * scale, y);
+  const totalCount = allRows.length;
+  const peopleLabel =
+    pageCount > 1 ? `本页 ${rows.length}/${totalCount} 人` : `${genderText} ${totalCount} 人`;
+  ctx.fillText(`数据日期 ${formatAppleDate(date)} · ${peopleLabel}`, tableX + 8 * scale, y);
   ctx.textAlign = "right";
   ctx.fillText(`未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`, tableX + tableW - 8 * scale, y);
   ctx.textAlign = "center";
@@ -948,7 +1026,7 @@ export function drawAppleReportToCanvas(
   ctx.font = `700 ${12 * scale}px ${font}`;
   ctx.fillText("内部数据 · 请勿外传", tableX + tableW / 2, y);
 
-  if (inactiveRows.length > 0) {
+  if (showInactiveFooter && inactiveRows.length > 0) {
     const warnY = y + warnGap;
     ctx.fillStyle = "#FFF7F7";
     ctx.beginPath();

@@ -12,6 +12,7 @@ const {
 } = require("./weixin-bot-mode");
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const { matchDailyPushCommand } = require("./weixin-bot-daily-push");
+const { toDailyReportImagePages } = require("./weixin-bot-report");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -519,8 +520,15 @@ async function sendOneGenderReport(args, date, gender, db, renderReportPng) {
   await args.replyText(caption);
   try {
     // 标题交给渲染层按性别默认（男团星嗨艺创 / 女队薇笑传媒），与软件日报一致
-    const image = await renderReportPng(report, {});
-    await args.replyImage({ buffer: image, fileName: `${date}_${label}_每日报告.png` });
+    // 人数过多时自动拆成最多两张（与桌面端导出一致）
+    const pages = await toDailyReportImagePages(renderReportPng, report, {});
+    for (const page of pages) {
+      const suffix = page.fileNameSuffix || "";
+      await args.replyImage({
+        buffer: page.buffer,
+        fileName: `${date}_${label}_每日报告${suffix}.png`,
+      });
+    }
     return true;
   } catch (error) {
     await args.replyText(`${label}报告图片生成失败：${error instanceof Error ? error.message : String(error)}`);

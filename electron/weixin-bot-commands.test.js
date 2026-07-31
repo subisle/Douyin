@@ -21,7 +21,13 @@ const {
   encryptAesEcb,
   uploadMediaBuffer,
 } = require("./weixin-bot-media");
-const { renderDailyReportPng } = require("./weixin-bot-report");
+const {
+  renderDailyReportPng,
+  renderDailyReportPngPages,
+  splitDailyReportRowsForExport,
+  DAILY_REPORT_EXPORT_SPLIT_THRESHOLD,
+  toDailyReportImagePages,
+} = require("./weixin-bot-report");
 
 function arrayBufferOf(buffer) {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
@@ -310,6 +316,124 @@ test("daily report style defaults to apple for male and classic for female", asy
   assert.equal(femaleMeta.width, 1440);
   assert.notEqual(maleMeta.height, femaleMeta.height);
 });
+
+test("splitDailyReportRowsForExport halves long rosters into two pages", () => {
+  const short = Array.from({ length: DAILY_REPORT_EXPORT_SPLIT_THRESHOLD }, (_, i) => ({ name: `A${i}` }));
+  const one = splitDailyReportRowsForExport(short);
+  assert.equal(one.length, 1);
+  assert.equal(one[0].pageCount, 1);
+  assert.equal(one[0].rows.length, DAILY_REPORT_EXPORT_SPLIT_THRESHOLD);
+
+  const long = Array.from({ length: 56 }, (_, i) => ({ name: `B${i}`, dailyWave: 100 - i }));
+  const two = splitDailyReportRowsForExport(long);
+  assert.equal(two.length, 2);
+  assert.equal(two[0].rows.length, 28);
+  assert.equal(two[1].rows.length, 28);
+  assert.equal(two[0].rankOffset, 0);
+  assert.equal(two[1].rankOffset, 28);
+  assert.equal(two[0].pageIndex, 1);
+  assert.equal(two[1].pageIndex, 2);
+  assert.equal(two[1].pageCount, 2);
+});
+
+test("renderDailyReportPngPages returns two PNGs for long male roster", async () => {
+  const makeRow = (i, live = true) => ({
+    name: `主播${i}`,
+    isLive: live,
+    dailyWave: live ? Math.max(0, 500000 - i * 1000) : 0,
+    totalWave: 1000000 - i * 1000,
+    dailyDuration: live ? 120 : 0,
+    masterName: i % 3 === 0 ? "师傅甲" : "师傅乙",
+    tier: "A",
+    notLiveDays: live ? 0 : 2,
+  });
+  const rows = Array.from({ length: 56 }, (_, i) => makeRow(i, i < 50));
+  const pages = await renderDailyReportPngPages({
+    date: "2026-07-30",
+    gender: "male",
+    summary: { total: 56, notLiveCount: 6, notLiveDays: 12 },
+    rows,
+  });
+  assert.equal(pages.length, 2);
+  assert.equal(pages[0].fileNameSuffix, "_1of2");
+  assert.equal(pages[1].fileNameSuffix, "_2of2");
+  for (const page of pages) {
+    assert.equal(page.buffer.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  }
+  // 单图兼容接口仍返回一张（不自动 split）
+  const single = await renderDailyReportPng({
+    date: "2026-07-30",
+    gender: "male",
+    summary: { total: 56, notLiveCount: 6, notLiveDays: 12 },
+    rows,
+  });
+  assert.equal(single.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+
+  // toDailyReportImagePages：真实渲染器走分页
+  const viaHelper = await toDailyReportImagePages(renderDailyReportPng, {
+    date: "2026-07-30",
+    gender: "male",
+    summary: { total: 56, notLiveCount: 6, notLiveDays: 12 },
+    rows,
+  });
+  assert.equal(viaHelper.length, 2);
+
+  // mock 保持单张
+  const viaMock = await toDailyReportImagePages(async () => Buffer.from("PNG-MOCK"), {
+    date: "2026-07-30",
+    gender: "male",
+    rows,
+  });
+  assert.equal(viaMock.length, 1);
+  assert.deepEqual(viaMock[0].buffer, Buffer.from("PNG-MOCK"));
+});
+
+test("report command with long male roster sends two images", async () => {
+  const replies = [];
+  const images = [];
+  const longRows = Array.from({ length: 56 }, (_, i) => ({
+    name: `甲${i}`,
+    isLive: true,
+    dailyWave: 100,
+    totalWave: 100,
+    dailyDuration: 10,
+  }));
+  // 轻量 mock：挂 renderPages，走与真实渲染器相同的分页协议
+  const light = async () => Buffer.from("PNG");
+  light.renderPages = async (report) => {
+    const pages = splitDailyReportRowsForExport(report.rows || []);
+    return pages.map((page) => ({
+      buffer: Buffer.from(`PNG-${report.gender}-${page.pageIndex}`),
+      pageIndex: page.pageIndex,
+      pageCount: page.pageCount,
+      fileNameSuffix: page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "",
+    }));
+  };
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: longRows.length, notLiveCount: 0, notLiveDays: 0 },
+        rows: longRows,
+      }),
+    },
+    renderReportPng: light,
+  });
+  await handler({
+    text: "男团每日报告",
+    items: [{ type: 1, text_item: { text: "男团每日报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+  });
+  assert.equal(images.length, 2);
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告_1of2.png");
+  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_2of2.png");
+  assert.match(replies[0], /56 人/);
+});
+
 
 test("command handler ignores a filename date and imports to yesterday by default", async () => {
   const csv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\nanchor-b,乙,800,2\n", "utf8");

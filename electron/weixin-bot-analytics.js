@@ -1,5 +1,7 @@
 "use strict";
 
+const { toDailyReportImagePages } = require("./weixin-bot-report");
+
 /**
  * Shared analytics for Weixin bot commands + agent skills (P0).
  * Keep deterministic; no LLM; no Douyin crawl.
@@ -544,14 +546,24 @@ function createWeixinAnalytics({ db, renderReportPng = null } = {}) {
         errors.push(`${asOfDate} 没有${label}数据`);
         continue;
       }
-      const buffer = await renderReportPng(report, { title: title || undefined });
-      artifacts.push({
-        kind: "image",
-        buffer,
-        fileName: `${asOfDate}_${label}_每日报告.png`,
-        gender: team,
-        meta: { total: report.rows.length, notLiveCount: report.summary?.notLiveCount || 0 },
+      // 人数过多时自动拆成最多两张
+      const pages = await toDailyReportImagePages(renderReportPng, report, {
+        title: title || undefined,
       });
+      for (const page of pages) {
+        artifacts.push({
+          kind: "image",
+          buffer: page.buffer,
+          fileName: `${asOfDate}_${label}_每日报告${page.fileNameSuffix || ""}.png`,
+          gender: team,
+          meta: {
+            total: report.rows.length,
+            notLiveCount: report.summary?.notLiveCount || 0,
+            pageIndex: page.pageIndex,
+            pageCount: page.pageCount,
+          },
+        });
+      }
     }
     if (!artifacts.length) {
       return { ok: false, error: errors.join("；") || "没有可导出的报告" };
