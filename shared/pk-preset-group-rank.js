@@ -2,7 +2,8 @@
 
 /**
  * 内置小组赛：按组输出成员「总分」排名文案。
- * 数据由调用方注入（花名册/日报），本模块做匹配、全库名次、距前10/前20分差与格式化。
+ * 数据由调用方注入（花名册/日报），本模块做匹配、全库名次、动态档位分差与格式化。
+ * 档位：前10 / 前20 / 前30 / 前50 / 前100（按名次就近展示，避免全员都写前20）。
  */
 
 const {
@@ -27,7 +28,9 @@ const CN_NUM = Object.freeze({
   7: 7,
 });
 
-const DEFAULT_GAP_TARGETS = Object.freeze([10, 20]);
+const MILESTONE_TIERS = Object.freeze([10, 20, 30, 50, 100]);
+/** @deprecated 兼容旧调用；实际展示用 pickDisplayGapPlaces 按名次挑选 */
+const DEFAULT_GAP_TARGETS = MILESTONE_TIERS;
 
 function formatWaveShort(value) {
   const number = Number(value) || 0;
@@ -246,37 +249,67 @@ function buildPresetGroupRank(groupNo, waveSource, options = {}) {
 }
 
 /**
- * 单行附加信息：全库名次 + 距前10/前20
+ * 按总榜名次挑选要展示的档位（就近，不全员死写前20）。
+ * - #8  → 前10
+ * - #15 → 前10 + 前20（已进前20）
+ * - #28 → 前10 + 前20
+ * - #35 → 前10 + 前30
+ * - #55 → 前10 + 前50
+ * - #120 → 前10 + 前100
+ * @param {number|null} overallRank
+ * @param {number[]} [tiers]
+ * @returns {number[]}
+ */
+function pickDisplayGapPlaces(overallRank, tiers = MILESTONE_TIERS) {
+  const rank = Number(overallRank) || 0;
+  const list = (Array.isArray(tiers) && tiers.length ? tiers : MILESTONE_TIERS)
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .sort((a, b) => a - b);
+  if (!rank) return list.slice(0, 2);
+  if (rank <= 10) return [10];
+
+  // 最近未进入的档：最大的 t < rank（且 rank > t）
+  let nearest = list[0] || 10;
+  for (const t of list) {
+    if (rank > t) nearest = t;
+  }
+
+  const places = [10];
+  if (nearest !== 10) places.push(nearest);
+  // 仅掉出前10、仍在前20内：补「已进前20」
+  if (nearest === 10) {
+    const nextInside = list.find((t) => t > 10 && rank <= t);
+    if (nextInside) places.push(nextInside);
+  }
+  return places;
+}
+
+/**
+ * 单行附加信息：全库名次 + 动态档位分差
  * 例：#28 距前10差12.3万 距前20差3.1万
  *     #8 已进前10
  *     #15 距前10差2.0万 已进前20
+ *     #55 距前10差x 距前50差y
  */
-function formatGapSuffix(row, gapTargets = DEFAULT_GAP_TARGETS) {
+function formatGapSuffix(row, gapTargets = MILESTONE_TIERS) {
   if (row?.missing) return "无数据";
-  const parts = [];
-  if (row.overallRank) parts.push(`#${row.overallRank}`);
+  const rank = Number(row.overallRank) || 0;
+  if (rank > 0 && rank <= 10) {
+    return `#${rank} 已进前10`;
+  }
 
-  const targets = gapTargets.length ? gapTargets : DEFAULT_GAP_TARGETS;
-  for (const place of targets) {
-    const gap = row.gaps?.[place];
-    if (gap == null) continue;
-    if (row.overallRank && row.overallRank <= place) {
-      parts.push(`已进前${place}`);
-    } else {
-      parts.push(`距前${place}差${formatWaveShort(gap)}`);
-    }
-  }
-  // 已进前10 时不必再写已进前20（更干净）
-  if (row.overallRank && row.overallRank <= 10) {
-    return [`#${row.overallRank}`, "已进前10"].join(" ");
-  }
-  // 重新组装：#名次 + 未达成的差距 + 已进前20（若适用）
+  const allTargets = (Array.isArray(gapTargets) && gapTargets.length ? gapTargets : MILESTONE_TIERS)
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const targets = pickDisplayGapPlaces(rank || null, allTargets);
+
   const out = [];
-  if (row.overallRank) out.push(`#${row.overallRank}`);
+  if (rank) out.push(`#${rank}`);
   for (const place of targets) {
     const gap = row.gaps?.[place];
-    if (gap == null) continue;
-    if (row.overallRank && row.overallRank <= place) {
+    if (gap == null && !(rank && rank <= place)) continue;
+    if (rank && rank <= place) {
       if (place !== 10) out.push(`已进前${place}`);
     } else {
       out.push(`距前${place}差${formatWaveShort(gap)}`);
@@ -326,6 +359,7 @@ function formatAllPresetGroupRanksText(waveSource, options = {}) {
 
 module.exports = {
   CN_NUM,
+  MILESTONE_TIERS,
   DEFAULT_GAP_TARGETS,
   formatWaveShort,
   parseGroupNoToken,
@@ -335,6 +369,7 @@ module.exports = {
   toWaveMap,
   buildOverallLeaderboard,
   gapToPlace,
+  pickDisplayGapPlaces,
   buildPresetGroupRank,
   formatGapSuffix,
   formatPresetGroupRankText,

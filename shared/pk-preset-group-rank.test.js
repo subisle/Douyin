@@ -6,9 +6,11 @@ const {
   parsePresetGroupRankCommand,
   buildPresetGroupRank,
   formatPresetGroupRankText,
+  formatGapSuffix,
   groupStartTime,
   getPresetGroupNames,
   gapToPlace,
+  pickDisplayGapPlaces,
 } = require("./pk-preset-group-rank");
 
 test("parsePresetGroupRankCommand accepts 5组 / 第5组总分 / 各组", () => {
@@ -49,25 +51,33 @@ test("gapToPlace is zero inside target and positive outside", () => {
   assert.equal(gapToPlace(150, 28, 20, 150), 0);
 });
 
-test("build + format includes overall rank and gaps to top10/top20", () => {
+test("pickDisplayGapPlaces adapts by overall rank", () => {
+  assert.deepEqual(pickDisplayGapPlaces(8), [10]);
+  assert.deepEqual(pickDisplayGapPlaces(15), [10, 20]);
+  assert.deepEqual(pickDisplayGapPlaces(28), [10, 20]);
+  assert.deepEqual(pickDisplayGapPlaces(35), [10, 30]);
+  assert.deepEqual(pickDisplayGapPlaces(55), [10, 50]);
+  assert.deepEqual(pickDisplayGapPlaces(120), [10, 100]);
+});
+
+test("build + format uses adaptive milestones (55→前50, 28→前20)", () => {
   const names = getPresetGroupNames(1);
   assert.ok(names.includes("啸辰"));
 
-  // 造 28 人榜：第10=500000，第20=300000；狼瑞故意设为第28附近
+  // 造 120 人榜，覆盖前50/前100 档
   const wave = {};
-  for (let i = 1; i <= 30; i += 1) {
-    wave[`占位${String(i).padStart(2, "0")}`] = 1_000_000 - i * 10_000;
+  for (let i = 1; i <= 120; i += 1) {
+    wave[`占位${String(i).padStart(3, "0")}`] = 2_000_000 - i * 10_000;
   }
-  // 覆盖组员
   Object.assign(wave, {
-    啸辰: 1_085_399, // 应很靠前
-    狼腾: 542_417,
-    浩龙: 269_917,
-    狼凯: 242_200,
-    狼佑: 140_406,
-    浩泽: 140_084,
-    狼哲: 108_877,
-    狼瑞: 32_942, // 很靠后
+    啸辰: 2_100_000, // 很靠前
+    狼腾: 1_500_000, // ~#51 → 前50
+    浩龙: 1_200_000,
+    浩杰: 900_000,
+    狼佑: 700_000,
+    浩泽: 500_000,
+    狼哲: 300_000,
+    狼瑞: 50_000, // 很靠后 → 前100
   });
 
   const rank = buildPresetGroupRank(1, wave);
@@ -76,15 +86,41 @@ test("build + format includes overall rank and gaps to top10/top20", () => {
   assert.ok(rank.rows[0].overallRank <= 10);
   assert.equal(rank.rows[0].gapTop10, 0);
 
+  const near50 = rank.rows.find((r) => r.name === "狼腾");
+  assert.ok(near50);
+  assert.ok(near50.overallRank > 50, `expected 狼腾 rank>50 got ${near50.overallRank}`);
+  assert.ok((near50.gaps?.[50] ?? 0) > 0);
+
   const last = rank.rows.find((r) => r.name === "狼瑞");
   assert.ok(last);
-  assert.ok(last.overallRank > 20);
+  assert.ok(last.overallRank > 100, `expected 狼瑞 rank>100 got ${last.overallRank}`);
   assert.ok(last.gapTop10 > 0);
-  assert.ok(last.gapTop20 > 0);
+  assert.ok((last.gaps?.[100] ?? 0) > 0);
 
   const text = formatPresetGroupRankText(rank, { asOfDate: "2026-07-30" });
   assert.match(text, /第1组总分 · 08:15 · 截至 2026-07-30/);
   assert.match(text, /啸辰 .*已进前10/);
+  assert.match(text, /狼腾 .*距前50差/);
+  assert.doesNotMatch(text, /狼腾 .*距前20差/);
   assert.match(text, /狼瑞 .*距前10差/);
-  assert.match(text, /狼瑞 .*距前20差/);
+  assert.match(text, /狼瑞 .*距前100差/);
+  assert.doesNotMatch(text, /狼瑞 .*距前20差/);
+
+  // 中段名次仍展示前20
+  const midSuffix = formatGapSuffix({
+    overallRank: 28,
+    gaps: { 10: 123000, 20: 31000, 30: 0, 50: 0, 100: 0 },
+  });
+  assert.match(midSuffix, /#28/);
+  assert.match(midSuffix, /距前10差/);
+  assert.match(midSuffix, /距前20差/);
+  assert.doesNotMatch(midSuffix, /距前50差/);
+
+  const farSuffix = formatGapSuffix({
+    overallRank: 55,
+    gaps: { 10: 400000, 20: 300000, 30: 200000, 50: 80000, 100: 0 },
+  });
+  assert.match(farSuffix, /#55/);
+  assert.match(farSuffix, /距前50差/);
+  assert.doesNotMatch(farSuffix, /距前20差/);
 });
