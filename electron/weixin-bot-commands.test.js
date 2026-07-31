@@ -952,7 +952,7 @@ test("AI not ready still runs deterministic commands as fallback", async () => {
   assert.notEqual(report.via, "fast-route");
 });
 
-test("退出客服 clears memory but keeps agent preference", async () => {
+test("退出客服 switches to instruction mode", async () => {
   const replies = [];
   let disabled = false;
   const handler = createWeixinCommandHandler({
@@ -972,11 +972,11 @@ test("退出客服 clears memory but keeps agent preference", async () => {
     replyText: async (t) => { replies.push(t); },
   });
   assert.equal(disabled, true);
-  assert.equal(handler.modeStore.isAgent(ctx), true);
-  assert.match(replies.at(-1), /清空|智能对话|智能模式/);
+  assert.equal(handler.modeStore.isAgent(ctx), false);
+  assert.match(replies.at(-1), /纯指令模式|固定指令/);
 });
 
-test("清除习惯 clears profile only via agent.clearProfile", async () => {
+test("清除习惯 clears profile without changing conversation mode", async () => {
   const replies = [];
   const cleared = [];
   const handler = createWeixinCommandHandler({
@@ -1003,8 +1003,9 @@ test("清除习惯 clears profile only via agent.clearProfile", async () => {
   });
   assert.equal(cleared.length, 1);
   assert.equal(cleared[0], threadKeyFromContext(ctx));
+  assert.equal(handler.modeStore.isAgent(ctx), true);
   assert.match(replies.at(-1), /习惯画像/);
-  assert.match(replies.at(-1), /对话记忆未改/);
+  assert.match(replies.at(-1), /对话记忆与模式未改/);
 });
 
 test("CSV怎么导入 not fast-route as anchor profile", () => {

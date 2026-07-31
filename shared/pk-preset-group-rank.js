@@ -184,7 +184,7 @@ function buildPresetGroupRank(groupNo, waveSource, options = {}) {
     ? options.gapTargets.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0)
     : [...DEFAULT_GAP_TARGETS];
 
-  const { board, byName, thresholds, total } = buildOverallLeaderboard(waveSource, gapTargets);
+  const { byName, thresholds, total } = buildOverallLeaderboard(waveSource, gapTargets);
   const waveMap = toWaveMap(waveSource);
 
   const rows = [];

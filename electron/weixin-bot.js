@@ -16,7 +16,6 @@ const {
   DEFAULT_DAILY_REPORT_PUSH,
   normalizeDailyReportPushSettings,
   buildGenderTop3Text,
-  matchDailyPushCommand,
   formatDailyPushStatusText,
   resolveDailyPushTargets,
 } = require("./weixin-bot-daily-push");
