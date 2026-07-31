@@ -92,6 +92,16 @@ test("default export title is 星嗨艺创 and hides waves", () => {
   assert.match(svg, /星嗨艺创/);
   assert.doesNotMatch(svg, /最强/);
   assert.doesNotMatch(svg, /次强/);
+  // constraints that mention strongest ranks must not leak onto the image
+  const svgWithNotes = renderPkGroupsSvg(result, {
+    title: "星嗨艺创",
+    constraints: ["狼辉第4组 · 狼佑第1组", "次强第3组 · 最强第5组", "08:15 起每组间隔 15 分钟"],
+  });
+  assert.doesNotMatch(svgWithNotes, /最强/);
+  assert.doesNotMatch(svgWithNotes, /次强/);
+  assert.match(svgWithNotes, /狼辉第4组/);
+  assert.match(svgWithNotes, /08:15/);
+
   assert.doesNotMatch(svg, /星嗨争霸赛/);
   assert.doesNotMatch(svg, /T4 /);
   assert.doesNotMatch(svg, /\d+(\.\d+)?万/);

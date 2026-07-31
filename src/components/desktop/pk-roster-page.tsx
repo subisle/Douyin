@@ -863,11 +863,6 @@ export function PkRosterPage() {
                 { main: "#A855F7", soft: "#F3E8FF", deep: "#7E22CE" },
               ];
               const accent = accents[gi % accents.length];
-              const ranked = [...groups]
-                .map((g, i) => ({ order: i, top4: Number(g.top4) || 0 }))
-                .sort((a, b) => b.top4 - a.top4 || a.order - b.order);
-              const badge =
-                ranked[0]?.order === gi ? "最强" : ranked[1]?.order === gi ? "次强" : "";
               return (
                 <div
                   key={`ex-${group.key}`}
@@ -888,22 +883,6 @@ export function PkRosterPage() {
                             .join(" · ")}
                         </div>
                       </div>
-                      {badge ? (
-                        <span
-                          className="rounded-full px-2.5 py-1 text-[11px] font-black"
-                          style={
-                            badge === "最强"
-                              ? { background: accent.main, color: "#fff" }
-                              : {
-                                  background: "#fff",
-                                  color: accent.deep,
-                                  border: `1px solid ${accent.main}`,
-                                }
-                          }
-                        >
-                          {badge}
-                        </span>
-                      ) : null}
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       {group.members.map((m) => (

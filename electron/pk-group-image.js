@@ -57,9 +57,17 @@ function periodDisplay(period) {
   return raw || "当月";
 }
 
+function sanitizeExportConstraints(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((item) => !/最强|次强/.test(item));
+}
+
 function constraintHActive(options, result) {
-  const list = options.constraints || result.constraints || [];
-  return Array.isArray(list) && list.length > 0;
+  const list = sanitizeExportConstraints(options.constraints || result.constraints || []);
+  return list.length > 0;
 }
 
 function truncate(value, max) {
@@ -206,7 +214,7 @@ function renderPkGroupsSvg(result, options = {}) {
 
   let contentTop = hy + hh + 18;
   if (constraintHActive(options, result)) {
-    const notes = (options.constraints || result.constraints || []).join("  ·  ");
+    const notes = sanitizeExportConstraints(options.constraints || result.constraints || []).join("  ·  ");
     parts.push(
       `<rect x="${pad}" y="${contentTop}" width="${hw}" height="36" rx="14" fill="rgba(255,255,255,0.88)" stroke="rgba(124,58,237,0.12)" filter="url(#soft)"/>`
     );
