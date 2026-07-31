@@ -293,14 +293,18 @@ export function buildBattleGroupsResultFromNameGroups(
     modeLabel?: string;
     source?: string;
     notes?: string[];
+    firstStart?: string;
+    stepMinutes?: number;
   }
 ): BuildPkGroupsResult {
   const scoreField = options?.scoreField || "wave";
   const source = options?.source || "自定义分组";
+  const firstStart = options?.firstStart || PRESET_BATTLE_FIRST_START;
+  const stepMinutes = options?.stepMinutes ?? PRESET_BATTLE_STEP_MINUTES;
   const resolved = resolveNamedBattleGroups(nameGroups, allMembers, source, {
     labelPrefix: "第",
-    firstStart: PRESET_BATTLE_FIRST_START,
-    stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+    firstStart,
+    stepMinutes,
     scoreField,
   });
   const groups: BuildPkGroupsGroup[] = resolved.groups.map((g, gi) => ({
@@ -351,10 +355,16 @@ export function buildBattleGroupsResultFromNameGroups(
 /** 把内置名组解析成 BuildPkGroupsResult，供分组页 / 导出直接用 */
 export function buildPresetBattleGroupsResult(
   allMembers: PkMember[],
-  options?: { scoreField?: "wave" | "latestWave" }
+  options?: {
+    scoreField?: "wave" | "latestWave";
+    firstStart?: string;
+    stepMinutes?: number;
+  }
 ): BuildPkGroupsResult {
   return buildBattleGroupsResultFromNameGroups(PRESET_BATTLE_GROUPS, allMembers, {
     scoreField: options?.scoreField,
+    firstStart: options?.firstStart,
+    stepMinutes: options?.stepMinutes,
     mode: "preset",
     modeLabel: PRESET_BATTLE_META.label,
     source: PRESET_BATTLE_META.source,
@@ -367,9 +377,58 @@ export type SavedGroupsLayout = {
   period?: string;
   mode?: string;
   scoreDisplay?: string;
+  firstStart?: string;
+  stepMinutes?: number;
+  groupSize?: number;
   nameGroups: string[][];
   savedAt: string;
 };
+
+export type ScheduleSettings = {
+  firstStart: string;
+  stepMinutes: number;
+  groupSize: number;
+};
+
+export function normalizeFirstStart(value: string | undefined | null, fallback = PRESET_BATTLE_FIRST_START) {
+  const raw = String(value || "").trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback;
+  const h = Math.min(23, Math.max(0, Number(match[1])));
+  const m = Math.min(59, Math.max(0, Number(match[2])));
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+export function normalizeStepMinutes(value: number | string | undefined | null, fallback = PRESET_BATTLE_STEP_MINUTES) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return fallback || 15;
+  return Math.min(180, Math.max(1, n));
+}
+
+export function normalizeGroupSize(value: number | string | undefined | null, fallback = DEFAULT_PK_GROUP_SIZE) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return fallback || 8;
+  return Math.min(20, Math.max(2, n));
+}
+
+/** 按开始时间 + 间隔给各组贴连麦时间（导出图 / 卡片共用） */
+export function attachScheduleToGroups<T extends { startTime?: string; scheduleLabel?: string }>(
+  groups: T[],
+  options?: { firstStart?: string; stepMinutes?: number }
+): T[] {
+  const firstStart = normalizeFirstStart(options?.firstStart);
+  const stepMinutes = normalizeStepMinutes(options?.stepMinutes);
+  const match = firstStart.match(/^(\d{1,2}):(\d{2})$/);
+  const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
+  return groups.map((g, i) => {
+    const startTime = formatHm(startMin + i * stepMinutes);
+    return {
+      ...g,
+      startTime,
+      scheduleLabel: `${startTime} 开始连麦`,
+    };
+  });
+}
 
 export function groupsToNameGroups(groups: Array<{ members?: Array<{ name?: string }> }>): string[][] {
   return (groups || []).map((g) =>
@@ -393,6 +452,10 @@ export function loadSavedGroupsLayout(): SavedGroupsLayout | null {
       period: parsed.period,
       mode: parsed.mode,
       scoreDisplay: parsed.scoreDisplay,
+      firstStart: parsed.firstStart ? normalizeFirstStart(parsed.firstStart) : undefined,
+      stepMinutes:
+        parsed.stepMinutes != null ? normalizeStepMinutes(parsed.stepMinutes) : undefined,
+      groupSize: parsed.groupSize != null ? normalizeGroupSize(parsed.groupSize) : undefined,
       nameGroups,
       savedAt: parsed.savedAt || "",
     };
@@ -406,6 +469,9 @@ export function saveGroupsLayout(input: {
   period?: string;
   mode?: string;
   scoreDisplay?: string;
+  firstStart?: string;
+  stepMinutes?: number;
+  groupSize?: number;
 }): SavedGroupsLayout | null {
   if (typeof window === "undefined") return null;
   const nameGroups = (input.nameGroups || [])
@@ -417,6 +483,9 @@ export function saveGroupsLayout(input: {
     period: input.period,
     mode: input.mode,
     scoreDisplay: input.scoreDisplay,
+    firstStart: normalizeFirstStart(input.firstStart),
+    stepMinutes: normalizeStepMinutes(input.stepMinutes),
+    groupSize: normalizeGroupSize(input.groupSize),
     nameGroups,
     savedAt: new Date().toISOString(),
   };

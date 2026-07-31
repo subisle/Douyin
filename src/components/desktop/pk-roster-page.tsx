@@ -33,12 +33,16 @@ import {
   PRESET_BATTLE_FIRST_START,
   PRESET_BATTLE_STEP_MINUTES,
   PRESET_ROSTER_TEXT,
+  attachScheduleToGroups,
   buildBattleGroupsResultFromNameGroups,
   buildPresetBattleGroupsResult,
   clearSavedGroupsLayout,
   groupsToNameGroups,
   loadRosterText,
   loadSavedGroupsLayout,
+  normalizeFirstStart,
+  normalizeGroupSize,
+  normalizeStepMinutes,
   resolveRosterNames,
   saveGroupsLayout,
   saveRosterText,
@@ -115,28 +119,27 @@ function toUiGroups(result: BuildPkGroupsResult): UiGroup[] {
   }));
 }
 
-function attachScheduleTimes(groups: UiGroup[]): UiGroup[] {
-  const match = String(PRESET_BATTLE_FIRST_START).match(/^(\d{1,2}):(\d{2})$/);
-  const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
-  const step = PRESET_BATTLE_STEP_MINUTES || 15;
-  return groups.map((g, i) => {
-    const total = startMin + i * step;
-    const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
-    const h = Math.floor(normalized / 60);
-    const m = normalized % 60;
-    const startTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-    return {
-      ...g,
-      startTime,
-      scheduleLabel: `${startTime} 开始连麦`,
-    };
-  });
+function attachScheduleTimes(
+  groups: UiGroup[],
+  firstStart: string,
+  stepMinutes: number
+): UiGroup[] {
+  return attachScheduleToGroups(groups, { firstStart, stepMinutes });
 }
 
 export function PkRosterPage() {
   const [period, setPeriod] = useState(currentPeriod);
   const [mode, setMode] = useState<PkGroupMode>("preset");
   const [scoreDisplay, setScoreDisplay] = useState<ScoreDisplay>("total");
+  const [firstStart, setFirstStart] = useState(() =>
+    normalizeFirstStart(loadSavedGroupsLayout()?.firstStart || PRESET_BATTLE_FIRST_START)
+  );
+  const [stepMinutes, setStepMinutes] = useState(() =>
+    normalizeStepMinutes(loadSavedGroupsLayout()?.stepMinutes ?? PRESET_BATTLE_STEP_MINUTES)
+  );
+  const [groupSize, setGroupSize] = useState(() =>
+    normalizeGroupSize(loadSavedGroupsLayout()?.groupSize ?? DEFAULT_PK_GROUP_SIZE)
+  );
   const [includeText, setIncludeText] = useState(() => loadRosterText());
   const [rawMales, setRawMales] = useState<PkMember[]>([]);
   const [groups, setGroups] = useState<UiGroup[]>([]);
@@ -189,6 +192,9 @@ export function PkRosterPage() {
         period,
         mode,
         scoreDisplay,
+        firstStart,
+        stepMinutes,
+        groupSize,
       });
       if (saved) {
         setSavedAt(saved.savedAt);
@@ -199,7 +205,7 @@ export function PkRosterPage() {
       if (!opts?.silent) showToast("保存失败：分组为空");
       return false;
     },
-    [mode, period, scoreDisplay, showToast]
+    [firstStart, groupSize, mode, period, scoreDisplay, showToast, stepMinutes]
   );
 
   const undo = useCallback(() => {
@@ -255,7 +261,8 @@ export function PkRosterPage() {
 
   const applyBuiltResult = useCallback(
     (built: BuildPkGroupsResult) => {
-      setGroups(toUiGroups(built));
+      const stamped = attachScheduleTimes(toUiGroups(built), firstStart, stepMinutes);
+      setGroups(relabelGroups(stamped, scoreDisplay));
       undoStack.current = [];
       let warn = built.warning || "";
       if (resolution.unmatchedNames.length) {
@@ -266,7 +273,7 @@ export function PkRosterPage() {
       }
       setWarning(warn || null);
     },
-    [resolution.unmatchedNames]
+    [firstStart, resolution.unmatchedNames, scoreDisplay, stepMinutes]
   );
 
   const rebuildGroups = useCallback(
@@ -306,6 +313,8 @@ export function PkRosterPage() {
             mode,
             modeLabel: "已保存分组",
             source: "已保存拖拽分组",
+            firstStart,
+            stepMinutes,
             notes: [
               "来自本地保存的拖拽分组",
               saved.savedAt ? `保存于 ${new Date(saved.savedAt).toLocaleString("zh-CN")}` : "",
@@ -325,6 +334,8 @@ export function PkRosterPage() {
         if (mode === "preset") {
           const built = buildPresetBattleGroupsResult(memberPool, {
             scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
+            firstStart,
+            stepMinutes,
           });
           applyBuiltResult(built);
           setDirty(false);
@@ -346,10 +357,10 @@ export function PkRosterPage() {
             anchorId: m.anchorId,
           })),
           mode,
-          groupSize: DEFAULT_PK_GROUP_SIZE,
+          groupSize,
           scoreField,
-          firstStart: PRESET_BATTLE_FIRST_START,
-          stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+          firstStart,
+          stepMinutes,
         });
         if (!res.success) {
           setError(res.error || "分组失败");
@@ -373,11 +384,14 @@ export function PkRosterPage() {
     [
       applyBuiltResult,
       eligible,
+      firstStart,
+      groupSize,
       memberPool,
       mode,
       resolution.names.length,
       resolution.unmatchedNames,
       scoreField,
+      stepMinutes,
     ]
   );
 
@@ -392,9 +406,26 @@ export function PkRosterPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingRoster, includeText, period, mode, scoreDisplay]);
 
+  // 每组人数变化：非内置模式重新分组；内置模式忽略
+  useEffect(() => {
+    if (loadingRoster) return;
+    if (mode === "preset") return;
+    void rebuildGroups({ preferSaved: false, clearSaved: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupSize]);
+
+  // 连麦开始/间隔变更：只重算各组时间，不打散人员
+  useEffect(() => {
+    setGroups((prev) => {
+      if (!prev.length) return prev;
+      return relabelGroups(attachScheduleTimes(prev, firstStart, stepMinutes), scoreDisplay);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstStart, stepMinutes]);
+
   const applyGroupsIfValid = useCallback(
     (next: UiGroup[], failMessagePrefix: string, opts?: { autosave?: boolean }) => {
-      const scheduled = attachScheduleTimes(next);
+      const scheduled = attachScheduleTimes(next, firstStart, stepMinutes);
       const normalized = relabelGroups(scheduled, scoreDisplay);
       const check = validateGroupsGap(normalized);
       if (!check.ok) {
@@ -411,7 +442,7 @@ export function PkRosterPage() {
       }
       return true;
     },
-    [groups, persistGroups, pushUndo, scoreDisplay, showToast]
+    [firstStart, groups, persistGroups, pushUndo, scoreDisplay, showToast, stepMinutes]
   );
 
   const swapPersons = useCallback(
@@ -449,14 +480,14 @@ export function PkRosterPage() {
       );
       if (ia < 0) return;
       const [picked] = ga.members.splice(ia, 1);
-      if (gb.members.length >= DEFAULT_PK_GROUP_SIZE) {
+      if (gb.members.length >= groupSize) {
         const displaced = gb.members.pop();
         if (displaced) ga.members.push(displaced);
       }
       gb.members.push(picked);
       applyGroupsIfValid(next, "无法移动");
     },
-    [groups, applyGroupsIfValid]
+    [applyGroupsIfValid, groupSize, groups]
   );
 
   const reorderGroup = useCallback(
@@ -572,6 +603,43 @@ export function PkRosterPage() {
               </button>
             ))}
           </div>
+          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
+            <span className="shrink-0">开始</span>
+            <Input
+              type="time"
+              value={firstStart}
+              onChange={(e) => setFirstStart(normalizeFirstStart(e.target.value || firstStart))}
+              className="h-6 w-[108px] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+              title="连麦开始时间"
+            />
+          </label>
+          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
+            <span className="shrink-0">间隔</span>
+            <Input
+              type="number"
+              min={1}
+              max={180}
+              value={stepMinutes}
+              onChange={(e) => setStepMinutes(normalizeStepMinutes(e.target.value, stepMinutes))}
+              className="h-6 w-14 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+              title="组间连麦间隔（分钟）"
+            />
+            <span className="shrink-0">分</span>
+          </label>
+          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
+            <span className="shrink-0">每组</span>
+            <Input
+              type="number"
+              min={2}
+              max={20}
+              value={groupSize}
+              onChange={(e) => setGroupSize(normalizeGroupSize(e.target.value, groupSize))}
+              className="h-6 w-12 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+              title="每组人数（非内置模式生效）"
+              disabled={mode === "preset"}
+            />
+            <span className="shrink-0">人</span>
+          </label>
           <Button
             size="sm"
             variant="outline"
@@ -603,6 +671,10 @@ export function PkRosterPage() {
         <Badge variant="secondary">名单 {resolution.names.length}</Badge>
         <Badge variant="secondary">命中 {eligible.length}</Badge>
         <Badge variant="secondary">组数 {groups.length}</Badge>
+        <Badge variant="secondary">
+          连麦 {firstStart} · 间隔 {stepMinutes} 分
+          {mode !== "preset" ? ` · 每组 ${groupSize}` : ""}
+        </Badge>
         {dirty ? (
           <Badge variant="outline" className="border-amber-400 text-amber-700">
             未保存更改
@@ -833,7 +905,8 @@ export function PkRosterPage() {
                   </div>
                   <div className="mt-2 text-sm font-semibold text-white/90">
                     {period} · {MODE_OPTIONS.find((m) => m.key === mode)?.label} · 共{" "}
-                    {eligible.length} 人 · {groups.length} 组
+                    {eligible.length} 人 · {groups.length} 组 · {firstStart} 起 / 间隔 {stepMinutes}{" "}
+                    分
                   </div>
                 </div>
               </div>
