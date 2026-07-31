@@ -8,6 +8,7 @@ const {
   formatPresetGroupRankText,
   groupStartTime,
   getPresetGroupNames,
+  gapToPlace,
 } = require("./pk-preset-group-rank");
 
 test("parsePresetGroupRankCommand accepts 5组 / 第5组总分 / 各组", () => {
@@ -42,26 +43,48 @@ test("groupStartTime steps 15 minutes from 08:15", () => {
   assert.equal(groupStartTime(7), "09:45");
 });
 
-test("build + format group rank sorts by wave", () => {
+test("gapToPlace is zero inside target and positive outside", () => {
+  assert.equal(gapToPlace(100, 8, 10, 200), 0);
+  assert.equal(gapToPlace(100, 28, 20, 150), 50);
+  assert.equal(gapToPlace(150, 28, 20, 150), 0);
+});
+
+test("build + format includes overall rank and gaps to top10/top20", () => {
   const names = getPresetGroupNames(1);
   assert.ok(names.includes("啸辰"));
-  const wave = {
-    啸辰: 1_085_399,
+
+  // 造 28 人榜：第10=500000，第20=300000；狼瑞故意设为第28附近
+  const wave = {};
+  for (let i = 1; i <= 30; i += 1) {
+    wave[`占位${String(i).padStart(2, "0")}`] = 1_000_000 - i * 10_000;
+  }
+  // 覆盖组员
+  Object.assign(wave, {
+    啸辰: 1_085_399, // 应很靠前
     狼腾: 542_417,
     浩龙: 269_917,
     狼凯: 242_200,
     狼佑: 140_406,
     浩泽: 140_084,
     狼哲: 108_877,
-    狼瑞: 32_942,
-  };
+    狼瑞: 32_942, // 很靠后
+  });
+
   const rank = buildPresetGroupRank(1, wave);
   assert.equal(rank.ok, true);
-  assert.deepEqual(rank.rows.map((r) => r.name), [
-    "啸辰", "狼腾", "浩龙", "狼凯", "狼佑", "浩泽", "狼哲", "狼瑞",
-  ]);
+  assert.equal(rank.rows[0].name, "啸辰");
+  assert.ok(rank.rows[0].overallRank <= 10);
+  assert.equal(rank.rows[0].gapTop10, 0);
+
+  const last = rank.rows.find((r) => r.name === "狼瑞");
+  assert.ok(last);
+  assert.ok(last.overallRank > 20);
+  assert.ok(last.gapTop10 > 0);
+  assert.ok(last.gapTop20 > 0);
+
   const text = formatPresetGroupRankText(rank, { asOfDate: "2026-07-30" });
   assert.match(text, /第1组总分 · 08:15 · 截至 2026-07-30/);
-  assert.match(text, /1 啸辰 108\.5万/);
-  assert.match(text, /8 狼瑞 3\.3万/);
+  assert.match(text, /啸辰 .*已进前10/);
+  assert.match(text, /狼瑞 .*距前10差/);
+  assert.match(text, /狼瑞 .*距前20差/);
 });

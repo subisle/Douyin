@@ -2,7 +2,7 @@
 
 /**
  * 内置小组赛：按组输出成员「总分」排名文案。
- * 数据由调用方注入（name -> wave），本模块只做匹配/排序/格式化。
+ * 数据由调用方注入（花名册/日报），本模块做匹配、全库名次、距前10/前20分差与格式化。
  */
 
 const {
@@ -26,6 +26,8 @@ const CN_NUM = Object.freeze({
   6: 6,
   7: 7,
 });
+
+const DEFAULT_GAP_TARGETS = Object.freeze([10, 20]);
 
 function formatWaveShort(value) {
   const number = Number(value) || 0;
@@ -53,7 +55,6 @@ function parseGroupNoToken(raw) {
 /**
  * 解析「5组 / 第5组总分 / 各组排名」等。
  * @returns {{ type: "preset-group-rank", groupNo: number|null, all: boolean } | null}
- *   groupNo 1-based；all=true 时 groupNo 为 null
  */
 function parsePresetGroupRankCommand(input) {
   const text = String(input || "")
@@ -97,10 +98,76 @@ function getPresetGroupNames(groupNo) {
 }
 
 /**
- * @param {number} groupNo 1-based
- * @param {Map<string, number> | Record<string, number> | Array<{name:string, wave?:number, totalWave?:number}>} waveSource
+ * 将花名册/Map/对象规范为 name->wave（同名取较大值）。
+ * @returns {Map<string, number>}
  */
-function buildPresetGroupRank(groupNo, waveSource) {
+function toWaveMap(waveSource) {
+  const waveMap = new Map();
+  if (waveSource instanceof Map) {
+    for (const [k, v] of waveSource) {
+      const name = String(k).trim();
+      if (!name) continue;
+      waveMap.set(name, Math.max(waveMap.get(name) || 0, Number(v) || 0));
+    }
+    return waveMap;
+  }
+  if (Array.isArray(waveSource)) {
+    for (const row of waveSource) {
+      const name = String(row?.name || row?.anchorName || "").trim();
+      if (!name) continue;
+      const wave = Number(row.wave ?? row.totalWave ?? row.monthlyWave) || 0;
+      waveMap.set(name, Math.max(waveMap.get(name) || 0, wave));
+    }
+    return waveMap;
+  }
+  if (waveSource && typeof waveSource === "object") {
+    for (const [k, v] of Object.entries(waveSource)) {
+      const name = String(k).trim();
+      if (!name) continue;
+      waveMap.set(name, Math.max(waveMap.get(name) || 0, Number(v) || 0));
+    }
+  }
+  return waveMap;
+}
+
+/**
+ * 全库（或当前数据源）按总分降序排行榜。
+ * @returns {{ board: Array<{name:string,wave:number,overallRank:number}>, byName: Map<string, any>, thresholds: Record<number, number> }}
+ */
+function buildOverallLeaderboard(waveSource, gapTargets = DEFAULT_GAP_TARGETS) {
+  const waveMap = toWaveMap(waveSource);
+  const board = [...waveMap.entries()]
+    .map(([name, wave]) => ({ name, wave: Number(wave) || 0 }))
+    .sort((a, b) => b.wave - a.wave || a.name.localeCompare(b.name, "zh"));
+  board.forEach((row, index) => {
+    row.overallRank = index + 1;
+  });
+  const byName = new Map(board.map((row) => [row.name, row]));
+  const thresholds = {};
+  for (const place of gapTargets) {
+    const n = Number(place);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    thresholds[n] = board[n - 1] ? Number(board[n - 1].wave) || 0 : 0;
+  }
+  return { board, byName, thresholds, total: board.length };
+}
+
+/**
+ * 进入前 N 还差多少分：已在榜内为 0；否则 = 第N名分数 - 本人分数（至少 0）。
+ */
+function gapToPlace(wave, overallRank, place, thresholdWave) {
+  const rank = Number(overallRank) || 0;
+  const target = Number(place) || 0;
+  if (!target || (rank > 0 && rank <= target)) return 0;
+  return Math.max(0, (Number(thresholdWave) || 0) - (Number(wave) || 0));
+}
+
+/**
+ * @param {number} groupNo 1-based
+ * @param {Map|Record|Array} waveSource 全量花名册更佳（用于全库名次/阈值）
+ * @param {{ gapTargets?: number[] }} [options]
+ */
+function buildPresetGroupRank(groupNo, waveSource, options = {}) {
   const names = getPresetGroupNames(groupNo);
   if (!names) {
     return {
@@ -110,33 +177,47 @@ function buildPresetGroupRank(groupNo, waveSource) {
     };
   }
 
-  const waveMap = new Map();
-  if (waveSource instanceof Map) {
-    for (const [k, v] of waveSource) waveMap.set(String(k).trim(), Number(v) || 0);
-  } else if (Array.isArray(waveSource)) {
-    for (const row of waveSource) {
-      const name = String(row?.name || row?.anchorName || "").trim();
-      if (!name) continue;
-      const wave = Number(row.wave ?? row.totalWave ?? row.monthlyWave) || 0;
-      // 同名取较大值（防重复）
-      waveMap.set(name, Math.max(waveMap.get(name) || 0, wave));
-    }
-  } else if (waveSource && typeof waveSource === "object") {
-    for (const [k, v] of Object.entries(waveSource)) {
-      waveMap.set(String(k).trim(), Number(v) || 0);
-    }
-  }
+  const gapTargets = Array.isArray(options.gapTargets) && options.gapTargets.length
+    ? options.gapTargets.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0)
+    : [...DEFAULT_GAP_TARGETS];
+
+  const { board, byName, thresholds, total } = buildOverallLeaderboard(waveSource, gapTargets);
+  const waveMap = toWaveMap(waveSource);
 
   const rows = [];
   const missing = [];
   for (const name of names) {
-    if (waveMap.has(name)) {
-      rows.push({ name, wave: Number(waveMap.get(name)) || 0 });
-    } else {
+    if (!waveMap.has(name) && !byName.has(name)) {
       missing.push(name);
-      rows.push({ name, wave: 0, missing: true });
+      rows.push({
+        name,
+        wave: 0,
+        missing: true,
+        overallRank: null,
+        gapTop10: null,
+        gapTop20: null,
+        gaps: {},
+      });
+      continue;
     }
+    const wave = Number(waveMap.get(name) ?? byName.get(name)?.wave) || 0;
+    const overall = byName.get(name);
+    const overallRank = overall?.overallRank || null;
+    const gaps = {};
+    for (const place of gapTargets) {
+      gaps[place] = gapToPlace(wave, overallRank, place, thresholds[place]);
+    }
+    rows.push({
+      name,
+      wave,
+      missing: false,
+      overallRank,
+      gapTop10: gaps[10] ?? null,
+      gapTop20: gaps[20] ?? null,
+      gaps,
+    });
   }
+
   rows.sort(
     (a, b) =>
       b.wave - a.wave ||
@@ -154,26 +235,79 @@ function buildPresetGroupRank(groupNo, waveSource) {
     names,
     rows,
     missing,
+    overallTotal: total,
+    thresholds: {
+      top10: thresholds[10] ?? 0,
+      top20: thresholds[20] ?? 0,
+      ...thresholds,
+    },
+    gapTargets,
   };
 }
 
 /**
+ * 单行附加信息：全库名次 + 距前10/前20
+ * 例：#28 距前10差12.3万 距前20差3.1万
+ *     #8 已进前10
+ *     #15 距前10差2.0万 已进前20
+ */
+function formatGapSuffix(row, gapTargets = DEFAULT_GAP_TARGETS) {
+  if (row?.missing) return "无数据";
+  const parts = [];
+  if (row.overallRank) parts.push(`#${row.overallRank}`);
+
+  const targets = gapTargets.length ? gapTargets : DEFAULT_GAP_TARGETS;
+  for (const place of targets) {
+    const gap = row.gaps?.[place];
+    if (gap == null) continue;
+    if (row.overallRank && row.overallRank <= place) {
+      parts.push(`已进前${place}`);
+    } else {
+      parts.push(`距前${place}差${formatWaveShort(gap)}`);
+    }
+  }
+  // 已进前10 时不必再写已进前20（更干净）
+  if (row.overallRank && row.overallRank <= 10) {
+    return [`#${row.overallRank}`, "已进前10"].join(" ");
+  }
+  // 重新组装：#名次 + 未达成的差距 + 已进前20（若适用）
+  const out = [];
+  if (row.overallRank) out.push(`#${row.overallRank}`);
+  for (const place of targets) {
+    const gap = row.gaps?.[place];
+    if (gap == null) continue;
+    if (row.overallRank && row.overallRank <= place) {
+      if (place !== 10) out.push(`已进前${place}`);
+    } else {
+      out.push(`距前${place}差${formatWaveShort(gap)}`);
+    }
+  }
+  return out.join(" ");
+}
+
+/**
  * @param {object} rank buildPresetGroupRank 结果
- * @param {{ asOfDate?: string, namesOnly?: boolean }} [options]
+ * @param {{ asOfDate?: string, namesOnly?: boolean, showGaps?: boolean }} [options]
  */
 function formatPresetGroupRankText(rank, options = {}) {
   if (!rank?.ok) return rank?.error || "无法生成组内排名";
   const asOf = String(options.asOfDate || "").trim();
+  const showGaps = options.showGaps !== false;
   const headerBits = [`第${rank.groupNo}组总分`, rank.startTime ? `· ${rank.startTime}` : null];
   if (asOf) headerBits.push(`· 截至 ${asOf}`);
   const lines = [headerBits.filter(Boolean).join(" ")];
   for (const row of rank.rows) {
     if (options.namesOnly) {
       lines.push(`${row.rank} ${row.name}`);
-    } else {
-      const waveText = row.missing && row.wave <= 0 ? "无数据" : formatWaveShort(row.wave);
-      lines.push(`${row.rank} ${row.name} ${waveText}`);
+      continue;
     }
+    const waveText = row.missing && row.wave <= 0 ? "无数据" : formatWaveShort(row.wave);
+    if (!showGaps || row.missing) {
+      lines.push(`${row.rank} ${row.name} ${waveText}`);
+      continue;
+    }
+    const suffix = formatGapSuffix(row, rank.gapTargets || DEFAULT_GAP_TARGETS);
+    lines.push(`${row.rank} ${row.name} ${waveText}（${suffix}）`);
   }
   if (rank.missing?.length) {
     lines.push(`未匹配：${rank.missing.join("、")}`);
@@ -184,7 +318,7 @@ function formatPresetGroupRankText(rank, options = {}) {
 function formatAllPresetGroupRanksText(waveSource, options = {}) {
   const blocks = [];
   for (let groupNo = 1; groupNo <= PRESET_BATTLE_GROUPS.length; groupNo += 1) {
-    const rank = buildPresetGroupRank(groupNo, waveSource);
+    const rank = buildPresetGroupRank(groupNo, waveSource, options);
     blocks.push(formatPresetGroupRankText(rank, options));
   }
   return blocks.join("\n\n");
@@ -192,12 +326,17 @@ function formatAllPresetGroupRanksText(waveSource, options = {}) {
 
 module.exports = {
   CN_NUM,
+  DEFAULT_GAP_TARGETS,
   formatWaveShort,
   parseGroupNoToken,
   parsePresetGroupRankCommand,
   groupStartTime,
   getPresetGroupNames,
+  toWaveMap,
+  buildOverallLeaderboard,
+  gapToPlace,
   buildPresetGroupRank,
+  formatGapSuffix,
   formatPresetGroupRankText,
   formatAllPresetGroupRanksText,
   PRESET_GROUP_COUNT: PRESET_BATTLE_GROUPS.length,

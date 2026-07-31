@@ -1016,22 +1016,27 @@ test("CSV怎么导入 not fast-route as anchor profile", () => {
 
 test("preset group rank command returns sorted totals for group 5", async () => {
   const replies = [];
+  const males = [
+    { name: "浩鸣", wave: 1_647_144 },
+    { name: "南方楠", wave: 1_144_749 },
+    { name: "狼澈", wave: 1_051_502 },
+    { name: "玖玥", wave: 581_357 },
+    { name: "啸帆", wave: 515_701 },
+    { name: "啸安", wave: 391_389 },
+    { name: "狼仔", wave: 303_679 },
+    { name: "浩辰", wave: 267_491 },
+    { name: "啸辰", wave: 100 },
+  ];
+  // pad leaderboard so top10/top20 thresholds exist
+  for (let i = 0; i < 25; i += 1) {
+    males.push({ name: `占位${i}`, wave: 450_000 - i * 10_000 });
+  }
   const handler = createWeixinCommandHandler({
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-30", latestDataDate: "2026-07-30" }),
       getPkRoster: async () => ({
         period: "2026-07",
-        males: [
-          { name: "浩鸣", wave: 1_647_144 },
-          { name: "南方楠", wave: 1_144_749 },
-          { name: "狼澈", wave: 1_051_502 },
-          { name: "玖玥", wave: 581_357 },
-          { name: "啸帆", wave: 515_701 },
-          { name: "啸安", wave: 391_389 },
-          { name: "狼仔", wave: 303_679 },
-          { name: "浩辰", wave: 267_491 },
-          { name: "啸辰", wave: 100 },
-        ],
+        males,
         females: [],
       }),
     },
@@ -1045,7 +1050,7 @@ test("preset group rank command returns sorted totals for group 5", async () => 
   assert.equal(result.handled, true);
   assert.equal(replies.length, 1);
   assert.match(replies[0], /第5组总分 · 09:15/);
-  assert.match(replies[0], /1 浩鸣 164\.7万/);
-  assert.match(replies[0], /2 南方楠 114\.5万/);
-  assert.match(replies[0], /8 浩辰 26\.7万/);
+  assert.match(replies[0], /1 浩鸣 164\.7万（#1 已进前10）/);
+  assert.match(replies[0], /5 啸帆 .*距前10差/);
+  assert.match(replies[0], /8 浩辰 .*距前20差/);
 });
