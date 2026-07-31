@@ -21,6 +21,8 @@ test("preset battle groups: 7x8 unique names", () => {
 test("preset anchors: 狼佑 G1 / 狼辉 G4 / 最强侧 G5", () => {
   assert.ok(PRESET_BATTLE_GROUPS[0].includes("狼佑"));
   assert.ok(PRESET_BATTLE_GROUPS[0].includes("浩泽"));
+  assert.ok(PRESET_BATTLE_GROUPS[0].includes("浩杰"));
+  assert.ok(PRESET_BATTLE_GROUPS[3].includes("狼凯"));
   assert.ok(PRESET_BATTLE_GROUPS[3].includes("狼辉"));
   assert.ok(PRESET_BATTLE_GROUPS[4].includes("啸帆"));
   assert.ok(PRESET_BATTLE_GROUPS[4].includes("浩鸣"));
