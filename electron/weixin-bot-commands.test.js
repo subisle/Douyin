@@ -1051,6 +1051,7 @@ test("preset group rank command returns sorted totals for group 5", async () => 
   assert.equal(replies.length, 1);
   assert.match(replies[0], /第5组总分 · 09:15/);
   assert.match(replies[0], /1 浩鸣 164\.7万（#1 已进前10）/);
-  assert.match(replies[0], /5 啸帆 .*距前10差/);
-  assert.match(replies[0], /8 浩辰 .*距前20差/);
+  assert.match(replies[0], /5 啸帆 .*已进前10/);
+  assert.match(replies[0], /6 啸安 .*距前10差.*已进前20/);
+  assert.match(replies[0], /8 浩辰 .*距前10差.*距前20差/);
 });
