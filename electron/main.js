@@ -83,10 +83,21 @@ function focusMainWindow() {
     if (app.dock) app.dock.show();
     app.focus({ steal: true });
   }
-  // Windows 上偶发需要先闪一下任务栏再置前
-  if (process.platform === "win32") {
-    mainWindow.setAlwaysOnTop(true);
-    mainWindow.setAlwaysOnTop(false);
+  // macOS / Windows：短暂置顶，避免被 Chrome 等窗口挡住（表现为“启动了但没显示”）
+  try {
+    mainWindow.setAlwaysOnTop(true, "screen-saver");
+    mainWindow.moveTop();
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      try {
+        mainWindow.setAlwaysOnTop(false);
+        mainWindow.focus();
+      } catch {
+        // ignore
+      }
+    }, 400);
+  } catch {
+    // ignore
   }
   logWindowState("focusMainWindow");
   return true;
