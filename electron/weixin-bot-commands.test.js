@@ -86,6 +86,21 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
     gender: "both",
     dateSpec: { type: "day", day: 18 },
   });
+  assert.deepEqual(parseBotCommand("5组"), {
+    type: "preset-group-rank",
+    groupNo: 5,
+    all: false,
+  });
+  assert.deepEqual(parseBotCommand("第3组总分"), {
+    type: "preset-group-rank",
+    groupNo: 3,
+    all: false,
+  });
+  assert.deepEqual(parseBotCommand("各组"), {
+    type: "preset-group-rank",
+    groupNo: null,
+    all: true,
+  });
   assert.deepEqual(parseBotCommand("人工客服"), { type: "agent-enable" });
   assert.deepEqual(parseBotCommand("退出客服"), { type: "agent-disable" });
   assert.deepEqual(parseBotCommand("音浪文件18号"), {
@@ -996,4 +1011,41 @@ test("CSV怎么导入 not fast-route as anchor profile", () => {
   const { matchFastRoute, parseBotCommand } = require("./weixin-bot-commands");
   assert.equal(matchFastRoute("CSV怎么导入", { parseBotCommand }), null);
   assert.equal(matchFastRoute("业务日是什么", { parseBotCommand }), null);
+});
+
+
+test("preset group rank command returns sorted totals for group 5", async () => {
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-30", latestDataDate: "2026-07-30" }),
+      getPkRoster: async () => ({
+        period: "2026-07",
+        males: [
+          { name: "浩鸣", wave: 1_647_144 },
+          { name: "南方楠", wave: 1_144_749 },
+          { name: "狼澈", wave: 1_051_502 },
+          { name: "玖玥", wave: 581_357 },
+          { name: "啸帆", wave: 515_701 },
+          { name: "啸安", wave: 391_389 },
+          { name: "狼仔", wave: 303_679 },
+          { name: "浩辰", wave: 267_491 },
+          { name: "啸辰", wave: 100 },
+        ],
+        females: [],
+      }),
+    },
+    renderReportPng: async () => Buffer.from("x"),
+  });
+  const result = await handler({
+    text: "5组",
+    items: [{ type: 1, text_item: { text: "5组" } }],
+    replyText: async (t) => { replies.push(t); },
+  });
+  assert.equal(result.handled, true);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /第5组总分 · 09:15/);
+  assert.match(replies[0], /1 浩鸣 164\.7万/);
+  assert.match(replies[0], /2 南方楠 114\.5万/);
+  assert.match(replies[0], /8 浩辰 26\.7万/);
 });

@@ -29,10 +29,12 @@ const SYSTEM_PERSONA = [
   "2) 生成每日报告图（男团/女队）",
   "3) 导出音浪 CSV",
   "4) PK/争霸赛分组（make_pk_groups：默认 preset=内置锁定分组；也可 high_to_low 顺序 / balanced 均衡 / score_capable 能出分；默认导出分组图）",
+  "5) 内置组总分排名（get_preset_group_rank：用户发「5组」「第5组总分」「各组」时按本月总分排序输出）",
   "功能与固定命令一致，但可用自然语言理解用户意图。",
   "",
   "【分组规则】调用 make_pk_groups 时：",
-  "- 用户说「内置分组 / 锁定分组 / 固定分组 / 分组」→ mode=preset（56人锁定表，狼辉第4/狼佑第1，次强3/最强5，08:15×5min）",
+  "- 用户说「内置分组 / 锁定分组 / 固定分组 / 分组」→ mode=preset（56人锁定表，狼辉第4/狼佑第1，次强3/最强5，08:15×15min）",
+  "- 用户说「5组 / 第N组总分 / 各组排名」→ get_preset_group_rank（只发文字排名，不出图）",
   "- 用户说「顺序分组 / 从高到低 / 强弱切块 / 总分」→ mode=high_to_low（按月音浪总量 wave）",
   "- 用户要「均衡/平均/蛇形」→ mode=balanced",
   "- 用户要「能出分」→ mode=score_capable",
@@ -102,6 +104,7 @@ const TOOL_PROGRESS_LABELS = Object.freeze({
   export_daily_report_image: "正在生成日报图…",
   export_wave_file: "正在导出音浪文件…",
   make_pk_groups: "正在计算 PK 分组并出图…",
+  get_preset_group_rank: "正在查询组内总分排名…",
   rag_search: "正在检索说明…",
 });
 

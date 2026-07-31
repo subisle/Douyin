@@ -5,22 +5,35 @@
  * mode: instruction | agent
  */
 
-const SYSTEM_ENABLE_RE = /^(?:人工客服|智能客服|客服|开启客服|打开客服)$/i;
-const SYSTEM_DISABLE_RE = /^(?:退出客服|关闭客服|结束客服|取消客服|清空对话|清除记忆)$/i;
+const SYSTEM_ENABLE_RE =
+  /^(?:智能模式|AI模式|ai模式|人工客服|智能客服|客服|开启客服|打开客服|开启智能|打开智能)$/i;
+const SYSTEM_DISABLE_RE =
+  /^(?:纯指令|指令模式|仅指令|退出客服|关闭客服|结束客服|取消客服|关闭智能|退出智能)$/i;
+const SYSTEM_CLEAR_MEMORY_RE = /^(?:清空对话|清除记忆|清除对话)$/i;
 const SYSTEM_CLEAR_HABITS_RE = /^(?:清除习惯|清除我的习惯|清空习惯)$/i;
 const SYSTEM_HELP_RE = /^(?:\/?help|帮助|菜单|命令|指令)$/i;
 
 const INSTRUCTION_HELP = [
-  "【智能对话 · 全部由 AI 处理】",
-  "· 直接聊天：查音浪/时长、出日报图、导出等均由助手选技能完成",
+  "【纯指令模式】",
+  "· 固定指令：每日报告、艺名音浪、音浪文件、PK分组、N组总分、帮助等",
   "· 管理员：开启日报推送 / 关闭日报推送 / 日报推送状态",
-  "· 发 CSV → 默认昨天；先说「24号数据」可指定日（文件导入仍确定性）",
-  "· 「清空对话」→ 仅清除本会话对话记忆（习惯画像保留）",
-  "· 「清除习惯」→ 清除本会话自动学习的习惯画像（对话记忆不动）",
-  "· 无指令模式 / FastRoute 旁路；AI 未配置时才退回固定指令兜底",
+  "· 分组：发「顺序分组」（wave 总分从高到低；默认附图；可加 csv / 无图）；「均衡分组」走蛇形",
+  "· 组内总分：发「5组」或「第5组总分」看内置第5组排名；「各组」看全部",
+  "· 硬约束：浩阳↔浩沐 间隔≥4 组、啸泽↔啸帆 间隔≥3 组；次强第3场 / 最强第4场",
+  "· 发 CSV → 默认昨天；先说「24号数据」可指定日",
+  "· 切换：发「智能模式」或「AI模式」→ 改用 AI 模型",
 ].join("\n");
 
-const AGENT_HELP = INSTRUCTION_HELP;
+const AGENT_HELP = [
+  "【AI 模型模式】",
+  "· 业务文本由 AI + 技能处理（查音浪/出图/导出/PK分组等）",
+  "· 也可直接说「顺序分组」（wave 总分，默认附图）；「均衡分组」走蛇形",
+  "· 「5组 / 第5组总分 / 各组」：内置争霸赛组内总分排名",
+  "· 硬约束：浩阳↔浩沐 间隔≥4 组、啸泽↔啸帆 间隔≥3 组；次强第3场 / 最强第4场",
+  "· 发 CSV → 默认昨天；先说「24号数据」可指定日（导入仍确定性）",
+  "· 「清空对话」→ 清本会话对话记忆；「清除习惯」→ 清习惯画像",
+  "· 切换：发「纯指令」→ 只走固定指令，不调模型（不会自动切换）",
+].join("\n");
 
 function sessionKeyFromContext(context = {}) {
   const accountId = String(context.accountId || "").trim() || "unknown";
@@ -90,6 +103,7 @@ function matchSystemToken(text) {
   if (!t) return null;
   if (SYSTEM_ENABLE_RE.test(t)) return "enable";
   if (SYSTEM_DISABLE_RE.test(t)) return "disable";
+  if (SYSTEM_CLEAR_MEMORY_RE.test(t)) return "clear-memory";
   if (SYSTEM_CLEAR_HABITS_RE.test(t)) return "clear-habits";
   if (SYSTEM_HELP_RE.test(t)) return "help";
   return null;
@@ -159,6 +173,7 @@ function createSessionQueues() {
 module.exports = {
   SYSTEM_ENABLE_RE,
   SYSTEM_DISABLE_RE,
+  SYSTEM_CLEAR_MEMORY_RE,
   SYSTEM_CLEAR_HABITS_RE,
   SYSTEM_HELP_RE,
   INSTRUCTION_HELP,

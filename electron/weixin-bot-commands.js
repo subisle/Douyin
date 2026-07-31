@@ -13,6 +13,13 @@ const {
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
 const { toDailyReportImagePages } = require("./weixin-bot-report");
+const {
+  parsePresetGroupRankCommand,
+  buildPresetGroupRank,
+  formatPresetGroupRankText,
+  formatAllPresetGroupRanksText,
+  PRESET_GROUP_COUNT,
+} = require("../shared/pk-preset-group-rank");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -241,12 +248,16 @@ function parseBotCommand(input) {
     };
   }
 
+  // 内置组总分排名：5组 / 第5组总分 / 各组
+  const groupRank = parsePresetGroupRankCommand(withoutGender);
+  if (groupRank) return groupRank;
+
   // 直接输入主播名/抖音号/主播 ID：返回库内全部相关数据
   if (
     withoutGender.length >= 1
     && withoutGender.length <= 40
     && !/[，。！？、；：,.!?;:]/.test(withoutGender)
-    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能)/.test(withoutGender)
+    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能|第?[1-7一二三四五六七]组|组[1-7一二三四五六七]|各组)/.test(withoutGender)
   ) {
     return { type: "anchor-profile", query: withoutGender };
   }
@@ -692,6 +703,86 @@ async function handleExportWaveFile(args, command, db) {
   await args.replyFile({ buffer, fileName: `${date}_音浪数据.csv` });
 }
 
+async function loadWaveSourceForPresetRank(db) {
+  const summary = typeof db.getDashboardSummary === "function" ? await db.getDashboardSummary() : {};
+  const asOfDate = String(summary?.latestWaveDate || summary?.latestDataDate || "").trim() || null;
+  // 优先 PK 花名册（月总分 wave）；失败则回落双团日报 totalWave
+  if (typeof db.getPkRoster === "function") {
+    try {
+      const period = asOfDate && /^\d{4}-\d{2}/.test(asOfDate)
+        ? asOfDate.slice(0, 7)
+        : (() => {
+            const now = new Date();
+            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+          })();
+      const roster = await db.getPkRoster(period, 8);
+      const list = [...(roster?.males || []), ...(roster?.females || [])];
+      if (list.length) {
+        return {
+          asOfDate: asOfDate || (list.find((r) => r.latestWaveDate)?.latestWaveDate || null),
+          waveSource: list,
+          source: "pk-roster",
+          period,
+        };
+      }
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof db.getDailyWaveReport === "function" && asOfDate) {
+    const rows = [];
+    for (const gender of ["male", "female"]) {
+      try {
+        const report = await db.getDailyWaveReport(asOfDate, gender);
+        for (const row of report?.rows || []) rows.push(row);
+      } catch {
+        // ignore single gender failure
+      }
+    }
+    if (rows.length) {
+      return {
+        asOfDate,
+        waveSource: rows.map((r) => ({
+          name: r.name,
+          wave: Number(r.totalWave) || 0,
+          totalWave: Number(r.totalWave) || 0,
+        })),
+        source: "daily-report",
+        period: asOfDate.slice(0, 7),
+      };
+    }
+  }
+  return { asOfDate, waveSource: [], source: "empty", period: null };
+}
+
+async function handlePresetGroupRank(args, command, db) {
+  const loaded = await loadWaveSourceForPresetRank(db);
+  if (!loaded.waveSource?.length) {
+    await args.replyText("暂时没有可用的音浪总分数据，请先导入本月音浪。");
+    return;
+  }
+  if (command.all) {
+    const text = formatAllPresetGroupRanksText(loaded.waveSource, { asOfDate: loaded.asOfDate || undefined });
+    // 微信单条过长时拆开按组发送
+    const blocks = text.split(/\n\n+/).filter(Boolean);
+    if (blocks.length <= 1) {
+      await args.replyText(text);
+      return;
+    }
+    for (const block of blocks) {
+      await args.replyText(block);
+    }
+    return;
+  }
+  const groupNo = Number(command.groupNo);
+  if (!Number.isInteger(groupNo) || groupNo < 1 || groupNo > PRESET_GROUP_COUNT) {
+    await args.replyText(`组号须为 1–${PRESET_GROUP_COUNT}，例如「5组」或「第5组总分」。`);
+    return;
+  }
+  const rank = buildPresetGroupRank(groupNo, loaded.waveSource);
+  await args.replyText(formatPresetGroupRankText(rank, { asOfDate: loaded.asOfDate || undefined }));
+}
+
 async function handlePkGroups(args, command, db) {
   const { createWeixinBotSkills } = require("./weixin-bot-skills");
   const skills = createWeixinBotSkills({
@@ -904,6 +995,7 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ana
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
+  else if (command.type === "preset-group-rank") await handlePresetGroupRank(args, command, db);
   else if (command.type === "pk-groups") await handlePkGroups(args, command, db);
   else return false;
   return true;

@@ -18,6 +18,13 @@ const {
   PRESET_BATTLE_META,
   flattenPresetRosterNames,
 } = require("../shared/pk-preset-battle-groups");
+const {
+  buildPresetGroupRank,
+  formatPresetGroupRankText,
+  formatAllPresetGroupRanksText,
+  PRESET_GROUP_COUNT,
+  parseGroupNoToken,
+} = require("../shared/pk-preset-group-rank");
 
 
 function loadPresetRosterNames() {
@@ -224,6 +231,73 @@ function createWeixinBotSkills({ db, renderReportPng }) {
     };
   }
 
+
+  async function getPresetGroupRankTool(args = {}) {
+    const all =
+      args.all === true ||
+      args.all === 1 ||
+      args.all === "true" ||
+      String(args.scope || "").toLowerCase() === "all";
+    let groupNo = parseGroupNoToken(args.groupNo ?? args.group ?? args.n);
+    if (!all && groupNo == null) {
+      const raw = String(args.groupNo ?? args.group ?? args.query ?? "").trim();
+      const m = raw.match(/(?:第)?([1-7一二三四五六七])\s*组/) || raw.match(/^([1-7])$/);
+      if (m) groupNo = parseGroupNoToken(m[1]);
+    }
+    if (!all && (groupNo == null || groupNo < 1 || groupNo > PRESET_GROUP_COUNT)) {
+      return {
+        ok: false,
+        error: `请指定组号 1–${PRESET_GROUP_COUNT}，例如 groupNo=5；或 all=true 看各组。`,
+      };
+    }
+
+    const summary = typeof db.getDashboardSummary === "function" ? await db.getDashboardSummary() : {};
+    const asOfDate = String(summary?.latestWaveDate || summary?.latestDataDate || "").trim() || null;
+    let waveSource = [];
+    let period = asOfDate ? asOfDate.slice(0, 7) : null;
+    if (typeof db.getPkRoster === "function") {
+      try {
+        if (!period) {
+          const now = new Date();
+          period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        }
+        const roster = await db.getPkRoster(period, 8);
+        waveSource = [...(roster?.males || []), ...(roster?.females || [])];
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (!waveSource.length) {
+      return { ok: false, error: "没有可用的音浪总分数据" };
+    }
+
+    if (all) {
+      const textOut = formatAllPresetGroupRanksText(waveSource, { asOfDate: asOfDate || undefined });
+      return {
+        ok: true,
+        all: true,
+        asOfDate,
+        period,
+        text: textOut,
+        replyText: textOut,
+      };
+    }
+    const rank = buildPresetGroupRank(groupNo, waveSource);
+    const textOut = formatPresetGroupRankText(rank, { asOfDate: asOfDate || undefined });
+    return {
+      ok: true,
+      all: false,
+      asOfDate,
+      period,
+      groupNo,
+      startTime: rank.startTime,
+      rows: rank.rows,
+      missing: rank.missing,
+      text: textOut,
+      replyText: textOut,
+    };
+  }
+
   const tools = [
     {
       type: "function",
@@ -378,6 +452,28 @@ function createWeixinBotSkills({ db, renderReportPng }) {
         },
       },
       execute: analytics.exportWaveFile,
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_preset_group_rank",
+        description:
+          "查询内置争霸赛某一组（或各组）的「总分」排名。用户说「5组」「第5组总分」「各组排名」时调用。按本月累计音浪总分从高到低列出组内 8 人。",
+        parameters: {
+          type: "object",
+          properties: {
+            groupNo: {
+              type: "number",
+              description: "组号 1-7；与 all 二选一",
+            },
+            all: {
+              type: "boolean",
+              description: "true 时输出全部 7 组排名",
+            },
+          },
+        },
+      },
+      execute: getPresetGroupRankTool,
     },
     {
       type: "function",
