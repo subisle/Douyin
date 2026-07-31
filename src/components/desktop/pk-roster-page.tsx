@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Copy,
   Download,
   FileSpreadsheet,
   GripVertical,
@@ -56,6 +57,8 @@ import {
   suggestNextGroupPresetName,
   downloadPkGroupsCsv,
   exportPkGroupsToCsv,
+  formatPkGroupsCopyText,
+  copyTextToClipboard,
   type SavedGroupPreset,
 } from "./pk-roster-config";
 import {
@@ -784,6 +787,24 @@ export function PkRosterPage() {
     }
   };
 
+  const handleCopyGroups = async (groupKey?: string) => {
+    if (!groups.length) {
+      showToast("没有可复制的分组");
+      return;
+    }
+    const text = formatPkGroupsCopyText(groups, groupKey ? { groupKey } : undefined);
+    if (!text) {
+      showToast("没有可复制的内容");
+      return;
+    }
+    const ok = await copyTextToClipboard(text);
+    if (!ok) {
+      showToast("复制失败，请检查剪贴板权限");
+      return;
+    }
+    showToast(groupKey ? "已复制本组" : `已复制 ${groups.length} 组（组·时间·人名）`);
+  };
+
   if (loadingRoster) return <LoadingState label="加载 PK 名单…" />;
   if (error && !rawMales.length) {
     return <ErrorState message={error} onRetry={() => void loadRoster()} />;
@@ -908,6 +929,16 @@ export function PkRosterPage() {
               另存为
             </Button>
           ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleCopyGroups()}
+            disabled={!groups.length}
+            title="复制全部：组名 · 时间 · 人名"
+          >
+            <Copy className="mr-1 size-3.5" />
+            复制
+          </Button>
           <Button size="sm" variant="outline" onClick={handleExportCsv} disabled={!groups.length} title="导出 CSV 文件">
             <FileSpreadsheet className="mr-1 size-3.5" />
             导出CSV
@@ -1100,6 +1131,20 @@ export function PkRosterPage() {
                       <span className="font-normal text-muted-foreground">· T4 {formatWave(group.top4)}</span>
                     )}
                     <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
+                    <button
+                      type="button"
+                      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+                      title="复制本组（组·时间·人名）"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void handleCopyGroups(group.key);
+                      }}
+                    >
+                      <Copy className="size-3.5" />
+                    </button>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">

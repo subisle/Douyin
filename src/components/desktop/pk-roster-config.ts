@@ -825,6 +825,84 @@ export function downloadPkGroupsCsv(filename: string, csvText: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 200);
 }
 
+/** 从 scheduleLabel 抽开场时间，如 "08:15 开始连麦" → "08:15" */
+export function extractPkGroupStartTime(value?: string | null): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const m = raw.match(/(\d{1,2}:\d{2})/);
+  return m ? m[1] : raw;
+}
+
+type PkCopyGroup = {
+  key?: string;
+  order?: number;
+  label?: string;
+  startTime?: string;
+  scheduleLabel?: string;
+  members?: Array<{ name?: string | null } | null> | null;
+};
+
+/**
+ * 复制用纯文本：仅组名 + 时间 + 人名。
+ * 例：
+ * 第1组 · 08:15
+ * 啸辰 · 狼凯 · 浩泽 · …
+ */
+export function formatPkGroupsCopyText(
+  groups: PkCopyGroup[] | null | undefined,
+  options?: { groupKey?: string }
+): string {
+  const list = Array.isArray(groups) ? groups : [];
+  const filtered = options?.groupKey
+    ? list.filter((g, i) => (g.key || `g-${g.order ?? i + 1}`) === options.groupKey)
+    : list;
+  const blocks: string[] = [];
+  filtered.forEach((g, i) => {
+    const order = g.order ?? i + 1;
+    const label = String(g.label || `第${order}组`).trim() || `第${order}组`;
+    const time =
+      extractPkGroupStartTime(g.startTime) ||
+      extractPkGroupStartTime(g.scheduleLabel);
+    const names = (g.members || [])
+      .map((m) => String(m?.name || "").trim())
+      .filter(Boolean)
+      .join(" · ");
+    const head = time ? `${label} · ${time}` : label;
+    blocks.push(names ? `${head}\n${names}` : head);
+  });
+  return blocks.join("\n\n").trim();
+}
+
+/** 写入剪贴板；失败时走 textarea 兜底 */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  const value = String(text || "");
+  if (!value) return false;
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      // fall through
+    }
+  }
+  if (typeof document === "undefined") return false;
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = value;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** 开发期校验：TS 白名单与 shared 内置组扁平顺序一致 */
 export function assertPresetRosterSynced() {
   const fromText = parseRosterText(PRESET_ROSTER_TEXT);
