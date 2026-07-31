@@ -90,7 +90,8 @@ test("default export title is 星嗨艺创 and hides waves", () => {
   };
   const svg = renderPkGroupsSvg(result, { period: "2026-07" });
   assert.match(svg, /星嗨艺创/);
-  assert.match(svg, /最强/);
+  assert.doesNotMatch(svg, /最强/);
+  assert.doesNotMatch(svg, /次强/);
   assert.doesNotMatch(svg, /星嗨争霸赛/);
   assert.doesNotMatch(svg, /T4 /);
   assert.doesNotMatch(svg, /\d+(\.\d+)?万/);

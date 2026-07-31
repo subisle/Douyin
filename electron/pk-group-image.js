@@ -68,33 +68,6 @@ function truncate(value, max) {
   return `${s.slice(0, Math.max(0, max - 1))}…`;
 }
 
-/** 按 top4 推断最强/次强徽章（只用于标签，不输出音浪数字） */
-function resolveGroupBadges(result) {
-  const groups = Array.isArray(result?.groups) ? result.groups : [];
-  const badges = new Map();
-  if (!groups.length) return badges;
-
-  const strongestOrder = Number(result.strongestGroup) || 0;
-  if (strongestOrder > 0) {
-    badges.set(strongestOrder, "最强");
-  }
-
-  const ranked = groups
-    .map((g, i) => ({
-      order: Number(g.order) || i + 1,
-      top4: Number(g.top4) || 0,
-    }))
-    .sort((a, b) => b.top4 - a.top4 || a.order - b.order);
-
-  if (ranked[0] && !badges.has(ranked[0].order)) {
-    badges.set(ranked[0].order, "最强");
-  }
-  if (ranked[1] && !badges.has(ranked[1].order)) {
-    badges.set(ranked[1].order, "次强");
-  }
-  return badges;
-}
-
 /**
  * @param {object} result buildPkGroups 成功结果
  * @param {object} [options]
@@ -139,7 +112,6 @@ function renderPkGroupsSvg(result, options = {}) {
   const sub =
     options.subtitle ||
     `${periodText} · 共 ${total} 人 · ${count} 组${modeBit}`.trim();
-  const badges = resolveGroupBadges(result);
 
   const parts = [];
   parts.push(
@@ -251,9 +223,6 @@ function renderPkGroupsSvg(result, options = {}) {
     const y = contentTop + row * (cardH + gap);
     const accent = ACCENTS[index % ACCENTS.length];
     const members = Array.isArray(group.members) ? group.members : [];
-    const order = Number(group.order) || index + 1;
-    const badge = badges.get(order) || "";
-
     // card shell
     parts.push(
       `<rect x="${x}" y="${y}" width="${cardW}" height="${cardH}" rx="20" fill="#ffffff" stroke="${accent.main}40" stroke-width="1.5" filter="url(#shadow)"/>`
@@ -281,20 +250,6 @@ function renderPkGroupsSvg(result, options = {}) {
     parts.push(
       `<text x="${x + 34}" y="${y + 54}" fill="${accent.deep}" font-size="11" font-weight="700" font-family="${FONT}" opacity="0.82">${escapeXml(meta)}</text>`
     );
-
-    if (badge) {
-      const bw = badge === "最强" ? 44 : 44;
-      const bx = x + cardW - 28 - bw;
-      const fill = badge === "最强" ? accent.main : "#ffffff";
-      const stroke = accent.main;
-      const fg = badge === "最强" ? "#ffffff" : accent.deep;
-      parts.push(
-        `<rect x="${bx}" y="${y + 28}" width="${bw}" height="22" rx="11" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`
-      );
-      parts.push(
-        `<text x="${bx + bw / 2}" y="${y + 43}" text-anchor="middle" fill="${fg}" font-size="11" font-weight="900" font-family="${FONT}">${escapeXml(badge)}</text>`
-      );
-    }
 
     if (showWave && group.top4) {
       parts.push(
