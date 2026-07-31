@@ -135,6 +135,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (one === "flags" && two === "settle") return apiOk(await call("settleFlagScores", body.period));
 
     if (one === "star-battle" && two === "scores") return apiOk(await call("saveStarBattleScore", body));
+    if (one === "pk" && two === "groups") return apiOk(await call("buildPkGroups", body));
 
     if (one === "rewards" && two === "report") return apiOk(await call("getRewardReport", body.period, body.config));
 

@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |----|------|
 | 日期 | 2026-07-28 |
-| 状态 | 待实现 |
+| 状态 | **superseded** by `2026-07-31-pk-grouping-only-design.md`（产品改为单一分组页，不做三阶段/记分） |
 | 落点 | 扩展现有 **PK 名单页**（`src/components/desktop/pk-roster-page.tsx` + `pk-roster-config.ts`） |
 | 相关 | 导入名单 / 排除人员已有；星嗨争霸页监控分**不入库**、**不参与自动分组** |
 

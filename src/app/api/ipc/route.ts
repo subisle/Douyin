@@ -39,6 +39,7 @@ const ALLOWED_METHODS = new Set([
   "saveTierRules",
   "getDailyWaveReport",
   "getPkRoster",
+  "buildPkGroups",
   "getStarBattleScores",
   "saveStarBattleScore",
   "getFlagWinner",
