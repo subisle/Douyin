@@ -1018,7 +1018,7 @@ test("agent mode still fast-routes 第三组 preset rank", async () => {
   const replies = [];
   const males = [
     { name: "浩冬", wave: 878_000 },
-    { name: "玖玉", wave: 739_000 },
+    { name: "浩辰", wave: 739_000 },
     { name: "狼赫", wave: 531_000 },
     { name: "狼明", wave: 446_000 },
     { name: "狼兴", wave: 415_000 },
@@ -1062,7 +1062,7 @@ test("preset group rank command returns sorted totals for group 5", async () => 
     { name: "啸帆", wave: 515_701 },
     { name: "啸安", wave: 391_389 },
     { name: "狼仔", wave: 303_679 },
-    { name: "浩辰", wave: 267_491 },
+    { name: "玖玉", wave: 267_491 },
     { name: "啸辰", wave: 100 },
   ];
   // pad leaderboard so top10/top20 thresholds exist
@@ -1091,5 +1091,5 @@ test("preset group rank command returns sorted totals for group 5", async () => 
   assert.match(replies[0], /1 浩鸣 164\.7万（#1 已进前10）/);
   assert.match(replies[0], /5 啸帆 .*已进前10/);
   assert.match(replies[0], /6 啸安 .*距前10差.*已进前20/);
-  assert.match(replies[0], /8 浩辰 .*距前10差.*距前20差/);
+  assert.match(replies[0], /8 玖玉 .*距前10差.*距前20差/);
 });

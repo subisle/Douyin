@@ -26,6 +26,10 @@ test("preset anchors: 狼佑 G1 / 狼辉 G4 / 最强侧 G5", () => {
   assert.ok(PRESET_BATTLE_GROUPS[3].includes("狼辉"));
   assert.ok(PRESET_BATTLE_GROUPS[4].includes("啸帆"));
   assert.ok(PRESET_BATTLE_GROUPS[4].includes("浩鸣"));
+  assert.ok(PRESET_BATTLE_GROUPS[2].includes("浩辰"));
+  assert.ok(PRESET_BATTLE_GROUPS[4].includes("玖玉"));
+  assert.ok(!PRESET_BATTLE_GROUPS[2].includes("玖玉"));
+  assert.ok(!PRESET_BATTLE_GROUPS[4].includes("浩辰"));
   assert.ok(PRESET_BATTLE_GROUPS[6].includes("浩森"));
   assert.ok(PRESET_BATTLE_GROUPS[6].includes("浩沐"));
 });

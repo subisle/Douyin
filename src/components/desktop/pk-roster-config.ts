@@ -23,7 +23,7 @@ export const LEGACY_ROSTER_CONFIG_STORAGE_KEY_V16 = "pk-roster-list-config-v16";
  * bot skill 用正则从本文件抽取 PRESET_ROSTER_TEXT，**勿改符号名 / 反引号形态**。
  */
 export const PRESET_ROSTER_TEXT = `啸辰
-狼凯
+浩杰
 浩泽
 狼瑞
 狼哲
@@ -38,7 +38,7 @@ export const PRESET_ROSTER_TEXT = `啸辰
 浩运
 浩阳
 浩启
-玖玉
+浩辰
 狼兴
 狼影
 浩冬
@@ -49,7 +49,7 @@ export const PRESET_ROSTER_TEXT = `啸辰
 狼辉
 玖雪
 浩玟
-浩杰
+狼凯
 浩哲
 狼岳
 啸强
@@ -59,7 +59,7 @@ export const PRESET_ROSTER_TEXT = `啸辰
 玖玥
 啸帆
 狼仔
-浩辰
+玖玉
 啸安
 南方楠
 玖妹
