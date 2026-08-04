@@ -15,15 +15,13 @@ const COMPLETE_ENV = Object.freeze({
   DB_NAME: "app_db",
 });
 
-test("rejects missing database environment variables", () => {
-  assert.throws(
-    () => resolveDbConfig({}),
-    /DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME/
-  );
-  assert.throws(
-    () => resolveDbConfig({ ...COMPLETE_ENV, DB_PASSWORD: " " }),
-    /DB_PASSWORD/
-  );
+test("falls back to built-in config when environment variables are missing", () => {
+  // Empty env should now resolve using built-in fallback
+  const config = resolveDbConfig({});
+  assert.equal(config.host, "mysql7.sqlpub.com");
+  assert.equal(config.port, 3312);
+  assert.equal(config.user, "douyinxs");
+  assert.equal(config.database, "douyinxs");
 });
 
 test("resolves a complete database configuration", () => {
