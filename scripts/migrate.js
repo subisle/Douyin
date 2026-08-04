@@ -4,7 +4,7 @@
 
 const path = require("node:path");
 const mysql = require("mysql2/promise");
-const { resolveDbConfig } = require("../electron/db-config");
+const { resolveDbConfig, REQUIRED_DB_ENV_KEYS } = require("../electron/db-config");
 const {
   buildLockName,
   getMigrationStatus,
@@ -63,6 +63,11 @@ async function main(options = {}) {
 
   let config;
   try {
+    // Migration CLI 必须有显式 DB 配置，不使用打包 fallback
+    const hasExplicitDb = REQUIRED_DB_ENV_KEYS.every((k) => String(env[k] ?? "").trim());
+    if (!hasExplicitDb) {
+      throw new Error("缺少数据库环境变量: " + REQUIRED_DB_ENV_KEYS.join(", "));
+    }
     config = resolveDbConfig(env);
   } catch (error) {
     output.error(`[migrate] ${error.message}`);
