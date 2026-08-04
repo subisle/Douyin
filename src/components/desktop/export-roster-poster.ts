@@ -155,8 +155,7 @@ export async function exportRosterPoster({ surname, entries }: RosterPosterOptio
       // 姓名
       ctx.fillStyle = "#101828";
       ctx.font = "bold 13px sans-serif";
-      const nameText = e.accountCount > 1 ? `${e.name}(${e.accountCount}号)` : e.name;
-      ctx.fillText(truncate(ctx, nameText, 110), x + 36, y);
+      ctx.fillText(truncate(ctx, e.name, 110), x + 36, y);
 
       // 师傅
       ctx.fillStyle = "#667085";

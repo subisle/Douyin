@@ -243,29 +243,13 @@ export async function exportFamilyPoster(
     }
 
     const displayName = getFamilyDisplayName(p.node, isRoot);
-    const accountText = p.node.accountCount > 1 ? `${p.node.accountCount}账号` : "";
-    const accountW = accountText ? 30 : 0;
-    const nameMaxW = NODE_W - 16 - accountW;
+    const nameMaxW = NODE_W - 16;
     ctx.textAlign = "left";
     ctx.fillText(
       truncateCanvasText(ctx, displayName, nameMaxW),
       nx + 9,
       ny + 17
     );
-
-    if (accountText) {
-      const badgeW = 27;
-      const badgeH = 12;
-      const badgeX = nx + NODE_W - badgeW - 7;
-      const badgeY = ny + 11;
-      drawRoundRect(ctx, badgeX, badgeY, badgeW, badgeH, 6);
-      ctx.fillStyle = "rgba(0, 122, 255, 0.10)";
-      ctx.fill();
-      ctx.fillStyle = C.blue;
-      ctx.font = "bold 7px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(accountText, badgeX + badgeW / 2, badgeY + badgeH / 2 + 0.5);
-    }
 
     // 代数：0 代不显示文字，1/2/3 代用不同颜色。
     const generationText = getFamilyGenerationText(p.node);

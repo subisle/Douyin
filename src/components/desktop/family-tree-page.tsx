@@ -317,13 +317,10 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
   const displayName = getFamilyDisplayName(node, isRoot);
   const rawName = node.name.trim() || "未命名";
   const isFemale = node.gender === "female";
-  const accountText = node.accountCount > 1 ? `${node.accountCount}账号` : "";
   const generationText = getFamilyGenerationText(node);
   const generationColor = getFamilyGenerationColor(node);
   const hasColoredGeneration = node.generation === 1 || node.generation === 2 || node.generation === 3;
-  const titleParts = [rawName !== displayName ? `${displayName}（原始: ${rawName}）` : displayName];
-  const accountIds = [node.anchorId, ...(node.aliasIds || [])].filter(Boolean);
-  if (accountIds.length > 0) titleParts.push(`账号：${accountIds.join("、")}`);
+  const title = rawName !== displayName ? `${displayName}（原始: ${rawName}）` : displayName;
 
   return (
     <div
@@ -345,7 +342,7 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
             }
           : undefined
       }
-      title={titleParts.join("\n")}
+      title={title}
     >
       <div
         className={cn(
@@ -368,11 +365,6 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
         >
           {displayName}
         </span>
-        {accountText && (
-          <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium leading-none text-primary">
-            {accountText}
-          </span>
-        )}
       </div>
       <div className="mt-1 flex min-w-0 items-center justify-between gap-1">
         {generationText ? (
