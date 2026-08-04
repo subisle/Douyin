@@ -296,6 +296,7 @@ export function createHttpElectronApi(): ElectronAPI {
 
     getAnchors: () => request("/anchors"),
     getFamilyTree: () => request("/family-tree"),
+    getRosterBySurname: (surname: string) => request(`/roster/${encodeURIComponent(surname)}`),
     getDashboardSummary: () => request("/dashboard/summary"),
     getStartupHealth: () => request("/startup-health"),
     getWaveRanking: (limit) => request(`/dashboard/wave-ranking${qs({ limit })}`),

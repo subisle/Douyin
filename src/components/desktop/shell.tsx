@@ -20,6 +20,7 @@ import { WeixinBotPage } from "./weixin-bot-page";
 import { QqBotPage } from "./qq-bot-page";
 import { LockScreen } from "./lock-screen";
 import { type PageId, type AppRole } from "./types";
+import type { DailyReportRow } from "@/types/electron";
 import type { DroppedImportFile } from "./import-page";
 
 type StartupCheckStatus = "checking" | "ok" | "warning" | "error";
@@ -69,6 +70,63 @@ export function DesktopShell() {
     run();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // 注册 Canvas 日报渲染全局函数，供主进程 bot 发送日报时调用
+  // 与桌面端"导出图片"使用完全一致的 Canvas 绘制逻辑
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.__renderDailyReportPng = async (report: {
+      date: string;
+      gender: "male" | "female";
+      rows: DailyReportRow[];
+      summary?: Record<string, unknown>;
+    }) => {
+      const {
+        drawAppleReportToCanvas,
+        drawReportToCanvas,
+        splitDailyReportRowsForExport,
+        DEFAULT_VISIBLE_COLUMNS,
+      } = await import("./draw-report-canvas");
+      const rows = report.rows;
+      if (!rows?.length) throw new Error("没有可渲染的日报数据");
+      const gender: "male" | "female" = report.gender === "female" ? "female" : "male";
+      const style: "apple" | "classic" = gender === "male" ? "apple" : "classic";
+      const pages = splitDailyReportRowsForExport(rows);
+      const results: { dataUrl: string; pageIndex: number; pageCount: number; fileNameSuffix: string }[] = [];
+      for (const page of pages) {
+        const canvas = document.createElement("canvas");
+        const opts = {
+          date: report.date,
+          rows: page.rows,
+          gender,
+          scale: 2,
+          visibleColumns: DEFAULT_VISIBLE_COLUMNS,
+          rankOffset: page.rankOffset,
+          pageIndex: page.pageIndex,
+          pageCount: page.pageCount,
+          statsRows: rows,
+          notLiveCount: Number(report.summary?.notLiveCount) || undefined,
+          notLiveDays: Number(report.summary?.notLiveDays) || 0,
+        };
+        if (style === "apple") {
+          drawAppleReportToCanvas(canvas, opts);
+        } else {
+          drawReportToCanvas(canvas, opts);
+        }
+        const dataUrl = canvas.toDataURL("image/png");
+        results.push({
+          dataUrl,
+          pageIndex: page.pageIndex,
+          pageCount: page.pageCount,
+          fileNameSuffix: page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "",
+        });
+      }
+      return results;
+    };
+    return () => {
+      delete window.__renderDailyReportPng;
     };
   }, []);
 

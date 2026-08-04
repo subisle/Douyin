@@ -2712,6 +2712,90 @@ function buildPkGroups(payload) {
   return engineBuild(payload || {});
 }
 
+/**
+ * 按字辈（名字首字）导出名单。
+ * 支持的 surname 值: 浩/狼/玖/啸
+ * 返回该字辈所有 person 的基本信息 + 账号 + 最新音浪。
+ */
+async function getRosterBySurname(surname) {
+  const db = getPool();
+  const likePattern = `${surname}%`;
+  const [persons] = await db.query(
+    `SELECT id, name, gender, master_id, generation
+       FROM persons
+      WHERE name LIKE ?
+      ORDER BY generation IS NULL, generation, id`,
+    [likePattern]
+  );
+  if (persons.length === 0) return [];
+  const personIds = persons.map((p) => Number(p.id));
+  const [accounts] = await db.query(
+    `SELECT id, person_id, anchor_id, is_primary, douyin_no, anchor_name
+       FROM accounts
+      WHERE person_id IN (?)
+        AND anchor_id IS NOT NULL
+        AND anchor_id != ''
+      ORDER BY person_id, is_primary DESC, id ASC`,
+    [personIds]
+  );
+  // 获取最新一天音浪（wave_snapshots 用 anchor_id 关联，需先取所有 anchor_id）
+  const allAnchorIds = accounts.map(a => a.anchor_id);
+  const waveMap = new Map(); // personId -> dailyWave
+  if (allAnchorIds.length > 0) {
+    const ph2 = allAnchorIds.map(() => "?").join(",");
+    const [latestDateRows] = await db.query(
+      "SELECT MAX(import_date) AS latest FROM wave_snapshots WHERE anchor_id IN (" + ph2 + ")",
+      allAnchorIds
+    );
+    const latestDate = latestDateRows[0]?.latest;
+    if (latestDate) {
+      const [waveRows] = await db.query(
+        "SELECT anchor_id, wave_value FROM wave_snapshots WHERE anchor_id IN (" + ph2 + ") AND import_date = ?",
+        [...allAnchorIds, latestDate]
+      );
+      const anchorWave = new Map();
+      for (const r of waveRows) anchorWave.set(r.anchor_id, Number(r.wave_value) || 0);
+      // 按人归并：取该人所有 anchor 的音浪之和
+      for (const a of accounts) {
+        const pid = Number(a.person_id);
+        const w = anchorWave.get(a.anchor_id) || 0;
+        waveMap.set(pid, (waveMap.get(pid) || 0) + w);
+      }
+    }
+  }
+  // 师傅名字
+  const masterIds = [...new Set(persons.filter(p => p.master_id).map(p => Number(p.master_id)))];
+  let masterNameMap = new Map();
+  if (masterIds.length > 0) {
+    const [masters] = await db.query('SELECT id, name FROM persons WHERE id IN (?)', [masterIds]);
+    masterNameMap = new Map(masters.map(m => [Number(m.id), m.name]));
+  }
+  const accountByPerson = new Map();
+  for (const a of accounts) {
+    const pid = Number(a.person_id);
+    if (!accountByPerson.has(pid)) accountByPerson.set(pid, []);
+    accountByPerson.get(pid).push(a);
+  }
+  return persons.map(p => {
+    const pid = Number(p.id);
+    const personAccounts = accountByPerson.get(pid) || [];
+    const primary = personAccounts.find(a => Number(a.is_primary) === 1) || personAccounts[0] || null;
+    return {
+      id: pid,
+      name: p.name || "",
+      gender: p.gender || "",
+      generation: p.generation ?? null,
+      masterName: p.master_id ? masterNameMap.get(Number(p.master_id)) || null : null,
+      anchorId: primary ? primary.anchor_id || "" : "",
+      douyinId: primary ? primary.douyin_no || "" : "",
+      nickname: primary ? primary.anchor_name || "" : "",
+      accountCount: personAccounts.length,
+      aliasIds: primary ? personAccounts.filter(a => a.id !== primary.id).map(a => a.anchor_id) : personAccounts.map(a => a.anchor_id),
+      dailyWave: waveMap.get(pid) || 0,
+    };
+  });
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -2753,6 +2837,7 @@ module.exports = {
   saveStarBattleScore,
   getFlagWinner,
   getRewardReport,
+  getRosterBySurname,
   verifyAppPassword,
   hasAppPassword,
   __testing: { importSnapshotRows },

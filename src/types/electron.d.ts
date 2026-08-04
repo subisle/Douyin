@@ -28,6 +28,20 @@ export interface FamilyNode {
   aliasIds: string[];
 }
 
+export interface RosterEntry {
+  id: number;
+  name: string;
+  gender: string;
+  generation: number | null;
+  masterName: string | null;
+  anchorId: string;
+  douyinId: string;
+  nickname: string;
+  accountCount: number;
+  aliasIds: string[];
+  dailyWave: number;
+}
+
 export interface DashboardSummary {
   totalAnchors: number;
   totalAccounts: number;
@@ -941,6 +955,7 @@ declare global {
     onQqBotMessagesCleared: (callback: () => void) => () => void;
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
+    getRosterBySurname: (surname: string) => Promise<IpcResult<RosterEntry[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;
     getStartupHealth: () => Promise<IpcResult<StartupHealthResult>>;
     getWaveRanking: (limit?: number) => Promise<IpcResult<WaveRankRow[]>>;
@@ -1094,5 +1109,11 @@ declare global {
 
   interface Window {
     electronAPI?: ElectronAPI;
+    __renderDailyReportPng?: (report: {
+      date: string;
+      gender: "male" | "female";
+      rows: DailyReportRow[];
+      summary?: Record<string, unknown>;
+    }) => Promise<Array<{ dataUrl: string; pageIndex: number; pageCount: number; fileNameSuffix: string }>>;
   }
 }

@@ -1,6 +1,17 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage } = require("electron");
+const { app, BrowserWindow, WebContentsView, ipcMain, safeStorage, session } = require("electron");
 const fs = require("fs");
 const path = require("path");
+
+// 强制下载保存到 ~/Downloads，不弹保存对话框
+function setupDownloadPath() {
+  const downloadsDir = app.getPath("downloads") || path.join(app.getPath("home"), "Downloads");
+  const ses = session.defaultSession;
+  ses.on("will-download", (_event, item) => {
+    const filename = item.getFilename();
+    if (!filename) return;
+    item.setSavePath(path.join(downloadsDir, filename));
+  });
+}
 const { applyBuiltInDbEnv } = require("./db-config");
 const { loadRuntimeEnvironment } = require("./runtime-env");
 
@@ -29,6 +40,31 @@ const { LivePkWatcher } = require("./live-pk-watcher");
 const { WeixinBotService } = require("./weixin-bot");
 const { createWeixinCommandHandler } = require("./weixin-bot-commands");
 const { renderDailyReportPng } = require("./weixin-bot-report");
+
+/**
+ * Bot 日报图片渲染器：通过渲染进程 Canvas 绘制，与桌面端"导出图片"完全一致。
+ * 降级：如果渲染进程未就绪（窗口未加载），回退到 SVG 渲染。
+ */
+const rendererReportPng = Object.assign(
+  async function renderReportPngFallback(report, options = {}) {
+    // 降级到 SVG 渲染
+    return renderDailyReportPng(report, options);
+  },
+  {
+    async renderPages(report, options = {}) {
+      try {
+        // 通过渲染进程 Canvas 渲染（与桌面端导出一致）
+        const pages = await renderDailyReportViaRenderer(report);
+        if (pages && pages.length) return pages;
+      } catch (err) {
+        console.warn("[report] Canvas 渲染失败，降级到 SVG:", err?.message || err);
+      }
+      // 降级到 SVG 渲染
+      const { renderDailyReportPngPages } = require("./weixin-bot-report");
+      return renderDailyReportPngPages(report, options);
+    },
+  }
+);
 const { createWeixinBotSkills } = require("./weixin-bot-skills");
 const { WeixinBotAgent } = require("./weixin-bot-agent");
 const { createWeixinUserMemory } = require("./weixin-bot-user-memory");
@@ -103,6 +139,41 @@ function focusMainWindow() {
   return true;
 }
 
+/**
+ * 通过渲染进程 Canvas 渲染日报图片，与桌面端"导出图片"完全一致。
+ * 渲染进程 shell.tsx 注册了 window.__renderDailyReportPng 全局函数。
+ * @returns {Promise<Array<{ buffer: Buffer, pageIndex, pageCount, fileNameSuffix }>>}
+ */
+async function renderDailyReportViaRenderer(report) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error("主窗口未就绪，无法渲染日报图片");
+  }
+  const wc = mainWindow.webContents;
+  // 等待渲染进程加载完成
+  if (wc.isLoading()) {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("等待渲染进程超时")), 15000);
+      wc.once("did-finish-load", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+  const pages = await wc.executeJavaScript(
+    `window.__renderDailyReportPng(${JSON.stringify(report)})`,
+    true
+  );
+  if (!Array.isArray(pages) || !pages.length) {
+    throw new Error("渲染进程返回空结果");
+  }
+  return pages.map((p) => ({
+    buffer: Buffer.from(p.dataUrl.split(",")[1], "base64"),
+    pageIndex: p.pageIndex,
+    pageCount: p.pageCount,
+    fileNameSuffix: p.fileNameSuffix || "",
+  }));
+}
+
 if (gotSingleInstanceLock) {
   app.on("second-instance", () => {
     if (!focusMainWindow()) {
@@ -132,7 +203,7 @@ const weixinBot = new WeixinBotService({
     return safeStorage.decryptString(Buffer.from(String(encrypted), "base64"));
   },
 });
-const weixinBotSkills = createWeixinBotSkills({ db, renderReportPng: renderDailyReportPng });
+const weixinBotSkills = createWeixinBotSkills({ db, renderReportPng: rendererReportPng });
 const weixinUserMemory = createWeixinUserMemory({
   storagePath: () => resolveUserMemoryPath(),
 });
@@ -143,7 +214,7 @@ const weixinBotAgent = new WeixinBotAgent({
 });
 const weixinCommandHandler = createWeixinCommandHandler({
   db,
-  renderReportPng: renderDailyReportPng,
+  renderReportPng: rendererReportPng,
   agent: weixinBotAgent,
   analytics: weixinBotSkills.analytics,
   dailyPush: {
@@ -154,7 +225,7 @@ const weixinCommandHandler = createWeixinCommandHandler({
   },
 });
 weixinBotAgent.modeStore = weixinCommandHandler.modeStore;
-weixinBot.setDailyPushDependencies({ db, renderReportPng: renderDailyReportPng });
+weixinBot.setDailyPushDependencies({ db, renderReportPng: rendererReportPng });
 weixinBot.setCommandHandler(weixinCommandHandler);
 if (weixinCommandHandler.modeStore) {
   weixinBot.setModeStore(weixinCommandHandler.modeStore);
@@ -752,6 +823,8 @@ function createWindow() {
 app.whenReady().then(() => {
   if (!gotSingleInstanceLock) return;
 
+  setupDownloadPath();
+
   try {
     const { logStorageReport } = require("./local-paths");
     logStorageReport(process.env, console);
@@ -915,6 +988,7 @@ function wrap(fn) {
 
 ipcMain.handle("data:getAnchors", wrap(() => db.getAnchors()));
 ipcMain.handle("data:getFamilyTree", wrap(() => db.getFamilyTree()));
+ipcMain.handle("data:getRosterBySurname", wrap((_, surname) => db.getRosterBySurname(surname)));
 ipcMain.handle("data:getDashboardSummary", wrap(() => db.getDashboardSummary()));
 ipcMain.handle("data:getStartupHealth", wrap(() => db.getStartupHealth()));
 ipcMain.handle("data:getWaveRanking", wrap((limit) => db.getWaveRanking(limit)));
@@ -1048,6 +1122,11 @@ ipcMain.handle(
 // ── 应用密码锁 ──────────────────────────────────────────
 ipcMain.handle("auth:verifyPassword", wrap((password) => db.verifyAppPassword(password)));
 ipcMain.handle("auth:hasPassword", wrap(() => db.hasAppPassword()));
+
+// bot 日报图片渲染：通过渲染进程 Canvas 绘制，与桌面端导出完全一致
+ipcMain.handle("report:render-png", async (_event, report) => {
+  return renderDailyReportViaRenderer(report);
+});
 
 // ── 自动更新 IPC ──────────────────────────────────────────
 ipcMain.handle("updater:check", async () => {

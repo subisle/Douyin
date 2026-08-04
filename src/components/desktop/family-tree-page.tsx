@@ -6,8 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useElectronData } from "./use-electron-data";
-import type { FamilyNode } from "@/types/electron";
+import type { FamilyNode, RosterEntry } from "@/types/electron";
 import { exportFamilyPoster } from "./export-family-poster";
+import { exportRosterPoster } from "./export-roster-poster";
 import {
   FAMILY_COL_GAP as COL_GAP,
   FAMILY_NODE_H as NODE_H,
@@ -250,6 +251,7 @@ function TreeCard({ roots }: { roots: TreeNode[] }) {
             <Download className="size-4" />
             {exporting ? "导出中…" : "导出海报"}
           </button>
+          <RosterExportButtons />
         </div>
       </CardHeader>
       <CardContent className="min-h-0 flex-1">
@@ -391,6 +393,58 @@ function NodeCard({ node, isRoot }: { node: TreeNode; isRoot: boolean }) {
           <span className="shrink-0 text-[9px] leading-3 text-muted-foreground">{node.children.length}徒</span>
         )}
       </div>
+    </div>
+  );
+}
+
+const SURNAMES = ["浩", "狼", "玖", "啸"] as const;
+
+function RosterExportButtons() {
+  const [exportingSurname, setExportingSurname] = useState<string | null>(null);
+  const [rosterOpen, setRosterOpen] = useState(false);
+
+  const handleRosterExport = async (surname: string) => {
+    if (exportingSurname) return;
+    setExportingSurname(surname);
+    try {
+      const res = await window.electronAPI?.getRosterBySurname(surname);
+      if (!res || !res.success || !res.data || res.data.length === 0) {
+        alert(`未找到${surname}字辈的成员`);
+        return;
+      }
+      await exportRosterPoster({ surname, entries: res.data as RosterEntry[] });
+    } catch (e) {
+      console.error(`${surname}字辈名单导出失败`, e);
+      alert(`${surname}字辈名单导出失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExportingSurname(null);
+      setRosterOpen(false);
+    }
+  };
+
+  return (
+    <div className="app-no-drag relative">
+      <button
+        onClick={() => setRosterOpen((v) => !v)}
+        className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium transition hover:bg-accent"
+      >
+        <Download className="size-4" />
+        导出名单
+      </button>
+      {rosterOpen && (
+        <div className="absolute right-0 top-full z-50 mt-1 flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 shadow-md">
+          {SURNAMES.map((s) => (
+            <button
+              key={s}
+              onClick={() => handleRosterExport(s)}
+              disabled={!!exportingSurname}
+              className="flex items-center gap-2 rounded px-3 py-1.5 text-sm transition hover:bg-accent disabled:opacity-50"
+            >
+              {exportingSurname === s ? "导出中…" : `${s}字辈`}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

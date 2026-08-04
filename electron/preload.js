@@ -123,6 +123,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 数据
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),
   getFamilyTree: () => ipcRenderer.invoke("data:getFamilyTree"),
+  getRosterBySurname: (surname) => ipcRenderer.invoke("data:getRosterBySurname", surname),
   getDashboardSummary: () => ipcRenderer.invoke("data:getDashboardSummary"),
   getStartupHealth: () => ipcRenderer.invoke("data:getStartupHealth"),
   getWaveRanking: (limit) => ipcRenderer.invoke("data:getWaveRanking", limit),
