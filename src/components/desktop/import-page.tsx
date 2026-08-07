@@ -78,7 +78,16 @@ interface AnchorPreviewSummary {
   stats: Record<AnchorRowStatus, number>;
 }
 
-const yesterdayStr = () => {
+const getDefaultDate = (kind: ImportMode): string => {
+  const d = new Date();
+  if (kind === "duration") {
+    d.setDate(1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -267,7 +276,10 @@ export function ImportPage({
   onIncomingFileConsumed?: () => void;
 }) {
   const [kind, setKind] = useState<ImportMode>("wave");
-  const [date, setDate] = useState(yesterdayStr());
+  const [date, setDate] = useState(getDefaultDate("wave"));
+  useEffect(() => {
+    setDate(getDefaultDate(kind));
+  }, [kind]);
   const [fileName, setFileName] = useState("");
   const [summary, setSummary] = useState<PreviewSummary | null>(null);
   const [anchorSummary, setAnchorSummary] = useState<AnchorPreviewSummary | null>(null);
@@ -513,7 +525,7 @@ export function ImportPage({
             );
         if (!res.success) throw new Error(res.error);
         setResult(
-          `成功导入 ${rowsToImport.length} 条${IMPORT_KIND_LABEL[kind]}数据（新增 ${summary!.stats.new}，覆盖 ${summary!.stats.changed}，无变化 ${summary!.stats.unchanged}，日期 ${date}）`
+          `成功导入 ${rowsToImport.length} 条${IMPORT_KIND_LABEL[kind]}数据（新增 ${summary!.stats.new}，覆盖 ${summary!.stats.changed}，无变化 ${summary!.stats.unchanged}，日期/月份 ${date}）`
         );
       }
       resetAfterSuccess();
@@ -540,7 +552,7 @@ export function ImportPage({
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-lg font-semibold">数据导入</h3>
           <Badge variant="outline" className="font-mono text-[11px]">
-            {kind === "anchors" ? "主播档案" : `默认 ${yesterdayStr()}`}
+            {kind === "anchors" ? "主播档案" : `默认 ${kind === "duration" ? "本月" : "昨日"}`}
           </Badge>
         </div>
         <div className="flex flex-wrap items-end gap-4">
@@ -589,9 +601,9 @@ export function ImportPage({
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">导入日期</label>
+              <label className="text-sm font-medium text-foreground">导入${kind === "duration" ? "月份" : "日期"}</label>
               <Input
-                type="date"
+                type={kind === "duration" ? "month" : "date"}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 className="w-48"
@@ -714,7 +726,7 @@ export function ImportPage({
                   ))}
                 </div>
                 <Input
-                  type="date"
+                  type={kind === "duration" ? "month" : "date"}
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   disabled={parsing || submitting}
