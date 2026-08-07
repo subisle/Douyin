@@ -8,6 +8,8 @@ export const dynamic = "force-dynamic";
 const ALLOWED_METHODS = new Set([
   "getAnchors",
   "getFamilyTree",
+  "getRosterBySurname",
+  "exportFamilyRoster",
   "getDashboardSummary",
   "getStartupHealth",
   "getWaveRanking",

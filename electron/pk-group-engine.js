@@ -14,7 +14,10 @@
  * 硬约束（默认）：
  * - 浩阳 与 浩沐 不同组，组序号差 ≥ 4
  * - 啸泽 与 啸帆 不同组，组序号差 ≥ 3
+ * - 玖依 与 狼影 不同组，组序号差 ≥ 3
+ * - 狼九 与 狼裕 不同组，组序号差 ≥ 3
  * - 次强组固定第 3 场、最强组固定第 4 场（组数不足时尽量靠后）
+ * - 间隔对仅在双方都在名单中时生效
  */
 
 const {
@@ -25,11 +28,14 @@ const {
   normalizeName,
   canonicalName,
   normalizeGapPairs,
+  filterGapPairsForMembers,
   validateGroupsGap,
 } = require("../shared/pk-group-constraints");
 const {
   PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_META,
+  PRESET_PROMO_GROUPS,
+  PRESET_PROMO_META,
 } = require("../shared/pk-preset-battle-groups");
 
 
@@ -1374,7 +1380,7 @@ function buildPkGroups(options = {}) {
     options.scoreField === "latestWave" || options.scoreField === "latest"
       ? "latestWave"
       : "wave";
-  const gapPairs = normalizeGapPairs(
+  const gapPairsRaw = normalizeGapPairs(
     Array.isArray(options.gapPairs) && options.gapPairs.length
       ? options.gapPairs
       : DEFAULT_GAP_PAIRS,
@@ -1409,6 +1415,13 @@ function buildPkGroups(options = {}) {
   if (members.length === 0) {
     return { ok: false, error: "没有可分组的成员", mode, groups: [] };
   }
+
+  // 间隔对：双方都在名单里才生效（玖依/狼影 等不因缺人整盘失败）
+  const gapPairs = filterGapPairsForMembers(
+    gapPairsRaw,
+    members.map((m) => m.name),
+    minGap
+  );
 
   const sizes = buildGroupSizes(members.length, groupSize, {
     gapPairs,
@@ -1691,6 +1704,8 @@ module.exports = {
   MODE_LABELS,
   PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_META,
+  PRESET_PROMO_GROUPS,
+  PRESET_PROMO_META,
   canonicalName,
   normalizeName,
   normalizeMode,

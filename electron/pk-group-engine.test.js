@@ -202,11 +202,18 @@ test("default mode is high_to_low and ranks by wave over trimmedAvg", () => {
   assert.ok(find("选手A").average > find("选手B").average);
 });
 
-test("missing constraint member fails clearly", () => {
+test("missing one side of gap pair skips that pair (does not fail)", () => {
   const members = fakeMembers().filter((m) => m.name !== "浩沐");
   const result = buildPkGroups({ members, mode: "balanced", minGap: 3 });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /浩沐/);
+  // 浩阳在、浩沐不在 → 阳沐对跳过；啸泽/啸帆仍约束
+  assert.equal(result.ok, true, result.error);
+  const indexOf = (name) => {
+    for (let i = 0; i < result.groups.length; i += 1) {
+      if (result.groups[i].members.some((m) => m.name === name)) return i;
+    }
+    return -1;
+  };
+  assert.ok(Math.abs(indexOf("啸泽") - indexOf("啸帆")) >= 3);
 });
 
 test("score_capable mode labels and respects gaps + strongest 4th", () => {
@@ -315,13 +322,21 @@ test("preset mode loads locked battle groups with 15-min schedule", () => {
   assert.equal(result.ok, true);
   assert.equal(result.mode, "preset");
   assert.equal(result.modeLabel, "内置分组");
-  assert.equal(result.groupCount, 7);
-  assert.deepEqual(result.sizes, [8, 8, 8, 8, 8, 8, 8]);
+  assert.equal(result.groupCount, 8);
+  assert.deepEqual(result.sizes, [7, 7, 7, 8, 7, 8, 7, 7]);
+  assert.ok(result.groups.every((g) => g.members.length >= 7 && g.members.length <= 8));
+  assert.ok(result.groups[5].members.some((m) => m.name === "鹏先生"));
+  assert.ok(result.groups[7].members.some((m) => m.name === "狼佑"));
+  assert.ok(result.groups[7].members.some((m) => m.name === "狼博"));
+  assert.ok(result.groups[7].members.some((m) => m.name === "狼影"));
   assert.equal(result.groups[0].startTime, "08:15");
   assert.equal(result.groups[1].startTime, "08:30");
   assert.equal(result.groups[6].startTime, "09:45");
-  assert.ok(result.groups[0].members.some((m) => m.name === "狼佑"));
-  assert.ok(result.groups[3].members.some((m) => m.name === "狼辉"));
+  assert.equal(result.groups[7].startTime, "10:00");
+  assert.ok(result.groups[0].members.some((m) => m.name === "玖依"));
+  assert.ok(result.groups[0].members.some((m) => m.name === "狼九"));
+  assert.ok(result.groups[3].members.some((m) => m.name === "玖玉"));
   assert.equal(result.groups[0].members.map((m) => m.name).join(","), PRESET_BATTLE_GROUPS[0].join(","));
+  // test bumps G5 wave so strongest becomes 5
   assert.equal(result.strongestGroup, 5);
 });

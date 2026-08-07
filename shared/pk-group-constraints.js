@@ -4,9 +4,18 @@ const DEFAULT_MIN_GAP = 3;
 /** 浩阳↔浩沐 单独更严：间隔 ≥4 组 */
 const YANG_MU_MIN_GAP = 4;
 
+/**
+ * 默认间隔硬约束（组序号差 |giA-giB| ≥ minGap）
+ * - 啸泽↔啸帆 ≥3
+ * - 玖依↔狼影 ≥3
+ * - 狼九↔狼裕 ≥3
+ * - 浩阳↔浩沐 ≥4（名单同时含二者时生效）
+ */
 const DEFAULT_GAP_PAIRS = [
   { a: "浩阳", b: "浩沐", minGap: YANG_MU_MIN_GAP },
   { a: "啸泽", b: "啸帆", minGap: DEFAULT_MIN_GAP },
+  { a: "玖依", b: "狼影", minGap: DEFAULT_MIN_GAP },
+  { a: "狼九", b: "狼裕", minGap: DEFAULT_MIN_GAP },
 ];
 
 const NAME_ALIASES = {
@@ -53,6 +62,7 @@ function normalizeGapPairs(rawPairs, fallbackMinGap = DEFAULT_MIN_GAP) {
 
 /**
  * 校验分组结果是否满足 gap 对。
+ * 任一方不在名单/分组中 → 跳过该对（不视为违规；约束仅在双方都在时生效）。
  * @param {Array<{ members: Array<{ name: string }> }>} groups 按出场序排列
  * @param {unknown} [gapPairs]
  * @returns {{ ok: boolean, violations: Array<object> }}
@@ -75,18 +85,8 @@ function validateGroupsGap(groups, gapPairs) {
   for (const { a, b, minGap } of pairs) {
     const giA = findIndex(a);
     const giB = findIndex(b);
-    if (giA < 0 || giB < 0) {
-      violations.push({
-        a,
-        b,
-        minGap,
-        reason: "missing",
-        actual: null,
-        giA,
-        giB,
-      });
-      continue;
-    }
+    // 缺一方：本对不适用
+    if (giA < 0 || giB < 0) continue;
     const actual = Math.abs(giA - giB);
     if (actual < minGap) {
       violations.push({
@@ -109,6 +109,21 @@ function formatGapViolation(v) {
   return `${v.a}↔${v.b} 间隔 ${v.actual} 组（要求≥${v.minGap}）`;
 }
 
+/**
+ * 只保留双方都在 nameSet 中的 gap 对。
+ * @param {unknown} rawPairs
+ * @param {Iterable<string>} memberNames
+ * @param {number} [fallbackMinGap]
+ */
+function filterGapPairsForMembers(rawPairs, memberNames, fallbackMinGap = DEFAULT_MIN_GAP) {
+  const nameSet = new Set(
+    [...(memberNames || [])].map((n) => canonicalName(n)).filter(Boolean)
+  );
+  return normalizeGapPairs(rawPairs, fallbackMinGap).filter(
+    (p) => nameSet.has(canonicalName(p.a)) && nameSet.has(canonicalName(p.b))
+  );
+}
+
 module.exports = {
   DEFAULT_MIN_GAP,
   YANG_MU_MIN_GAP,
@@ -117,6 +132,7 @@ module.exports = {
   normalizeName,
   canonicalName,
   normalizeGapPairs,
+  filterGapPairsForMembers,
   validateGroupsGap,
   formatGapViolation,
 };

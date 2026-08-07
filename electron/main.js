@@ -81,6 +81,8 @@ const {
   normalizeLiveRoomUrl,
   scanOpenWebSockets,
 } = require("./live-pk-capture");
+const { resolveDouyinLiveOptions } = require("./live-pk-protocol");
+const { LivePkMultiMonitor } = require("./live-pk-multi-monitor");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -188,6 +190,74 @@ const updater = createUpdater({
   sendStatus: (status) => sendToMainWindow("updater:status-changed", status),
 });
 const livePkWatcher = new LivePkWatcher();
+
+function createProtocolCaptureLiveOptions(liveRoomUrl, options = {}) {
+  // Multi-monitor adapter: protocol first, optional CDP fallback.
+  // Always returns a Promise of watcher options (no long-lived BrowserWindow).
+  const {
+    cookie = "",
+    onStatus,
+    bootstrapMode = "score",
+    shareGiftList = false,
+    allowBrowserFallback = true,
+    show = false,
+    parentWindow,
+    scoreOnly = true,
+  } = options;
+  return (async () => {
+    try {
+      const resolved = await resolveDouyinLiveOptions(liveRoomUrl, {
+        cookie,
+        onStatus,
+        bootstrapMode: scoreOnly ? "score" : bootstrapMode,
+        shareGiftList: scoreOnly ? false : shareGiftList,
+      });
+      if (cookie) resolved.cookie = cookie;
+      resolved.scoreOnly = scoreOnly !== false;
+      return resolved;
+    } catch (protocolError) {
+      if (!allowBrowserFallback) throw protocolError;
+      onStatus?.(`协议进房失败，回退浏览器: ${protocolError?.message || protocolError}`);
+      const capture = captureDouyinLiveOptions(liveRoomUrl, {
+        parentWindow: parentWindow || mainWindow,
+        onStatus,
+        cookie,
+        show: Boolean(show),
+        // Multi-room never keeps capture windows alive — close after options resolve.
+        keepAlive: false,
+      });
+      try {
+        const captured = await capture.promise;
+        if (cookie) captured.cookie = cookie;
+        captured.source = captured.source || "capture";
+        captured.keepCaptureWindow = false;
+        captured.scoreOnly = scoreOnly !== false;
+        return captured;
+      } finally {
+        try {
+          if (capture.window && !capture.window.isDestroyed?.()) capture.window.close();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  })();
+}
+
+const livePkMultiMonitor = new LivePkMultiMonitor({
+  createWatcher: () => new LivePkWatcher(),
+  captureLiveOptions: (liveRoomUrl, options) => createProtocolCaptureLiveOptions(liveRoomUrl, options),
+  getParentWindow: () => mainWindow,
+  getDefaultCookie: () => getDefaultLiveCookie(),
+  maxRooms: 32,
+  captureConcurrency: 8,
+  preferProtocol: true,
+  scoreOnly: true,
+});
+livePkMultiMonitor.on("status", (status) => {
+  sendToMainWindow("live-pk:multi-status", status);
+});
+
 const weixinBot = new WeixinBotService({
   storagePath: () => path.join(app.getPath("userData"), "weixin-bot.v1.json"),
   encryptToken: (token) => {
@@ -556,26 +626,77 @@ function closeEmbeddedLiveView({ stopMonitor = false } = {}) {
   return livePkWatcher.getStatus();
 }
 
-async function startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, includeRaw) {
-  closeHiddenLiveCaptureWindow();
-  sendLivePkCaptureStatus("正在打开可移动采集窗口");
+/**
+ * Prefer pure-protocol enter (no BrowserWindow). Fall back to CDP capture only
+ * when room/web/enter or WSS signing fails.
+ */
+async function resolveLiveMonitorOptions(liveRoomUrl, {
+  cookie = "",
+  onStatus,
+  allowBrowserFallback = true,
+  show = true,
+  keepAlive = true,
+  bootstrapMode = "full",
+  shareGiftList = true,
+} = {}) {
+  const notify = typeof onStatus === "function" ? onStatus : () => {};
+  try {
+    notify("协议进房中…");
+    const options = await resolveDouyinLiveOptions(liveRoomUrl, {
+      cookie,
+      onStatus: notify,
+      bootstrapMode,
+      shareGiftList,
+    });
+    if (cookie) options.cookie = cookie;
+    return { options, source: "protocol", window: null };
+  } catch (protocolError) {
+    const reason = protocolError?.message || String(protocolError);
+    if (!allowBrowserFallback) throw protocolError;
+    notify(`协议进房失败，回退浏览器采集: ${reason}`);
+  }
+
   const capture = captureDouyinLiveOptions(liveRoomUrl, {
     parentWindow: mainWindow,
-    onStatus: sendLivePkCaptureStatus,
+    onStatus: notify,
     cookie,
-    show: true,
-    keepAlive: true,
+    show,
+    keepAlive,
   });
-  hiddenLiveCaptureWindow = capture.window;
+  const options = await capture.promise;
+  if (cookie) options.cookie = cookie;
+  return { options, source: "capture", window: capture.window || null };
+}
+
+async function startHiddenLiveCaptureMonitor(liveRoomUrl, cookie, includeRaw) {
+  closeHiddenLiveCaptureWindow();
+  sendLivePkCaptureStatus("协议进房中…");
+  let captureWindow = null;
   try {
-    const options = await capture.promise;
-    if (cookie) options.cookie = cookie;
-    await livePkWatcher.start({ ...options, includeRaw: Boolean(includeRaw) });
+    const resolved = await resolveLiveMonitorOptions(liveRoomUrl, {
+      cookie,
+      onStatus: sendLivePkCaptureStatus,
+      allowBrowserFallback: true,
+      show: true,
+      keepAlive: true,
+    });
+    captureWindow = resolved.window;
+    if (captureWindow) hiddenLiveCaptureWindow = captureWindow;
+    sendLivePkCaptureStatus(
+      resolved.source === "protocol"
+        ? "协议进房完成，正在启动监控"
+        : "已获取连接，正在启动监控"
+    );
+    await livePkWatcher.start({ ...resolved.options, includeRaw: Boolean(includeRaw) });
   } catch (error) {
-    if (hiddenLiveCaptureWindow === capture.window) closeHiddenLiveCaptureWindow();
+    if (captureWindow && hiddenLiveCaptureWindow === captureWindow) {
+      closeHiddenLiveCaptureWindow();
+    }
     throw error;
   } finally {
-    if (hiddenLiveCaptureWindow === capture.window && capture.window.isDestroyed()) hiddenLiveCaptureWindow = null;
+    if (captureWindow && hiddenLiveCaptureWindow === captureWindow && captureWindow.isDestroyed?.()) {
+      hiddenLiveCaptureWindow = null;
+    }
   }
 }
 
@@ -922,35 +1043,85 @@ ipcMain.handle("live-pk:embed-muted", wrap((muted) => {
 ipcMain.handle("live-pk:start-from-url", wrap(async (payload) => {
   const liveRoomUrl = payload?.liveRoomUrl;
   const cookie = String(payload?.cookie || "").trim() || getDefaultLiveCookie();
+  const forceBrowser = Boolean(payload?.forceBrowser);
   closeEmbeddedLiveView({ stopMonitor: false });
   closeHiddenLiveCaptureWindow();
   livePkWatcher.stop();
-  sendToMainWindow("live-pk:capture-status", "正在打开可移动采集窗口");
-  const capture = captureDouyinLiveOptions(liveRoomUrl, {
-    parentWindow: mainWindow,
-    onStatus: (message) => sendToMainWindow("live-pk:capture-status", message),
-    cookie,
-    show: true,
-    keepAlive: true,
-  });
-  hiddenLiveCaptureWindow = capture.window;
+  const onStatus = (message) => sendToMainWindow("live-pk:capture-status", message);
+  onStatus(forceBrowser ? "正在打开浏览器采集窗口" : "协议进房中…");
+  let captureWindow = null;
   try {
-    const options = await capture.promise;
-    if (cookie) options.cookie = cookie;
-    sendToMainWindow("live-pk:capture-status", "已获取连接，正在启动监控");
-    return livePkWatcher.start({ ...options, includeRaw: Boolean(payload?.includeRaw) });
+    const resolved = forceBrowser
+      ? await (async () => {
+          const capture = captureDouyinLiveOptions(liveRoomUrl, {
+            parentWindow: mainWindow,
+            onStatus,
+            cookie,
+            show: true,
+            keepAlive: true,
+          });
+          const options = await capture.promise;
+          if (cookie) options.cookie = cookie;
+          return { options, source: "capture", window: capture.window || null };
+        })()
+      : await resolveLiveMonitorOptions(liveRoomUrl, {
+          cookie,
+          onStatus,
+          allowBrowserFallback: payload?.allowBrowserFallback !== false,
+          show: true,
+          keepAlive: true,
+        });
+    captureWindow = resolved.window;
+    if (captureWindow) hiddenLiveCaptureWindow = captureWindow;
+    onStatus(
+      resolved.source === "protocol"
+        ? "协议进房完成，正在启动监控"
+        : "已获取连接，正在启动监控"
+    );
+    return livePkWatcher.start({ ...resolved.options, includeRaw: Boolean(payload?.includeRaw) });
   } catch (error) {
-    if (hiddenLiveCaptureWindow === capture.window) closeHiddenLiveCaptureWindow();
+    if (captureWindow && hiddenLiveCaptureWindow === captureWindow) {
+      closeHiddenLiveCaptureWindow();
+    }
     throw error;
   } finally {
-    if (hiddenLiveCaptureWindow === capture.window && capture.window.isDestroyed()) hiddenLiveCaptureWindow = null;
+    if (captureWindow && hiddenLiveCaptureWindow === captureWindow && captureWindow.isDestroyed?.()) {
+      hiddenLiveCaptureWindow = null;
+    }
   }
 }));
 ipcMain.handle("live-pk:stop", wrap(() => {
   closeHiddenLiveCaptureWindow();
+  try {
+    livePkMultiMonitor.stop({ emit: false });
+  } catch {
+    // multi monitor may already be idle
+  }
   return closeEmbeddedLiveView({ stopMonitor: true });
 }));
 ipcMain.handle("live-pk:status", wrap(() => livePkWatcher.getStatus()));
+
+// Multi-room protocol monitor: high concurrency enter, adaptive PK poll, no browser windows.
+ipcMain.handle("live-pk:multi-start", wrap((payload) => {
+  closeEmbeddedLiveView({ stopMonitor: false });
+  closeHiddenLiveCaptureWindow();
+  livePkWatcher.stop();
+  // 多主播默认只监控音浪，不强制 Cookie。
+  const cookie = String(payload?.cookie || "").trim();
+  return livePkMultiMonitor.start({
+    rooms: Array.isArray(payload?.rooms) ? payload.rooms : [],
+    cookie,
+    captureConcurrency: payload?.captureConcurrency,
+    preferProtocol: payload?.preferProtocol !== false,
+    scoreOnly: payload?.scoreOnly !== false,
+  });
+}));
+ipcMain.handle("live-pk:multi-stop", wrap((payload) => {
+  return livePkMultiMonitor.stop({
+    sessionId: String(payload?.sessionId || "").trim(),
+  });
+}));
+ipcMain.handle("live-pk:multi-status", wrap(() => livePkMultiMonitor.getStatus()));
 
 // 微信 iLink Bot IPC：令牌和消息上下文只在主进程内处理。
 ipcMain.handle("weixin-bot:status", wrap(() => weixinBot.getStatus()));
@@ -989,6 +1160,7 @@ function wrap(fn) {
 ipcMain.handle("data:getAnchors", wrap(() => db.getAnchors()));
 ipcMain.handle("data:getFamilyTree", wrap(() => db.getFamilyTree()));
 ipcMain.handle("data:getRosterBySurname", wrap((_, surname) => db.getRosterBySurname(surname)));
+ipcMain.handle("data:exportFamilyRoster", wrap(() => db.exportFamilyRoster()));
 ipcMain.handle("data:getDashboardSummary", wrap(() => db.getDashboardSummary()));
 ipcMain.handle("data:getStartupHealth", wrap(() => db.getStartupHealth()));
 ipcMain.handle("data:getWaveRanking", wrap((limit) => db.getWaveRanking(limit)));

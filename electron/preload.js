@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   startLivePkMonitorFromUrl: (payload) => ipcRenderer.invoke("live-pk:start-from-url", payload),
   stopLivePkMonitor: () => ipcRenderer.invoke("live-pk:stop"),
   getLivePkMonitorStatus: () => ipcRenderer.invoke("live-pk:status"),
+  startLivePkMultiMonitor: (payload) => ipcRenderer.invoke("live-pk:multi-start", payload),
+  stopLivePkMultiMonitor: (payload) => ipcRenderer.invoke("live-pk:multi-stop", payload),
+  getLivePkMultiMonitorStatus: () => ipcRenderer.invoke("live-pk:multi-status"),
+  onLivePkMultiStatus: (callback) => {
+    const handler = (_event, status) => callback(status);
+    ipcRenderer.on("live-pk:multi-status", handler);
+    return () => ipcRenderer.removeListener("live-pk:multi-status", handler);
+  },
   saveLivePkCookie: (cookie) => ipcRenderer.invoke("live-pk:cookie-save", cookie),
   readLivePkCookie: () => ipcRenderer.invoke("live-pk:cookie-read"),
   clearLivePkCookie: () => ipcRenderer.invoke("live-pk:cookie-clear"),
@@ -124,6 +132,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAnchors: () => ipcRenderer.invoke("data:getAnchors"),
   getFamilyTree: () => ipcRenderer.invoke("data:getFamilyTree"),
   getRosterBySurname: (surname) => ipcRenderer.invoke("data:getRosterBySurname", surname),
+  exportFamilyRoster: () => ipcRenderer.invoke("data:exportFamilyRoster"),
   getDashboardSummary: () => ipcRenderer.invoke("data:getDashboardSummary"),
   getStartupHealth: () => ipcRenderer.invoke("data:getStartupHealth"),
   getWaveRanking: (limit) => ipcRenderer.invoke("data:getWaveRanking", limit),

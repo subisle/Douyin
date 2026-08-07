@@ -2,6 +2,7 @@ const { app } = require("electron");
 const fs = require("fs");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const { captureDouyinLiveOptions } = require("./live-pk-capture");
+const { resolveDouyinLiveOptions } = require("./live-pk-protocol");
 
 const liveRoomUrl = process.argv[2];
 const maxMinutes = Number(process.argv[3] || 0);
@@ -189,15 +190,36 @@ app.whenReady().then(async () => {
     console.log(`[${time()}] ${eventLabel(payload.eventType)} ${payload.nickname || ""}${identity(payload)} ${eventSummary(payload)}`.trim());
   });
 
-  console.log(`[${time()}] 打开采集窗口: ${liveRoomUrl}`);
-  const capture = captureDouyinLiveOptions(liveRoomUrl, {
-    onStatus: (message) => console.log(`[${time()}] 采集: ${message}`),
-    cookie: process.env.DOUYIN_LIVE_COOKIE || "",
-    keepAlive: true,
-  });
-  const options = await capture.promise;
-  if (process.env.DOUYIN_LIVE_COOKIE) options.cookie = process.env.DOUYIN_LIVE_COOKIE;
-  console.log(`[${time()}] 已获取 IM 连接，开始持续监控`);
+  const cookie = process.env.DOUYIN_LIVE_COOKIE || "";
+  const forceBrowser = process.env.DOUYIN_LIVE_FORCE_BROWSER === "1";
+  let options;
+  if (forceBrowser) {
+    console.log(`[${time()}] 打开采集窗口: ${liveRoomUrl}`);
+    const capture = captureDouyinLiveOptions(liveRoomUrl, {
+      onStatus: (message) => console.log(`[${time()}] 采集: ${message}`),
+      cookie,
+      keepAlive: true,
+    });
+    options = await capture.promise;
+  } else {
+    console.log(`[${time()}] 协议进房: ${liveRoomUrl}`);
+    try {
+      options = await resolveDouyinLiveOptions(liveRoomUrl, {
+        cookie,
+        onStatus: (message) => console.log(`[${time()}] ${message}`),
+      });
+    } catch (protocolError) {
+      console.warn(`[${time()}] 协议进房失败，回退浏览器: ${protocolError?.message || protocolError}`);
+      const capture = captureDouyinLiveOptions(liveRoomUrl, {
+        onStatus: (message) => console.log(`[${time()}] 采集: ${message}`),
+        cookie,
+        keepAlive: true,
+      });
+      options = await capture.promise;
+    }
+  }
+  if (cookie) options.cookie = cookie;
+  console.log(`[${time()}] 已获取 IM 连接 (${options.source || (forceBrowser ? "capture" : "protocol")})，开始持续监控`);
   await watcher.start({ ...options, includeRaw: Boolean(jsonlPath) });
 
   if (maxMinutes > 0) {

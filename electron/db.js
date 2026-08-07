@@ -233,7 +233,6 @@ async function getFamilyTree() {
   }
   const anchorPersonIds = new Set(accounts.map((a) => Number(a.person_id)));
   const personById = new Map(persons.map((p) => [Number(p.id), p]));
-  const hiddenNames = new Set(["狼帅", "狼彬"]);
   const hiddenIds = new Set();
   const childrenByMaster = new Map();
 
@@ -257,8 +256,8 @@ async function getFamilyTree() {
 
   for (const p of persons) {
     const name = String(p.name || "").trim();
+    // 仅隐藏占位根「晓0」，其整支不进族谱图
     if (/^晓[0０]$/.test(name)) markHiddenBranch(p.id);
-    if (hiddenNames.has(name)) hiddenIds.add(Number(p.id));
   }
 
   const visibleIds = new Set();
@@ -2713,6 +2712,86 @@ function buildPkGroups(payload) {
 }
 
 /**
+ * 按辈分导出全部族谱 CSV 行。
+ * 排序：代数升序 → 字辈(浩/狼/玖/啸/其他) → 姓名。
+ * 返回中文表头对象数组，可直接 downloadCsv。
+ */
+async function exportFamilyRoster() {
+  const db = getPool();
+  const [persons] = await db.query(
+    `SELECT id, name, gender, master_id, generation
+       FROM persons
+      ORDER BY generation IS NULL, generation, id`
+  );
+  if (persons.length === 0) return [];
+
+  const personIds = persons.map((p) => Number(p.id));
+  const nameById = new Map(persons.map((p) => [Number(p.id), p.name || ""]));
+
+  const [accounts] = await db.query(
+    `SELECT id, person_id, anchor_id, is_primary, douyin_no, anchor_name
+       FROM accounts
+      WHERE person_id IN (?)
+      ORDER BY person_id, is_primary DESC, id ASC`,
+    [personIds]
+  );
+  const accountByPerson = new Map();
+  for (const a of accounts) {
+    const pid = Number(a.person_id);
+    if (!accountByPerson.has(pid)) accountByPerson.set(pid, []);
+    accountByPerson.get(pid).push(a);
+  }
+
+  const SURNAME_ORDER = { 浩: 1, 狼: 2, 玖: 3, 啸: 4 };
+  const genLabel = (g) => {
+    if (g == null) return "未定代";
+    if (Number(g) === 0) return "祖师";
+    return `第${Number(g)}代`;
+  };
+  const surnameOf = (name) => {
+    const ch = String(name || "").trim().charAt(0);
+    return SURNAME_ORDER[ch] ? ch : "其他";
+  };
+  const genderLabel = (g) =>
+    g === "male" ? "男" : g === "female" ? "女" : g || "";
+
+  const rows = persons.map((p) => {
+    const pid = Number(p.id);
+    const personAccounts = accountByPerson.get(pid) || [];
+    const primary =
+      personAccounts.find((a) => Number(a.is_primary) === 1) ||
+      personAccounts[0] ||
+      null;
+    const name = p.name || "";
+    const surname = surnameOf(name);
+    const generation = p.generation == null ? null : Number(p.generation);
+    return {
+      _gen: generation == null ? 999 : generation,
+      _surnameOrd: SURNAME_ORDER[surname] || 99,
+      _name: name,
+      代数: generation == null ? "" : generation,
+      辈分: genLabel(generation),
+      字辈: surname,
+      姓名: name,
+      性别: genderLabel(p.gender),
+      师父: p.master_id ? nameById.get(Number(p.master_id)) || "" : "",
+      抖音号: primary ? primary.douyin_no || "" : "",
+      主播ID: primary ? primary.anchor_id || "" : "",
+      账号名: primary ? primary.anchor_name || "" : "",
+      账号数: personAccounts.length,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a._gen !== b._gen) return a._gen - b._gen;
+    if (a._surnameOrd !== b._surnameOrd) return a._surnameOrd - b._surnameOrd;
+    return String(a._name).localeCompare(String(b._name), "zh");
+  });
+
+  return rows.map(({ _gen, _surnameOrd, _name, ...rest }) => rest);
+}
+
+/**
  * 按字辈（名字首字）导出名单。
  * 支持的 surname 值: 浩/狼/玖/啸
  * 返回该字辈所有 person 的基本信息 + 账号 + 最新音浪。
@@ -2838,6 +2917,7 @@ module.exports = {
   getFlagWinner,
   getRewardReport,
   getRosterBySurname,
+  exportFamilyRoster,
   verifyAppPassword,
   hasAppPassword,
   __testing: { importSnapshotRows },

@@ -22,7 +22,11 @@ function formatWave(value) {
     const r = Math.round(yi * 10) / 10;
     return Number.isInteger(r) ? `${r} 亿` : `${r.toFixed(1)} 亿`;
   }
-  // 统一「万」为单位，精确到 0.1 万（千），不显示千后零碎
+  // 低于一万：直接显示数字
+  if (number < 10_000) {
+    return Math.round(number).toLocaleString("zh-CN");
+  }
+  // ≥1 万用「万」，精确到 0.1 万（千）
   const wan = number / 10_000;
   const r = Math.round(wan * 10) / 10;
   if (r <= 0) return "0";
@@ -217,7 +221,7 @@ function renderClassicSvg(report, options = {}) {
     { key: "rank", label: "排名", width: 70, align: "center" },
     { key: "name", label: "主播姓名", width: 180, align: "left" },
     { key: "notLiveDays", label: notLiveDaysLabel, width: 110, align: "center" },
-    { key: "dailyWave", label: dailyWaveLabel, width: 220, align: "right" },
+    { key: "dailyWave", label: dailyWaveLabel, width: 280, align: "right" },
     { key: "totalWave", label: "累计总音浪", width: 180, align: "right" },
     { key: "tier", label: "等级", width: 100, align: "center" },
   ];
@@ -244,10 +248,9 @@ function renderClassicSvg(report, options = {}) {
 
   parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${tableHeaderHeight}" fill="#E2E8F0"/>`);
   for (const col of columns) {
-    const anchor = col.align === "left" ? "start" : col.align === "right" ? "end" : "middle";
-    const tx = col.align === "left" ? col.x + 8 : col.align === "right" ? col.x + col.width - 12 : col.x + col.width / 2;
-    parts.push(textNode(col.label, tx, y + tableHeaderHeight / 2 + 1, {
-      size: 13, fill: "#475569", weight: 700, anchor, baseline: "middle",
+    // 表头列名统一居中
+    parts.push(textNode(col.label, col.x + col.width / 2, y + tableHeaderHeight / 2 + 1, {
+      size: 13, fill: "#475569", weight: 700, anchor: "middle", baseline: "middle",
     }));
   }
   y += tableHeaderHeight;
@@ -292,19 +295,31 @@ function renderClassicSvg(report, options = {}) {
           size: 13, fill: days > 0 ? "#B91C1C" : "#15803D", weight: 700, anchor: "middle", baseline: "middle",
         }));
       } else if (col.key === "dailyWave") {
-        if (!isInactive) {
-          const barMax = Math.max(24, col.width - 48);
-          const barW = Math.max(24, Math.min(barMax, (barMax * (Number(row.dailyWave) || 0)) / maxWave));
-          const barH = 18;
-          const barTop = y + (rowHeight - barH) / 2;
-          const barLeft = col.x + 10;
-          parts.push(`<rect x="${barLeft}" y="${barTop}" width="${col.width - 24}" height="${barH}" rx="6" fill="#DBEAFE"/>`);
-          parts.push(`<rect x="${barLeft}" y="${barTop}" width="${barW}" height="${barH}" rx="6" fill="#60A5FA"/>`);
+        const padX = 8;
+        const barH = 22;
+        const barTop = cy - barH / 2;
+        const barLeft = col.x + padX;
+        const barTrackW = Math.max(48, col.width - padX * 2);
+        if (isInactive) {
+          parts.push(`<rect x="${barLeft}" y="${barTop}" width="${barTrackW}" height="${barH}" rx="${barH / 2}" fill="#FEE2E2"/>`);
+          parts.push(textNode("未开播", barLeft + barTrackW / 2, cy, {
+            size: 13, fill: "#DC2626", weight: 700, anchor: "middle", baseline: "middle",
+          }));
+        } else {
+          const waveText = formatWave(row.dailyWave);
+          const fillW = Math.max(0, Math.min(barTrackW, (barTrackW * (Number(row.dailyWave) || 0)) / maxWave));
+          parts.push(`<rect x="${barLeft}" y="${barTop}" width="${barTrackW}" height="${barH}" rx="${barH / 2}" fill="#DBEAFE"/>`);
+          if (fillW > 0) {
+            const drawnFill = Math.max(fillW, barH);
+            parts.push(`<rect x="${barLeft}" y="${barTop}" width="${drawnFill}" height="${barH}" rx="${barH / 2}" fill="#60A5FA"/>`);
+          }
+          // 数字画在进度条内居中
+          const textFill = fillW / Math.max(barTrackW, 1) > 0.52 ? "#FFFFFF" : "#1E3A8A";
+          parts.push(textNode(waveText, barLeft + barTrackW / 2, cy, {
+            size: 13, fill: textFill, weight: 700, anchor: "middle", baseline: "middle",
+            family: "Menlo, Consolas, monospace",
+          }));
         }
-        parts.push(textNode(isInactive ? "未开播" : formatWave(row.dailyWave), col.x + col.width - 12, cy, {
-          size: 14, fill: isInactive ? "#DC2626" : "#1E293B", weight: 500, anchor: "end", baseline: "middle",
-          family: "Menlo, Consolas, monospace",
-        }));
       } else if (col.key === "totalWave") {
         parts.push(textNode(formatWave(row.totalWave), col.x + col.width - 12, cy, {
           size: 14, fill: "#475569", weight: 500, anchor: "end", baseline: "middle",
@@ -405,7 +420,7 @@ function renderAppleSvg(report, options = {}) {
     { key: "rank", label: "排名", width: 70, align: "center" },
     { key: "name", label: "主播姓名", width: 150, align: "left" },
     { key: "notLiveDays", label: notLiveDaysLabel, width: 110, align: "center" },
-    { key: "dailyWave", label: dailyWaveLabel, width: 220, align: "right" },
+    { key: "dailyWave", label: dailyWaveLabel, width: 280, align: "right" },
     { key: "totalWave", label: "累计总音浪", width: 170, align: "right" },
     { key: "tier", label: "等级", width: 100, align: "center" },
   ];
@@ -449,10 +464,9 @@ function renderAppleSvg(report, options = {}) {
 
   parts.push(`<rect x="${tableX}" y="${y}" width="${tableW}" height="${tableHeaderH}" fill="#F2F4F7"/>`);
   for (const col of columns) {
-    const anchor = col.align === "left" ? "start" : col.align === "right" ? "end" : "middle";
-    const tx = col.align === "left" ? col.x + 8 : col.align === "right" ? col.x + col.width - 12 : col.x + col.width / 2;
-    parts.push(textNode(col.label, tx, y + tableHeaderH / 2 + 1, {
-      size: 12, fill: "#667085", weight: 700, anchor, baseline: "middle", family: font,
+    // 表头列名统一居中
+    parts.push(textNode(col.label, col.x + col.width / 2, y + tableHeaderH / 2 + 1, {
+      size: 12, fill: "#667085", weight: 700, anchor: "middle", baseline: "middle", family: font,
     }));
   }
   y += tableHeaderH + rowGap;
@@ -495,21 +509,28 @@ function renderAppleSvg(report, options = {}) {
           size: 13, fill: days > 0 ? "#B42318" : "#027A48", weight: 700, anchor: "middle", baseline: "middle", family: font,
         }));
       } else if (col.key === "dailyWave") {
+        const padX = 8;
+        const barH = 22;
+        const barX = col.x + padX;
+        const barW = Math.max(48, col.width - padX * 2);
+        const barY = cy - barH / 2;
         if (isInactive) {
-          parts.push(textNode("未开播", col.x + col.width - 12, cy, {
-            size: 13, fill: "#D92D20", weight: 700, anchor: "end", baseline: "middle", family: font,
+          parts.push(`<rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="#FEE4E2"/>`);
+          parts.push(textNode("未开播", barX + barW / 2, cy, {
+            size: 13, fill: "#D92D20", weight: 700, anchor: "middle", baseline: "middle", family: font,
           }));
         } else {
           const waveText = formatWave(row.dailyWave);
           const waveRatio = (Number(row.dailyWave) || 0) / Math.max(maxWave, 1);
-          const barMaxW = Math.max(42, Math.min(58, col.width - 92));
-          const barW = Math.max(14, Math.min(barMaxW, waveRatio * barMaxW));
-          const barX = col.x + 10;
-          const barY = cy - 4;
-          parts.push(`<rect x="${barX}" y="${barY}" width="${barMaxW}" height="8" rx="4" fill="#EAF3FF"/>`);
-          parts.push(`<rect x="${barX}" y="${barY}" width="${barW}" height="8" rx="4" fill="${blue}"/>`);
-          parts.push(textNode(waveText, col.x + col.width - 12, cy, {
-            size: 13, fill: "#101828", weight: 700, anchor: "end", baseline: "middle", family: mono,
+          const fillW = Math.max(0, Math.min(barW, waveRatio * barW));
+          parts.push(`<rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="${barH / 2}" fill="#EAF3FF"/>`);
+          if (fillW > 0) {
+            parts.push(`<rect x="${barX}" y="${barY}" width="${Math.max(fillW, barH)}" height="${barH}" rx="${barH / 2}" fill="${blue}"/>`);
+          }
+          // 数字画在进度条内居中
+          const textFill = fillW / Math.max(barW, 1) > 0.52 ? "#FFFFFF" : "#1D4ED8";
+          parts.push(textNode(waveText, barX + barW / 2, cy, {
+            size: 13, fill: textFill, weight: 800, anchor: "middle", baseline: "middle", family: mono,
           }));
         }
       } else if (col.key === "totalWave") {

@@ -78,6 +78,7 @@ export async function GET(request: Request, context: RouteContext) {
     }
 
     if (one === "family-tree") return apiOk(await call("getFamilyTree"));
+    if (one === "roster" && two) return apiOk(await call("getRosterBySurname", two));
 
     if (one === "dashboard" && two === "summary") return apiOk(await call("getDashboardSummary"));
     if (one === "dashboard" && two === "wave-ranking") return apiOk(await call("getWaveRanking", num(sp.get("limit"), 10)));
@@ -88,6 +89,7 @@ export async function GET(request: Request, context: RouteContext) {
     if (one === "exports" && two === "wave") return apiOk(await call("exportWaveSnapshots", sp.get("date") || undefined));
     if (one === "exports" && two === "duration") return apiOk(await call("exportDurationSnapshots", sp.get("date") || undefined));
     if (one === "exports" && two === "anchors") return apiOk(await call("exportAnchors"));
+    if (one === "exports" && two === "family-roster") return apiOk(await call("exportFamilyRoster"));
 
     if (one === "reports" && two === "daily-wave") {
       return apiOk(await call("getDailyWaveReport", str(sp.get("date")), str(sp.get("gender"), "all")));

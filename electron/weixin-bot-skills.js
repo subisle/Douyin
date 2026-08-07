@@ -480,7 +480,7 @@ function createWeixinBotSkills({ db, renderReportPng }) {
       function: {
         name: "make_pk_groups",
         description:
-          "PK 分组并默认导出分组图。preset=内置锁定分组（狼辉第4/狼佑第1，次强3/最强5，08:15×5min）；high_to_low=顺序；balanced=均衡；score_capable=能出分。硬约束：阳↔沐≥4、泽↔帆≥3。默认白名单男团。用户说「内置分组/锁定分组/顺序/均衡/能出分」「导出分组图」时调用。",
+          "PK 分组并默认导出分组图。preset=内置锁定分组（58人 8组每组7–8，最强第4，啸泽3/啸帆6，08:15×15min）；high_to_low=顺序；balanced=均衡；score_capable=能出分。硬约束：阳↔沐≥4、泽↔帆≥3。默认白名单男团。用户说「内置分组/锁定分组/顺序/均衡/能出分」「导出分组图」时调用。",
         parameters: {
           type: "object",
           properties: {

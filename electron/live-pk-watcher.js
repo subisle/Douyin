@@ -497,14 +497,23 @@ function toPlain(value, depth = 0) {
   return out;
 }
 
+// Adaptive PK snapshot intervals (ms). Idle rooms poll rarely; active PK stays responsive.
+const PK_POLL_ACTIVE_MS = 1000;
+const PK_POLL_LINKED_MS = 2500;
+const PK_POLL_IDLE_MS = 8000;
+const PK_POLL_ERROR_MS = 12000;
+
 class LivePkWatcher extends EventEmitter {
   constructor() {
     super();
+    // Multi-room monitors attach several listeners per watcher; avoid EventEmitter warnings.
+    this.setMaxListeners(32);
     this.ws = null;
     this.pingTimer = null;
     this.fetchTimer = null;
     this.pkSnapshotTimer = null;
-    this.pkSnapshotIntervalMs = 250;
+    this.pkSnapshotIntervalMs = PK_POLL_IDLE_MS;
+    this.pkSnapshotMode = "idle"; // idle | linked | pk
     this.fetchAbortController = null;
     this.fetchUrl = "";
     this.fetchHeaders = {};
@@ -525,11 +534,14 @@ class LivePkWatcher extends EventEmitter {
     this.cookieHeader = "";
     this.roomId = "";
     this.includeRaw = false;
+    // scoreOnly：多主播音浪模式。跳过礼物/弹幕/进场/资料补齐，只解析连线分与音浪相关消息。
+    this.scoreOnly = false;
     this.profileLookup = null;
     this.linkmicSnapshotLookup = null;
     this.giftProfileInflight.clear();
     this.lastLiveModeKey = "";
     this.lastPkBattleKey = "";
+    this.lastPkScoreKey = "";
   }
 
   getStatus() {
@@ -542,14 +554,34 @@ class LivePkWatcher extends EventEmitter {
       cachedDisplayNames: this.displayNameCache.size,
       cachedGifts: this.giftCatalog.size,
       roomId: this.roomId,
+      scoreOnly: this.scoreOnly,
     };
   }
 
-  async start({ websocketUrl, fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap, profileLookup, linkmicSnapshotLookup }) {
+  async start({
+    websocketUrl,
+    fetchUrl,
+    fetchHeaders,
+    cookie,
+    includeRaw = false,
+    scoreOnly = false,
+    bootstrap,
+    profileLookup,
+    linkmicSnapshotLookup,
+  }) {
     const cleanUrl = String(websocketUrl || "").trim();
     const cleanFetchUrl = String(fetchUrl || "").trim();
     if (cleanFetchUrl) {
-      return this.startFetch({ fetchUrl: cleanFetchUrl, fetchHeaders, cookie, includeRaw, bootstrap, profileLookup, linkmicSnapshotLookup });
+      return this.startFetch({
+        fetchUrl: cleanFetchUrl,
+        fetchHeaders,
+        cookie,
+        includeRaw,
+        scoreOnly,
+        bootstrap,
+        profileLookup,
+        linkmicSnapshotLookup,
+      });
     }
     if (!cleanUrl) throw new Error("缺少直播间 IM 连接地址");
     if (!/^wss?:\/\//i.test(cleanUrl)) throw new Error("WebSocket 地址格式不正确");
@@ -561,7 +593,13 @@ class LivePkWatcher extends EventEmitter {
     this.lastError = null;
     this.roomId = readRoomIdFromWebSocketUrl(cleanUrl);
     this.includeRaw = Boolean(includeRaw);
-    this.profileLookup = typeof profileLookup === "function" ? profileLookup : null;
+    this.scoreOnly = Boolean(scoreOnly);
+    // 音浪模式不补齐观众资料，避免 N 房并发时 profile HTTP 打爆。
+    this.profileLookup = this.scoreOnly
+      ? null
+      : typeof profileLookup === "function"
+        ? profileLookup
+        : null;
     this.linkmicSnapshotLookup = typeof linkmicSnapshotLookup === "function" ? linkmicSnapshotLookup : null;
     this.emit("status", this.getStatus());
 
@@ -585,7 +623,7 @@ class LivePkWatcher extends EventEmitter {
         .catch((error) => {
           this.emit("error-message", `启动快照解析失败: ${error.message || error}`);
         })
-        .finally(() => this.startPkSnapshotPolling(750));
+        .finally(() => this.startPkSnapshotPolling(500));
     });
 
     this.ws.on("message", (data) => {
@@ -630,11 +668,23 @@ class LivePkWatcher extends EventEmitter {
     this.linkmicSnapshotLookup = null;
     this.lastLiveModeKey = "";
     this.lastPkBattleKey = "";
+    this.lastPkScoreKey = "";
+    this.pkSnapshotMode = "idle";
+    this.pkSnapshotIntervalMs = PK_POLL_IDLE_MS;
     this.emit("status", this.getStatus());
     return this.getStatus();
   }
 
-  async startFetch({ fetchUrl, fetchHeaders, cookie, includeRaw = false, bootstrap, profileLookup, linkmicSnapshotLookup }) {
+  async startFetch({
+    fetchUrl,
+    fetchHeaders,
+    cookie,
+    includeRaw = false,
+    scoreOnly = false,
+    bootstrap,
+    profileLookup,
+    linkmicSnapshotLookup,
+  }) {
     const cleanUrl = String(fetchUrl || "").trim();
     if (!cleanUrl) throw new Error("缺少直播间 im/fetch 地址");
     if (!/^https?:\/\//i.test(cleanUrl)) throw new Error("im/fetch 地址格式不正确");
@@ -645,11 +695,16 @@ class LivePkWatcher extends EventEmitter {
     this.startedAt = new Date().toISOString();
     this.lastError = null;
     this.includeRaw = Boolean(includeRaw);
+    this.scoreOnly = Boolean(scoreOnly);
     this.fetchUrl = cleanUrl;
 
     const url = new URL(cleanUrl);
     this.roomId = url.searchParams.get("room_id") || "";
-    this.profileLookup = typeof profileLookup === "function" ? profileLookup : null;
+    this.profileLookup = this.scoreOnly
+      ? null
+      : typeof profileLookup === "function"
+        ? profileLookup
+        : null;
     this.linkmicSnapshotLookup = typeof linkmicSnapshotLookup === "function" ? linkmicSnapshotLookup : null;
     this.fetchCursor = url.searchParams.get("cursor") || "";
     this.fetchInternalExt = url.searchParams.get("internal_ext") || "";
@@ -680,7 +735,7 @@ class LivePkWatcher extends EventEmitter {
     this.status = "running";
     this.emit("status", this.getStatus());
     await this.ingestBootstrap(bootstrap);
-    this.startPkSnapshotPolling(750);
+    this.startPkSnapshotPolling(500);
     this.scheduleFetchPoll(0);
     return this.getStatus();
   }
@@ -843,6 +898,12 @@ class LivePkWatcher extends EventEmitter {
 
   async ingestBootstrap(bootstrap) {
     if (!bootstrap || typeof bootstrap !== "object") return;
+    // 音浪模式：房间信息 + 连线分即可；跳过礼物目录 / 观众榜 / 心愿单等重解析。
+    if (this.scoreOnly) {
+      await this.ingestRoomEnter(bootstrap.roomEnter, bootstrap);
+      this.ingestLinkmicList(bootstrap.linkmicList);
+      return;
+    }
     await this.ingestRoomEnter(bootstrap.roomEnter, bootstrap);
     this.ingestGiftList(bootstrap.giftList);
     await this.ingestAudienceRank(bootstrap.audienceRank);
@@ -919,7 +980,11 @@ class LivePkWatcher extends EventEmitter {
 
   ingestGiftList(value) {
     const json = this.parseBootstrapJson(value);
-    const pages = json?.data?.pages || [];
+    // Protocol gift/list often returns data.gifts without data.pages.
+    let pages = Array.isArray(json?.data?.pages) ? json.data.pages : [];
+    if (pages.length === 0 && Array.isArray(json?.data?.gifts) && json.data.gifts.length > 0) {
+      pages = [{ page_name: "all", pageName: "all", gifts: json.data.gifts }];
+    }
     if (!Array.isArray(pages) || pages.length === 0) return;
     const gifts = [];
     const seen = new Set();
@@ -1212,13 +1277,20 @@ class LivePkWatcher extends EventEmitter {
     }
 
     if (hasBattle && scores.length > 0 && options.emitScoreSnapshot !== false) {
-      this.emit("event", {
-        type: "event",
-        eventType: "pk-score-snapshot",
-        at,
-        method,
-        ...common,
-      });
+      const scoreKey = JSON.stringify(
+        scores.map((item) => [item.anchorId || item.userId || "", item.score, item.multiPkTeamScore || 0])
+      );
+      const shouldEmitScore = !periodic || scoreKey !== this.lastPkScoreKey;
+      if (shouldEmitScore) {
+        this.lastPkScoreKey = scoreKey;
+        this.emit("event", {
+          type: "event",
+          eventType: "pk-score-snapshot",
+          at,
+          method,
+          ...common,
+        });
+      }
     }
 
     if (contributors.length > 0) {
@@ -1234,6 +1306,7 @@ class LivePkWatcher extends EventEmitter {
     }
 
     this.emit("status", this.getStatus());
+    return liveMode === "pk" ? "pk" : isLinked ? "linked" : "idle";
   }
 
   ingestWishList(value) {
@@ -1310,30 +1383,54 @@ class LivePkWatcher extends EventEmitter {
     this.pkSnapshotTimer = null;
   }
 
+  /**
+   * Adaptive PK snapshot poller.
+   * - idle (single): 8s — no white spinning
+   * - linked: 2.5s
+   * - active PK: 1s
+   * Errors back off to 12s. Interval shrinks immediately when mode escalates.
+   */
   startPkSnapshotPolling(delayMs = this.pkSnapshotIntervalMs) {
     if (typeof this.linkmicSnapshotLookup !== "function") return;
     this.stopPkSnapshotPolling();
+    this.pkSnapshotMode = this.pkSnapshotMode || "idle";
+    this.pkSnapshotIntervalMs = this.intervalForPkMode(this.pkSnapshotMode);
     const tick = async () => {
       this.pkSnapshotTimer = null;
       if (this.status !== "running" || typeof this.linkmicSnapshotLookup !== "function") return;
+      let nextDelay = this.pkSnapshotIntervalMs;
       try {
         const snapshot = await this.linkmicSnapshotLookup();
         if (snapshot) {
-          this.ingestLinkmicList(snapshot, {
+          const mode = this.ingestLinkmicList(snapshot, {
             periodic: true,
-            source: "page-store",
+            source: snapshot?.extra?.source || "protocol-linkmic-list",
             emitScoreSnapshot: true,
           });
+          if (mode) {
+            this.pkSnapshotMode = mode;
+            this.pkSnapshotIntervalMs = this.intervalForPkMode(mode);
+          }
         }
+        nextDelay = this.pkSnapshotIntervalMs;
       } catch {
-        // The hidden page can be navigating or closed; the IM monitor should keep running.
+        // Lookup can fail during network blips; keep the monitor alive with backoff.
+        nextDelay = PK_POLL_ERROR_MS;
       } finally {
         if (this.status === "running" && typeof this.linkmicSnapshotLookup === "function") {
-          this.pkSnapshotTimer = setTimeout(tick, this.pkSnapshotIntervalMs);
+          this.pkSnapshotTimer = setTimeout(tick, nextDelay);
+          this.pkSnapshotTimer.unref?.();
         }
       }
     };
     this.pkSnapshotTimer = setTimeout(tick, Math.max(0, Number(delayMs) || 0));
+    this.pkSnapshotTimer.unref?.();
+  }
+
+  intervalForPkMode(mode) {
+    if (mode === "pk") return PK_POLL_ACTIVE_MS;
+    if (mode === "linked") return PK_POLL_LINKED_MS;
+    return PK_POLL_IDLE_MS;
   }
 
   scheduleFetchPoll(delayMs) {
@@ -1650,6 +1747,20 @@ class LivePkWatcher extends EventEmitter {
         method,
         payloadBytes: payload.length,
       });
+    }
+
+    // 音浪专用：只解析连线分 / PK 分 / 房间信息类消息，丢弃礼物弹幕进场等重路径。
+    if (this.scoreOnly) {
+      const scoreMethods = new Set([
+        "WebcastLinkmicPlayModeUpdateScoreMessage",
+        "WebcastProfitInteractionScoreMessage",
+        "WebcastRoomRankMessage",
+        "WebcastRoomMessage",
+        "WebcastRoomStartMessage",
+        "WebcastRoomStatsMessage",
+        "WebcastRoomUserSeqMessage",
+      ]);
+      if (!scoreMethods.has(method)) return;
     }
 
     if (method === "WebcastMemberMessage") {

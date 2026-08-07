@@ -201,6 +201,46 @@ export function createHttpElectronApi(): ElectronAPI {
         success: true,
         data: { status: "idle", startedAt: null, lastError: null, lastRankAt: null },
       }),
+    startLivePkMultiMonitor: () =>
+      Promise.resolve({
+        success: false,
+        error: "浏览器预览模式不支持多主播监控",
+      }),
+    stopLivePkMultiMonitor: () =>
+      Promise.resolve({
+        success: true,
+        data: {
+          status: "idle",
+          roomCount: 0,
+          runningCount: 0,
+          pendingCount: 0,
+          errorCount: 0,
+          maxRooms: 0,
+          captureConcurrency: 0,
+          preferProtocol: true,
+          scoreOnly: true,
+          updatedAt: new Date().toISOString(),
+          rooms: [],
+        },
+      }),
+    getLivePkMultiMonitorStatus: () =>
+      Promise.resolve({
+        success: true,
+        data: {
+          status: "idle",
+          roomCount: 0,
+          runningCount: 0,
+          pendingCount: 0,
+          errorCount: 0,
+          maxRooms: 0,
+          captureConcurrency: 0,
+          preferProtocol: true,
+          scoreOnly: true,
+          updatedAt: new Date().toISOString(),
+          rooms: [],
+        },
+      }),
+    onLivePkMultiStatus: () => () => undefined,
     saveLivePkCookie: () =>
       Promise.resolve({
         success: false,
@@ -297,6 +337,7 @@ export function createHttpElectronApi(): ElectronAPI {
     getAnchors: () => request("/anchors"),
     getFamilyTree: () => request("/family-tree"),
     getRosterBySurname: (surname: string) => request(`/roster/${encodeURIComponent(surname)}`),
+    exportFamilyRoster: () => request("/exports/family-roster"),
     getDashboardSummary: () => request("/dashboard/summary"),
     getStartupHealth: () => request("/startup-health"),
     getWaveRanking: (limit) => request(`/dashboard/wave-ranking${qs({ limit })}`),
@@ -370,10 +411,36 @@ export function createHttpElectronApi(): ElectronAPI {
 }
 
 let httpApi: ElectronAPI | null = null;
+let hybridApi: ElectronAPI | null = null;
+
+function getHttpApi(): ElectronAPI {
+  if (!httpApi) httpApi = createHttpElectronApi();
+  return httpApi;
+}
+
+/**
+ * Electron preload 只在进程启动时注入一次。
+ * 开发中若热更了前端但没重启 Electron，window.electronAPI 会缺新方法。
+ * 这里对缺失方法自动回退到 HTTP API（Next /api/v1），避免 "is not a function"。
+ */
+function createHybridApi(electronApi: ElectronAPI): ElectronAPI {
+  const http = getHttpApi();
+  return new Proxy(electronApi, {
+    get(target, prop, receiver) {
+      if (typeof prop === "symbol") return Reflect.get(target, prop, receiver);
+      const value = Reflect.get(target, prop, receiver);
+      if (value !== undefined && value !== null) return value;
+      const fallback = Reflect.get(http, prop, http);
+      return fallback;
+    },
+  }) as ElectronAPI;
+}
 
 export function getDataApi(): ElectronAPI | undefined {
   if (typeof window === "undefined") return undefined;
-  if (window.electronAPI) return window.electronAPI;
-  if (!httpApi) httpApi = createHttpElectronApi();
-  return httpApi;
+  if (window.electronAPI) {
+    if (!hybridApi) hybridApi = createHybridApi(window.electronAPI);
+    return hybridApi;
+  }
+  return getHttpApi();
 }

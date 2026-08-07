@@ -122,6 +122,67 @@ export interface LivePkCookieState {
   updatedAt?: string | null;
 }
 
+export interface LivePkMultiRoomInput {
+  liveRoomUrl?: string;
+  url?: string;
+  roomUrl?: string;
+  anchorId?: string;
+  personId?: string;
+  id?: string;
+  name?: string;
+  anchorName?: string;
+  douyinNo?: string;
+}
+
+export interface LivePkMultiScoreRow {
+  rank: number;
+  anchorId: string;
+  name: string;
+  uniqueId: string;
+  score: number;
+  scoreText: string;
+}
+
+export interface LivePkMultiRoomStatus {
+  sessionId: string;
+  anchorId: string;
+  personId: string;
+  name: string;
+  douyinNo: string;
+  liveRoomUrl: string;
+  status: string;
+  transport: string;
+  source: string;
+  roomId: string;
+  title: string;
+  ownerNickname: string;
+  onlineText: string;
+  fanTicket: number;
+  giftEvents: number;
+  chatEvents: number;
+  memberEvents: number;
+  eventCount: number;
+  scores: LivePkMultiScoreRow[];
+  startedAt: string | null;
+  lastEventAt: string;
+  lastMessage: string;
+  lastError: string;
+}
+
+export interface LivePkMultiMonitorStatus {
+  status: "idle" | "starting" | "running" | "partial" | "error";
+  roomCount: number;
+  runningCount: number;
+  pendingCount: number;
+  errorCount: number;
+  maxRooms: number;
+  captureConcurrency: number;
+  preferProtocol: boolean;
+  scoreOnly?: boolean;
+  updatedAt: string;
+  rooms: LivePkMultiRoomStatus[];
+}
+
 export type WeixinBotPhase =
   | "disconnected"
   | "connecting"
@@ -910,6 +971,19 @@ declare global {
     ) => Promise<IpcResult<LivePkMonitorStatus>>;
     stopLivePkMonitor: () => Promise<IpcResult<LivePkMonitorStatus>>;
     getLivePkMonitorStatus: () => Promise<IpcResult<LivePkMonitorStatus>>;
+    startLivePkMultiMonitor: (payload: {
+      rooms: LivePkMultiRoomInput[];
+      cookie?: string;
+      captureConcurrency?: number;
+      preferProtocol?: boolean;
+      /** 默认 true：只监控音浪，不采礼物/弹幕/进场 */
+      scoreOnly?: boolean;
+    }) => Promise<IpcResult<LivePkMultiMonitorStatus>>;
+    stopLivePkMultiMonitor: (payload?: {
+      sessionId?: string;
+    }) => Promise<IpcResult<LivePkMultiMonitorStatus>>;
+    getLivePkMultiMonitorStatus: () => Promise<IpcResult<LivePkMultiMonitorStatus>>;
+    onLivePkMultiStatus: (callback: (status: LivePkMultiMonitorStatus) => void) => () => void;
     saveLivePkCookie: (cookie: string) => Promise<IpcResult<{ saved: boolean; updatedAt: string }>>;
     readLivePkCookie: () => Promise<IpcResult<LivePkCookieState>>;
     clearLivePkCookie: () => Promise<IpcResult<{ saved: boolean }>>;
@@ -956,6 +1030,7 @@ declare global {
     getAnchors: () => Promise<IpcResult<AnchorRow[]>>;
     getFamilyTree: () => Promise<IpcResult<FamilyNode[]>>;
     getRosterBySurname: (surname: string) => Promise<IpcResult<RosterEntry[]>>;
+    exportFamilyRoster: () => Promise<IpcResult<Record<string, string | number>[]>>;
     getDashboardSummary: () => Promise<IpcResult<DashboardSummary>>;
     getStartupHealth: () => Promise<IpcResult<StartupHealthResult>>;
     getWaveRanking: (limit?: number) => Promise<IpcResult<WaveRankRow[]>>;

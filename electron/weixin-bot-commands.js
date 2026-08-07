@@ -272,7 +272,11 @@ function formatWave(value) {
     const r = Math.round(yi * 10) / 10;
     return Number.isInteger(r) ? `${r} 亿` : `${r.toFixed(1)} 亿`;
   }
-  // 统一「万」为单位，精确到 0.1 万（千），不显示千后零碎
+  // 低于一万：直接显示数字
+  if (number < 10_000) {
+    return Math.round(number).toLocaleString("zh-CN");
+  }
+  // ≥1 万用「万」，精确到 0.1 万（千）
   const wan = number / 10_000;
   const r = Math.round(wan * 10) / 10;
   if (r <= 0) return "0";
