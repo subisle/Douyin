@@ -9,6 +9,7 @@ const {
   buildIdentifyPayload,
   INTENT_GROUP_AND_C2C,
   buildAuthHeaders,
+  downloadAttachment,
 } = require("./qqbot-adapter");
 
 test("buildAuthHeaders formats QQBot token", () => {
@@ -91,4 +92,81 @@ test("buildIdentifyPayload uses group/c2c intent", () => {
   assert.equal(packet.op, 2);
   assert.equal(packet.d.token, "QQBot tok");
   assert.equal(packet.d.intents, INTENT_GROUP_AND_C2C);
+});
+
+test("normalizeInboundEvent parses media attachments", () => {
+  const inbound = normalizeInboundEvent("C2C_MESSAGE_CREATE", {
+    id: "m3",
+    content: "file://2026-08-07_音浪.csv",
+    author: { user_openid: "U9" },
+    attachments: [
+      { url: "//multimedia.nt.qq.com/x.csv?rkey=abc", filename: "2026-08-07_音浪.csv", content_type: "text/csv", size: 1024 },
+      { url: "", filename: "skip.bin" },
+    ],
+  });
+  assert.equal(inbound.attachments.length, 1);
+  assert.equal(inbound.attachments[0].fileName, "2026-08-07_音浪.csv");
+  assert.equal(inbound.attachments[0].url, "//multimedia.nt.qq.com/x.csv?rkey=abc");
+  assert.equal(inbound.attachments[0].size, 1024);
+  assert.equal(inbound.text, "");
+});
+
+test("downloadAttachment fetches and converts protocol-relative url", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    return {
+      ok: true,
+      headers: { get: () => null },
+      body: {
+        getReader: () => {
+          const chunks = [Buffer.from("a,b\n1,2\n"), Buffer.from("x,y\n3,4\n")];
+          let i = 0;
+          return {
+            async read() {
+              if (i >= chunks.length) return { done: true };
+              return { done: false, value: chunks[i++] };
+            },
+            async cancel() {},
+          };
+        },
+      },
+    };
+  };
+  const file = await downloadAttachment({
+    url: "//multimedia.nt.qq.com/f.csv?rkey=k",
+    fileName: "音浪.csv",
+    fetchImpl,
+  });
+  assert.equal(calls[0], "https://multimedia.nt.qq.com/f.csv?rkey=k");
+  assert.equal(file.fileName, "音浪.csv");
+  assert.equal(file.size, 16);
+  assert.equal(file.buffer.toString(), "a,b\n1,2\nx,y\n3,4\n");
+});
+
+test("downloadAttachment rejects over-limit and non-ok responses", async () => {
+  await assert.rejects(
+    downloadAttachment({
+      url: "https://x.example/f.csv",
+      fetchImpl: async () => ({
+        ok: false,
+        status: 403,
+        headers: { get: () => null },
+        body: null,
+      }),
+    }),
+    /HTTP 403/
+  );
+  await assert.rejects(
+    downloadAttachment({
+      url: "https://x.example/big.csv",
+      maxBytes: 10,
+      fetchImpl: async () => ({
+        ok: true,
+        headers: { get: (k) => (k === "content-length" ? "99999" : null) },
+        body: null,
+      }),
+    }),
+    /超过大小上限/
+  );
 });

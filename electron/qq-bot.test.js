@@ -109,3 +109,84 @@ test("QqBotService connect + handle group @ via commandHandler", async () => {
   await bot.disconnect();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("QqBotService downloadMedia accepts command-layer file_item wrapper", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "qq-bot-dl-"));
+  const storage = path.join(dir, "qq.json");
+  let capturedDownload = null;
+
+  const fetchImpl = async (url, init) => {
+    const u = String(url);
+    if (u.includes("getAppAccessToken")) {
+      return {
+        ok: true,
+        async text() {
+          return JSON.stringify({ access_token: "tok-x", expires_in: 7200 });
+        },
+      };
+    }
+    if (u.endsWith("/gateway")) {
+      return { ok: true, async json() { return { url: "ws://fake" }; } };
+    }
+    if (u.includes("multimedia.nt.qq.com")) {
+      return {
+        ok: true,
+        headers: { get: () => null },
+        body: null,
+        async arrayBuffer() {
+          return Buffer.from("name,wave\nA,1\n");
+        },
+      };
+    }
+    if (u.includes("/v2/users/") || u.includes("/v2/groups/")) {
+      return { ok: true, async json() { return { id: "out-2" }; } };
+    }
+    throw new Error(`unexpected fetch ${u}`);
+  };
+
+  const bot = new QqBotService({
+    storagePath: storage,
+    fetchImpl,
+    WebSocketImpl: FakeWs,
+  });
+  bot.saveSettings({
+    appId: "1001",
+    clientSecret: "secret",
+    accessMode: "open",
+  });
+  bot.setCommandHandler(async (args) => {
+    const fileItem = (args.items || []).find((item) => item?.type === 4 && item.file_item);
+    assert.ok(fileItem, "should expose type=4 file item");
+    capturedDownload = await args.downloadMedia(fileItem);
+    await args.replyText(`got:${capturedDownload.fileName}:${capturedDownload.buffer.toString("utf8").trim()}`);
+    return { handled: true };
+  });
+
+  await bot.connect();
+  await bot._onPacket({
+    op: 0,
+    t: "C2C_MESSAGE_CREATE",
+    s: 3,
+    d: {
+      id: "in-csv",
+      content: "file://2026-08-07_音浪.csv",
+      author: { user_openid: "U-csv" },
+      attachments: [
+        {
+          url: "//multimedia.nt.qq.com/x.csv?rkey=abc",
+          filename: "2026-08-07_音浪.csv",
+          content_type: "text/csv",
+          size: 12,
+        },
+      ],
+    },
+  });
+
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(capturedDownload, "downloadMedia should run");
+  assert.equal(capturedDownload.fileName, "2026-08-07_音浪.csv");
+  assert.equal(capturedDownload.buffer.toString("utf8"), "name,wave\nA,1\n");
+
+  await bot.disconnect();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

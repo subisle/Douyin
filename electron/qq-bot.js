@@ -20,6 +20,7 @@ const {
   sendC2cMessage,
   uploadGroupFile,
   uploadC2cFile,
+  downloadAttachment,
   normalizeInboundEvent,
   buildIdentifyPayload,
   buildResumePayload,
@@ -486,7 +487,15 @@ class QqBotService extends EventEmitter {
         accountId: `qqbot:${this.settings.appId || "default"}`,
         channel: "qqbot",
         text: inbound.text,
-        items: [],
+        items: (inbound.attachments || []).map((att) => ({
+          type: 4,
+          file_item: {
+            url: att.url,
+            fileName: att.fileName,
+            contentType: att.contentType,
+            size: att.size,
+          },
+        })),
         rawMessage: inbound.raw,
         conversationId: inbound.conversationId,
         fromUserId: inbound.fromUserId,
@@ -507,8 +516,22 @@ class QqBotService extends EventEmitter {
         replyText: (text) => this._replyText(inbound, text),
         replyImage: (input) => this._replyImage(inbound, input),
         replyFile: (input) => this._replyFile(inbound, input),
-        downloadMedia: async () => {
-          throw new Error("QQ 通道暂不支持下载用户上传媒体（后续可接）");
+        downloadMedia: async (requestedItem) => {
+          // 命令层传入的是微信同构包装：{ type: 4, file_item: { url, fileName, ... } }
+          // 也兼容直接传内层 file_item / attachment 描述。
+          const raw = requestedItem && typeof requestedItem === "object" ? requestedItem : {};
+          const item =
+            raw.file_item && typeof raw.file_item === "object"
+              ? raw.file_item
+              : raw;
+          const url = item.url || item.URL || "";
+          if (!url) throw new Error("QQ 消息缺少附件下载地址");
+          return downloadAttachment({
+            url,
+            fileName: item.fileName || item.file_name || item.filename,
+            contentType: item.contentType || item.content_type,
+            fetchImpl: this.fetchImpl,
+          });
         },
       };
 

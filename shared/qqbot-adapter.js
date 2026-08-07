@@ -264,7 +264,9 @@ function normalizeInboundEvent(eventType, payload = {}) {
   const isC2c = type === "C2C_MESSAGE_CREATE" || (!isGroup && (d.author?.user_openid || d.author?.id));
 
   const msgId = trimStr(d.id);
-  const content = trimStr(d.content).replace(/^\/\s*/, ""); // 部分环境带 /
+  // 富媒体消息 content 可能是 file:// 前缀或空，不当作正文文本
+  let content = trimStr(d.content).replace(/^\/\s*/, ""); // 部分环境带 /
+  content = content.replace(/^file:\/\/[^\s]*/, "").trim();
   // 去掉 @bot 占位（常见 <@!xxxx> 或 <@xxx>）
   const text = content.replace(/<@!?[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
@@ -277,6 +279,17 @@ function normalizeInboundEvent(eventType, payload = {}) {
     ? `group:${groupId || "unknown"}`
     : `c2c:${fromUserId || msgId || "unknown"}`;
 
+  const attachments = Array.isArray(d.attachments)
+    ? d.attachments
+        .filter((att) => att && typeof att === "object" && trimStr(att.url))
+        .map((att) => ({
+          url: trimStr(att.url),
+          fileName: trimStr(att.filename) || `qq-file-${msgId}`,
+          contentType: trimStr(att.content_type),
+          size: Number(att.size) > 0 ? Number(att.size) : null,
+        }))
+    : [];
+
   return {
     channel: "qqbot",
     eventType: type,
@@ -288,8 +301,67 @@ function normalizeInboundEvent(eventType, payload = {}) {
     fromUserId,
     groupId: groupId || null,
     conversationId,
+    attachments,
     timestamp: d.timestamp || null,
     raw: d,
+  };
+}
+
+const DEFAULT_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 下载官方事件里带 rkey 鉴权参数的附件直链（无需 Authorization 头）。
+ * 协议相对 URL（//…）自动补 https。流式读取并强制大小上限。
+ */
+async function downloadAttachment(input = {}) {
+  const fetchImpl = input.fetchImpl || globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new Error("当前环境不支持 fetch");
+  const maxBytes = Number(input.maxBytes) > 0 ? Number(input.maxBytes) : DEFAULT_MAX_DOWNLOAD_BYTES;
+  let url = trimStr(input.url);
+  if (!url) throw new Error("缺少附件下载地址");
+  if (url.startsWith("//")) url = `https:${url}`;
+
+  const res = await fetchImpl(url, { signal: input.signal });
+  if (!res.ok) throw new Error(`附件下载失败：HTTP ${res.status}`);
+
+  const declared = Number(res.headers?.get?.("content-length") || 0);
+  if (declared > maxBytes) {
+    throw new Error(`附件超过大小上限（${Math.round(declared / 1024 / 1024)}MB > ${Math.round(maxBytes / 1024 / 1024)}MB）`);
+  }
+  if (!res.body) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length > maxBytes) throw new Error("附件超过大小上限");
+    return {
+      buffer,
+      fileName: trimStr(input.fileName) || "qq-file.bin",
+      contentType: trimStr(input.contentType),
+      size: buffer.length,
+    };
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.length;
+      if (total > maxBytes) throw new Error(`附件超过大小上限（${Math.round(maxBytes / 1024 / 1024)}MB）`);
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  return {
+    buffer: Buffer.concat(chunks, total),
+    fileName: trimStr(input.fileName) || "qq-file.bin",
+    contentType: trimStr(input.contentType),
+    size: total,
   };
 }
 
@@ -330,6 +402,7 @@ module.exports = {
   sendC2cMessage,
   uploadGroupFile,
   uploadC2cFile,
+  downloadAttachment,
   normalizeInboundEvent,
   buildIdentifyPayload,
   buildResumePayload,

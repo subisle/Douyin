@@ -202,7 +202,7 @@ export function QqBotPage() {
             QQ 机器人
           </h1>
           <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-            官方 QQ 开放平台通道。业务能力与微信机器人共用（Agent / 技能 / 日报 / PK 分组）。
+            官方 QQ 开放平台通道。业务能力与微信机器人共用（Agent / 技能 / 日报）。
             需在{" "}
             <a
               className="text-violet-600 underline underline-offset-2"
@@ -453,8 +453,8 @@ export function QqBotPage() {
             )}
           </div>
           <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
-            能力说明：文字指令与 AI 技能与微信侧一致；官方通道对主动推送/随意文件有限额，
-            图片（日报、PK 分组图）走被动回复窗口更稳。用户上传 CSV 导入后续再补。
+            能力说明：文字指令、CSV 导入与 AI 技能与微信侧一致；官方通道对主动推送/随意文件有限额，
+            图片（日报）走被动回复窗口更稳。发文件前可先说「24号数据」指定导入日。
           </p>
         </section>
       </div>
