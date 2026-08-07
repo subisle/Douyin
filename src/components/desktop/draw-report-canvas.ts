@@ -172,8 +172,8 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
       { key: "rank",      label: "排名",           minWidth: 66,  flex: 0.05, align: "center", getText: (r, i) => `${i + 1}${r.rankDelta ? r.rankDelta : ""}` },
       { key: "name",      label: "主播姓名",       minWidth: 88,  flex: 0.04, align: "left",   getText: (r) => r.name },
       { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 28,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
-      { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.45, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-      { key: "totalWave", label: "累计总音浪",     minWidth: 134, flex: 0.55, align: "right",  getText: (r) => formatWave(r.totalWave) },
+      { key: "dailyWave", label: dailyWaveLabel,   minWidth: 168, flex: 0.7, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+      { key: "totalWave", label: "累计总音浪",     minWidth: 120, flex: 0.4, align: "right",  getText: (r) => formatWave(r.totalWave) },
       { key: "duration",  label: "有效时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
       { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "—" },
       { key: "tier",      label: "等级",           minWidth: 64,  flex: 0.15, align: "center", getText: (r) => r.tier || "" },
@@ -183,8 +183,8 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
     { key: "rank",      label: "排名",           minWidth: 66,  flex: 0.08, align: "center", getText: (r, i) => `${i + 1}${r.rankDelta ? r.rankDelta : ""}` },
     { key: "name",      label: "主播姓名",       minWidth: 104, flex: 0.12, align: "left",   getText: (r) => r.name },
     { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 30,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
-    { key: "dailyWave", label: dailyWaveLabel,   minWidth: 112, flex: 0.35, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
-    { key: "totalWave", label: "累计总音浪",     minWidth: 146, flex: 1.6, align: "right",  getText: (r) => formatWave(r.totalWave) },
+    { key: "dailyWave", label: dailyWaveLabel,   minWidth: 160, flex: 0.55, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
+    { key: "totalWave", label: "累计总音浪",     minWidth: 130, flex: 1.2, align: "right",  getText: (r) => formatWave(r.totalWave) },
     { key: "duration",  label: "有效时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
     { key: "master",    label: "师傅",           minWidth: 96,  flex: 1.2, align: "left",   getText: (r) => r.masterName || "—" },
     { key: "tier",      label: "等级",           minWidth: 72,  flex: 0.35, align: "center", getText: (r) => r.tier || "" },
@@ -443,16 +443,9 @@ export function drawReportToCanvas(
   ctx.font = `bold ${13 * scale}px sans-serif`;
   cols.forEach((col) => {
     const drawX = tablePaddingX + col.x;
-    if (col.align === "left") {
-      ctx.textAlign = "left";
-      ctx.fillText(col.label, drawX + 8 * scale, y + tableHeaderHeight / 2);
-    } else if (col.align === "right") {
-      ctx.textAlign = "right";
-      ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderHeight / 2);
-    } else {
-      ctx.textAlign = "center";
-      ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderHeight / 2);
-    }
+    // 表头列名统一居中
+    ctx.textAlign = "center";
+    ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderHeight / 2);
   });
   y += tableHeaderHeight;
 
@@ -515,25 +508,44 @@ export function drawReportToCanvas(
         const text = truncateCanvasText(ctx, row.name, col.width - 16 * scale);
         ctx.fillText(text, drawX + 8 * scale, cy);
       } else if (col.key === "dailyWave") {
-        if (!isInactive) {
-          const barW = Math.max(((col.width - 48 * scale) * row.dailyWave) / safeMaxWave, 24 * scale);
-          const barH = 18 * scale;
-          const barTop = y + (rowHeight - barH) / 2;
-          const barLeft = drawX + 10 * scale;
+        const padX = 8 * scale;
+        const barH = 22 * scale;
+        const barLeft = drawX + padX;
+        const barTrackW = Math.max(48 * scale, col.width - padX * 2);
+        const barTop = cy - barH / 2;
+        if (isInactive) {
+          ctx.fillStyle = "#FEE2E2";
+          ctx.beginPath();
+          drawRoundRect(ctx, barLeft, barTop, barTrackW, barH, barH / 2);
+          ctx.fill();
+          ctx.fillStyle = "#DC2626";
+          ctx.font = `bold ${13 * scale}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("未开播", barLeft + barTrackW / 2, cy);
+        } else {
+          const waveText = formatWave(row.dailyWave);
+          const fillW = Math.max(
+            0,
+            Math.min(barTrackW, (barTrackW * row.dailyWave) / safeMaxWave)
+          );
           ctx.fillStyle = "#DBEAFE";
           ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, col.width - 24 * scale, barH, 6 * scale);
+          drawRoundRect(ctx, barLeft, barTop, barTrackW, barH, barH / 2);
           ctx.fill();
-          ctx.fillStyle = "#60A5FA";
-          ctx.beginPath();
-          drawRoundRect(ctx, barLeft, barTop, Math.min(barW, col.width - 24 * scale), barH, 6 * scale);
-          ctx.fill();
+          if (fillW > 0) {
+            ctx.fillStyle = "#60A5FA";
+            ctx.beginPath();
+            drawRoundRect(ctx, barLeft, barTop, Math.max(fillW, barH), barH, barH / 2);
+            ctx.fill();
+          }
+          // 数字画在进度条内居中
+          ctx.font = `bold ${13 * scale}px monospace`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = fillW / Math.max(barTrackW, 1) > 0.52 ? "#FFFFFF" : "#1E3A8A";
+          ctx.fillText(truncateCanvasText(ctx, waveText, barTrackW - 12 * scale), barLeft + barTrackW / 2, cy);
         }
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
-        ctx.font = `${14 * scale}px monospace`;
-        ctx.fillStyle = isInactive ? "#DC2626" : "#1E293B";
-        ctx.fillText(isInactive ? "未开播" : formatWave(row.dailyWave), drawX + col.width - 12 * scale, cy);
       } else if (col.key === "totalWave") {
         ctx.textAlign = "right";
         ctx.textBaseline = "middle";
@@ -842,16 +854,9 @@ export function drawAppleReportToCanvas(
   ctx.textBaseline = "middle";
   cols.forEach((col) => {
     const drawX = tableX + col.x;
-    if (col.align === "left") {
-      ctx.textAlign = "left";
-      ctx.fillText(col.label, drawX + 8 * scale, y + tableHeaderH / 2);
-    } else if (col.align === "right") {
-      ctx.textAlign = "right";
-      ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderH / 2);
-    } else {
-      ctx.textAlign = "center";
-      ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderH / 2);
-    }
+    // 表头列名统一居中
+    ctx.textAlign = "center";
+    ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderH / 2);
   });
   y += tableHeaderH + rowGap;
 
@@ -918,47 +923,30 @@ export function drawAppleReportToCanvas(
         ctx.textBaseline = "middle";
         ctx.fillText(truncateCanvasText(ctx, row.name, col.width - 16 * scale), drawX + 8 * scale, cy);
       } else if (col.key === "dailyWave") {
+        const padX = 8 * scale;
+        const barX = drawX + padX;
+        const barW = Math.max(48 * scale, col.width - padX * 2);
+        const barH = denseColumns ? 20 * scale : 22 * scale;
         if (isInactive) {
+          ctx.fillStyle = "#FEE4E2";
+          ctx.beginPath();
+          drawRoundRect(ctx, barX, cy - barH / 2, barW, barH, barH / 2);
+          ctx.fill();
           ctx.fillStyle = "#D92D20";
           ctx.font = `700 ${13 * scale}px ${font}`;
-          ctx.textAlign = "right";
+          ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText("未开播", drawX + col.width - 12 * scale, cy);
-          return;
-        }
-        const waveText = formatWave(row.dailyWave);
-        const showWaveBar = !denseColumns && col.width >= 150 * scale;
-        const waveRatio = row.dailyWave / Math.max(maxWave, 1);
-        if (showWaveBar) {
-          const barMaxW = Math.max(42 * scale, Math.min(58 * scale, col.width - 92 * scale));
-          const barW = Math.max(14 * scale, Math.min(barMaxW, waveRatio * barMaxW));
-          const barX = drawX + 10 * scale;
-          const barY = cy - 4 * scale;
-          ctx.fillStyle = "#EAF3FF";
-          ctx.beginPath();
-          drawRoundRect(ctx, barX, barY, barMaxW, 8 * scale, 4 * scale);
-          ctx.fill();
-          ctx.fillStyle = blue;
-          ctx.beginPath();
-          drawRoundRect(ctx, barX, barY, barW, 8 * scale, 4 * scale);
-          ctx.fill();
-          ctx.fillStyle = "#101828";
-          ctx.font = `700 ${13 * scale}px ${mono}`;
-          ctx.textAlign = "right";
-          ctx.textBaseline = "middle";
-          ctx.fillText(waveText, drawX + col.width - 12 * scale, cy);
+          ctx.fillText("未开播", barX + barW / 2, cy);
         } else {
-          const barX = drawX + 8 * scale;
-          const barW = Math.max(28 * scale, col.width - 16 * scale);
-          const barH = 20 * scale;
+          // 数字画在进度条内居中；条占满整列
           drawAppleInlineWaveBar(
             ctx,
             barX,
             cy - barH / 2,
             barW,
             barH,
-            waveRatio,
-            waveText,
+            row.dailyWave / Math.max(maxWave, 1),
+            formatWave(row.dailyWave),
             scale,
             mono,
             blue

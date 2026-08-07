@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useElectronData } from "./use-electron-data";
 import type { FamilyNode, RosterEntry } from "@/types/electron";
+import { getDataApi } from "@/client/http-electron-api";
+import { downloadCsv } from "./csv";
 import { exportFamilyPoster } from "./export-family-poster";
 import { exportRosterPoster } from "./export-roster-poster";
 import {
@@ -393,13 +395,15 @@ const SURNAMES = ["浩", "狼", "玖", "啸"] as const;
 
 function RosterExportButtons() {
   const [exportingSurname, setExportingSurname] = useState<string | null>(null);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
 
   const handleRosterExport = async (surname: string) => {
-    if (exportingSurname) return;
+    if (exportingSurname || exportingCsv) return;
     setExportingSurname(surname);
     try {
-      const res = await window.electronAPI?.getRosterBySurname(surname);
+      const api = getDataApi();
+      const res = await api?.getRosterBySurname(surname);
       if (!res || !res.success || !res.data || res.data.length === 0) {
         alert(`未找到${surname}字辈的成员`);
         return;
@@ -414,6 +418,89 @@ function RosterExportButtons() {
     }
   };
 
+  const handleFamilyCsvExport = async () => {
+    if (exportingSurname || exportingCsv) return;
+    setExportingCsv(true);
+    try {
+      const api = getDataApi();
+      if (!api) throw new Error("数据接口不可用");
+
+      // 只认原生 preload / 纯 Web HTTP；旧 Electron preload 缺方法时不走 hybrid→HTTP（会 401）
+      const nativeExport =
+        typeof window !== "undefined" &&
+        typeof window.electronAPI?.exportFamilyRoster === "function"
+          ? window.electronAPI.exportFamilyRoster.bind(window.electronAPI)
+          : typeof window !== "undefined" && !window.electronAPI && typeof api.exportFamilyRoster === "function"
+            ? api.exportFamilyRoster.bind(api)
+            : null;
+
+      let rows: Record<string, unknown>[] = [];
+      if (nativeExport) {
+        const res = await nativeExport();
+        if (!res || !res.success) {
+          throw new Error(String(res?.error || "导出失败"));
+        }
+        rows = (res.data || []) as Record<string, unknown>[];
+      } else {
+        // 兼容旧 preload：用已有 getAnchors IPC 拼 CSV
+        const res = await api.getAnchors();
+        if (!res || !res.success) {
+          throw new Error(String(res?.error || "读取主播列表失败"));
+        }
+        // 字段/排序对齐 electron/db.exportFamilyRoster
+        const SURNAME_ORDER: Record<string, number> = { 浩: 1, 狼: 2, 玖: 3, 啸: 4 };
+        const surnameOf = (name: string) => {
+          const ch = String(name || "").trim().charAt(0);
+          return SURNAME_ORDER[ch] ? ch : "其他";
+        };
+        const genLabel = (g: number | null) => {
+          if (g == null) return "未定代";
+          if (g === 0) return "祖师";
+          return `第${g}代`;
+        };
+        rows = [...(res.data || [])]
+          .map((a) => {
+            const generation = a.generation == null ? null : Number(a.generation);
+            const surname = surnameOf(a.name);
+            return {
+              代数: generation == null ? "" : generation,
+              辈分: genLabel(generation),
+              字辈: surname,
+              姓名: a.name,
+              性别: a.gender === "female" ? "女" : a.gender === "male" ? "男" : a.gender || "",
+              师父: a.masterName || "",
+              抖音号: a.douyinNo || "",
+              主播ID: a.anchorId || "",
+              账号名: a.anchorName || "",
+              账号数: a.accountCount ?? 0,
+              __gen: generation == null ? 999 : generation,
+              __char: SURNAME_ORDER[surname] || 99,
+              __name: a.name,
+            };
+          })
+          .sort((x, y) => {
+            if (x.__gen !== y.__gen) return Number(x.__gen) - Number(y.__gen);
+            if (x.__char !== y.__char) return Number(x.__char) - Number(y.__char);
+            return String(x.__name).localeCompare(String(y.__name), "zh");
+          })
+          .map(({ __gen: _g, __char: _c, __name: _n, ...rest }) => rest);
+      }
+
+      if (rows.length === 0) {
+        alert("暂无族谱数据可导出");
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadCsv(rows, `族谱全部-按辈分-${stamp}.csv`);
+    } catch (e) {
+      console.error("族谱 CSV 导出失败", e);
+      alert(`族谱 CSV 导出失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExportingCsv(false);
+      setRosterOpen(false);
+    }
+  };
+
   return (
     <div className="app-no-drag relative">
       <button
@@ -424,15 +511,23 @@ function RosterExportButtons() {
         导出名单
       </button>
       {rosterOpen && (
-        <div className="absolute right-0 top-full z-50 mt-1 flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 shadow-md">
+        <div className="absolute right-0 top-full z-50 mt-1 flex min-w-[9.5rem] flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 shadow-md">
+          <button
+            onClick={handleFamilyCsvExport}
+            disabled={exportingCsv || !!exportingSurname}
+            className="flex items-center gap-2 rounded px-3 py-1.5 text-left text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+          >
+            {exportingCsv ? "导出中…" : "全部 CSV（按辈分）"}
+          </button>
+          <div className="mx-1 h-px bg-border" />
           {SURNAMES.map((s) => (
             <button
               key={s}
               onClick={() => handleRosterExport(s)}
-              disabled={!!exportingSurname}
+              disabled={!!exportingSurname || exportingCsv}
               className="flex items-center gap-2 rounded px-3 py-1.5 text-sm transition hover:bg-accent disabled:opacity-50"
             >
-              {exportingSurname === s ? "导出中…" : `${s}字辈`}
+              {exportingSurname === s ? "导出中…" : `${s}字辈海报`}
             </button>
           ))}
         </div>

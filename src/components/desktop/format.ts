@@ -1,4 +1,4 @@
-/** 音浪/数值格式化：统一「万」为单位，精确到 0.1 万（千），不显示千后零碎。 */
+/** 音浪格式化：低于 1 万直接显示数字；≥1 万用「万」精确到 0.1；≥1 亿用「亿」。 */
 export function formatWave(value: number): string {
   const n = Number(value) || 0;
   if (n <= 0) return "0";
@@ -6,6 +6,10 @@ export function formatWave(value: number): string {
     const yi = n / 1_0000_0000;
     const r = Math.round(yi * 10) / 10;
     return Number.isInteger(r) ? `${r} 亿` : `${r.toFixed(1)} 亿`;
+  }
+  // 低于一万：直接显示整数（千分位）
+  if (n < 1_0000) {
+    return Math.round(n).toLocaleString("zh-CN");
   }
   const wan = n / 1_0000;
   const r = Math.round(wan * 10) / 10; // 精确到千

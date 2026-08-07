@@ -1,8 +1,17 @@
 "use client";
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NAV_ITEMS, type PageId, type AppRole } from "./types";
+import {
+  NAV_TREE,
+  isMonitorPage,
+  isNavGroup,
+  type NavEntry,
+  type NavItem,
+  type PageId,
+  type AppRole,
+} from "./types";
 
 interface SidebarProps {
   currentPage: PageId;
@@ -12,6 +21,16 @@ interface SidebarProps {
   userRole: AppRole;
 }
 
+function entryVisible(entry: NavEntry, userRole: AppRole) {
+  if (entry.adminOnly && userRole === "guest") return false;
+  return true;
+}
+
+function childVisible(item: NavItem, userRole: AppRole) {
+  if (item.adminOnly && userRole === "guest") return false;
+  return true;
+}
+
 export function Sidebar({
   currentPage,
   collapsed,
@@ -19,10 +38,15 @@ export function Sidebar({
   onToggle,
   userRole,
 }: SidebarProps) {
-  const visibleItems = NAV_ITEMS.filter((item) => {
-    if (item.adminOnly && userRole === "guest") return false;
-    return true;
-  });
+  const monitorActive = isMonitorPage(currentPage);
+  const [monitorOpen, setMonitorOpen] = useState(monitorActive);
+
+  useEffect(() => {
+    if (monitorActive) setMonitorOpen(true);
+  }, [monitorActive]);
+
+  const visibleEntries = NAV_TREE.filter((entry) => entryVisible(entry, userRole));
+
   return (
     <aside
       className={cn(
@@ -31,16 +55,108 @@ export function Sidebar({
       )}
     >
       <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-1.5 py-2">
-        {visibleItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentPage === item.id;
+        {visibleEntries.map((entry) => {
+          if (isNavGroup(entry)) {
+            const children = entry.children.filter((child) => childVisible(child, userRole));
+            if (children.length === 0) return null;
+            const GroupIcon = entry.icon;
+            const groupActive = monitorActive;
+            const expanded = !collapsed && monitorOpen;
 
+            return (
+              <div key={entry.id} className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (collapsed) {
+                      onNavigate(entry.defaultPage);
+                      return;
+                    }
+                    if (!monitorOpen) {
+                      setMonitorOpen(true);
+                      if (!groupActive) onNavigate(entry.defaultPage);
+                      return;
+                    }
+                    // 已展开：再点父项仍进默认子页，并保持展开
+                    onNavigate(entry.defaultPage);
+                  }}
+                  title={entry.label}
+                  aria-label={entry.label}
+                  aria-expanded={expanded}
+                  className={cn(
+                    "group relative flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-all duration-200",
+                    groupActive
+                      ? "bg-primary/15 text-foreground"
+                      : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                  )}
+                >
+                  <GroupIcon
+                    className={cn(
+                      "size-4 shrink-0 transition-transform",
+                      groupActive ? "scale-110 text-primary" : "group-hover:scale-110"
+                    )}
+                  />
+                  {!collapsed && (
+                    <>
+                      <span className="hidden min-w-0 flex-1 truncate text-[13px] font-medium leading-tight sm:block">
+                        {entry.label}
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          "hidden size-3.5 shrink-0 opacity-60 transition-transform sm:block",
+                          expanded && "rotate-180"
+                        )}
+                      />
+                    </>
+                  )}
+                </button>
+
+                {expanded &&
+                  children.map((child) => {
+                    const ChildIcon = child.icon;
+                    const isActive = currentPage === child.id;
+                    return (
+                      <button
+                        key={child.id}
+                        type="button"
+                        onClick={() => onNavigate(child.id)}
+                        title={child.label}
+                        aria-label={child.label}
+                        className={cn(
+                          "group relative flex w-full items-center gap-2 rounded-md py-1.5 pl-4 pr-2 text-left transition-all duration-200",
+                          isActive
+                            ? "bg-primary text-primary-foreground shadow-md"
+                            : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                        )}
+                      >
+                        <ChildIcon
+                          className={cn(
+                            "size-3.5 shrink-0 transition-transform",
+                            isActive ? "scale-110" : "group-hover:scale-110"
+                          )}
+                        />
+                        <span className="hidden min-w-0 flex-1 truncate text-[12px] font-medium leading-tight sm:block">
+                          {child.label}
+                        </span>
+                        {isActive && (
+                          <span className="absolute right-2.5 hidden size-1.5 rounded-full bg-primary-foreground sm:block" />
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            );
+          }
+
+          const Icon = entry.icon;
+          const isActive = currentPage === entry.id;
           return (
             <button
-              key={item.id}
-              onClick={() => onNavigate(item.id)}
-              title={item.label}
-              aria-label={item.label}
+              key={entry.id}
+              type="button"
+              onClick={() => onNavigate(entry.id)}
+              title={entry.label}
+              aria-label={entry.label}
               className={cn(
                 "group relative flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-all duration-200",
                 isActive
@@ -56,7 +172,7 @@ export function Sidebar({
               />
               {!collapsed && (
                 <span className="hidden min-w-0 flex-1 truncate text-[13px] font-medium leading-tight sm:block">
-                  {item.label}
+                  {entry.label}
                 </span>
               )}
               {isActive && !collapsed && (
@@ -69,6 +185,7 @@ export function Sidebar({
 
       <div className="hidden border-t border-border/70 px-2 py-2 sm:block">
         <button
+          type="button"
           onClick={onToggle}
           className="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-all duration-200 hover:bg-background/70 hover:text-foreground"
           title={collapsed ? "展开侧栏" : "收起侧栏"}

@@ -1,11 +1,57 @@
 import type { BuildPkGroupsGroup, BuildPkGroupsResult, PkGroupMode, PkMember } from "@/types/electron";
-import {
-  PRESET_BATTLE_GROUPS as SHARED_PRESET_BATTLE_GROUPS,
-  PRESET_BATTLE_META,
-  flattenPresetRosterText,
-} from "../../../shared/pk-preset-battle-groups.js";
+import * as SharedPresetBattle from "../../../shared/pk-preset-battle-groups.js";
+
+const SHARED_PRESET_BATTLE_GROUPS: string[][] =
+  (SharedPresetBattle as { PRESET_BATTLE_GROUPS?: string[][] }).PRESET_BATTLE_GROUPS ||
+  (SharedPresetBattle as { default?: { PRESET_BATTLE_GROUPS?: string[][] } }).default
+    ?.PRESET_BATTLE_GROUPS ||
+  [];
+
+const SHARED_PRESET_BATTLE_META = {
+  label: "内置分组",
+  source: "内置小组赛分组",
+  firstStart: "08:15",
+  stepMinutes: 15,
+  periodHint: "2026-08",
+  notes: [] as string[],
+  ...((SharedPresetBattle as { PRESET_BATTLE_META?: Record<string, unknown> }).PRESET_BATTLE_META ||
+    (SharedPresetBattle as { default?: { PRESET_BATTLE_META?: Record<string, unknown> } }).default
+      ?.PRESET_BATTLE_META ||
+    {}),
+};
+
+const SHARED_PRESET_PROMO_GROUPS: string[][] =
+  (SharedPresetBattle as { PRESET_PROMO_GROUPS?: string[][] }).PRESET_PROMO_GROUPS ||
+  (SharedPresetBattle as { default?: { PRESET_PROMO_GROUPS?: string[][] } }).default
+    ?.PRESET_PROMO_GROUPS ||
+  [];
+
+const SHARED_PRESET_PROMO_META = {
+  label: "晋级赛",
+  source: "内置晋级赛分组",
+  firstStart: "08:15",
+  stepMinutes: 15,
+  periodHint: "2026-08",
+  notes: [] as string[],
+  ...((SharedPresetBattle as { PRESET_PROMO_META?: Record<string, unknown> }).PRESET_PROMO_META ||
+    (SharedPresetBattle as { default?: { PRESET_PROMO_META?: Record<string, unknown> } }).default
+      ?.PRESET_PROMO_META ||
+    {}),
+};
 
 export const DEFAULT_PK_GROUP_SIZE = 8;
+
+/** 与 shared 同步的内置争霸赛元信息（时间表 / 来源 / periodHint） */
+export const PRESET_BATTLE_META = {
+  label: String(SHARED_PRESET_BATTLE_META.label || "内置分组"),
+  source: String(SHARED_PRESET_BATTLE_META.source || "内置小组赛分组"),
+  firstStart: String(SHARED_PRESET_BATTLE_META.firstStart || "08:15"),
+  stepMinutes: Number(SHARED_PRESET_BATTLE_META.stepMinutes) || 15,
+  periodHint: String(SHARED_PRESET_BATTLE_META.periodHint || "2026-08"),
+  notes: Array.isArray(SHARED_PRESET_BATTLE_META.notes)
+    ? (SHARED_PRESET_BATTLE_META.notes as string[]).map(String)
+    : [],
+};
 
 /** 单一名单 storage（分组页） */
 export const ROSTER_STORAGE_KEY = "pk-group-roster-v1";
@@ -22,72 +68,115 @@ export const LEGACY_ROSTER_CONFIG_STORAGE_KEY_V16 = "pk-roster-list-config-v16";
  * 默认白名单（与内置分组顺序一致，按组展开）。
  * bot skill 用正则从本文件抽取 PRESET_ROSTER_TEXT，**勿改符号名 / 反引号形态**。
  */
-export const PRESET_ROSTER_TEXT = `啸辰
-浩杰
-浩泽
-狼瑞
-狼哲
-浩龙
+export const PRESET_ROSTER_TEXT = `狼明
 狼腾
-狼佑
-啸宇
-啸泽
-浩月
 浩雨
-玖柒
-浩运
-浩阳
-浩启
-浩辰
-狼兴
-狼影
-浩冬
-狼明
-啸森
-狼轩
-狼赫
-狼辉
-玖雪
-浩玟
-狼凯
-浩哲
-狼岳
-啸强
-狼霆
-浩鸣
-狼澈
-玖玥
-啸帆
-狼仔
-玖玉
-啸安
-南方楠
-玖妹
-狼小宝
-浩艺
+浩泽
+狼辰
 狼九
-狼途
-狼俊
+玖依
+南方楠
+啸宇
+浩龙
+狼艺
+玖豆
+狼雨
+啸墨
+狼澈
+啸泽
+浩运
+玖雪
 狼征
 浩延
-狼博
-狼艺
-啸阳
-狼泽
 浩沐
-狼辰
+浩鸣
+啸辰
+玖玉
+浩冬
+浩森
 狼旭
-浩森`;
+狼俊
+狼凯
+玖玥
+狼兴
+玖柒
+啸森
+浩月
+浩艺
+啸阳
+鹏先生
+啸帆
+浩玟
+狼泽
+狼岳
+狼哲
+啸强
+狼途
+啸安
+狼赫
+玖妹
+狼辉
+浩哲
+浩杰
+狼安
+狼仔
+狼轩
+狼影
+浩坤
+狼博
+狼佑
+狼裕
+`;
 
 /**
  * 小组赛内置固定分组（锁定版）。
- * 56 人 · 7×8 · 08:15 起间隔 15 分钟 · 狼辉第4 / 狼佑第1 · 次强3 / 最强5
+ * 与 shared PRESET_BATTLE_GROUPS 同步 · 58 人 8 组每组 7–8 · 08:15×15min
  */
 export const PRESET_BATTLE_GROUPS: string[][] = SHARED_PRESET_BATTLE_GROUPS.map((row) => [...row]);
 
 export const PRESET_BATTLE_FIRST_START = PRESET_BATTLE_META.firstStart;
 export const PRESET_BATTLE_STEP_MINUTES = PRESET_BATTLE_META.stepMinutes;
 export const PRESET_BATTLE_NOTES = [...PRESET_BATTLE_META.notes];
+
+/** 与 shared 同步的第二套内置：晋级赛元信息 */
+export const PRESET_PROMO_META = {
+  label: String(SHARED_PRESET_PROMO_META.label || "晋级赛"),
+  source: String(SHARED_PRESET_PROMO_META.source || "内置晋级赛分组"),
+  firstStart: String(SHARED_PRESET_PROMO_META.firstStart || "08:15"),
+  stepMinutes: Number(SHARED_PRESET_PROMO_META.stepMinutes) || 15,
+  periodHint: String(SHARED_PRESET_PROMO_META.periodHint || "2026-08"),
+  notes: Array.isArray(SHARED_PRESET_PROMO_META.notes)
+    ? (SHARED_PRESET_PROMO_META.notes as string[]).map(String)
+    : [],
+};
+
+/**
+ * 晋级赛内置固定分组（第二套）。
+ * 与 shared PRESET_PROMO_GROUPS 同步 · 47 人 8 组 · 每组一强核
+ */
+export const PRESET_PROMO_GROUPS: string[][] = SHARED_PRESET_PROMO_GROUPS.map((row) => [...row]);
+
+export const PRESET_PROMO_FIRST_START = PRESET_PROMO_META.firstStart;
+export const PRESET_PROMO_STEP_MINUTES = PRESET_PROMO_META.stepMinutes;
+export const PRESET_PROMO_NOTES = [...PRESET_PROMO_META.notes];
+
+function flattenPresetRosterText() {
+  const fn =
+    (SharedPresetBattle as { flattenPresetRosterText?: () => string }).flattenPresetRosterText ||
+    (SharedPresetBattle as { default?: { flattenPresetRosterText?: () => string } }).default
+      ?.flattenPresetRosterText;
+  if (typeof fn === "function") return String(fn() || "");
+  return PRESET_BATTLE_GROUPS.flat().join("\n");
+}
+
+function flattenPromoRosterText() {
+  const fn =
+    (SharedPresetBattle as { flattenPromoRosterText?: () => string }).flattenPromoRosterText ||
+    (SharedPresetBattle as { default?: { flattenPromoRosterText?: () => string } }).default
+      ?.flattenPromoRosterText;
+  if (typeof fn === "function") return String(fn() || "");
+  return PRESET_PROMO_GROUPS.flat().join("\n");
+}
 
 const ROSTER_NAME_ALIASES: Record<string, string> = {
   辰辰: "浩辰",
@@ -566,6 +655,176 @@ export function suggestNextGroupPresetName(presets?: SavedGroupPreset[]): string
     if (m) max = Math.max(max, Number(m[1]) || 0);
   }
   return `分组${max + 1 || list.length + 1}`;
+}
+
+/** PK 分组页 / 赛程共用的内置存档名 · 小组赛（第一套） */
+export const BUILTIN_GROUP_PRESET_NAME = "小组赛";
+/** PK 分组页 / 赛程共用的内置存档名 · 晋级赛（第二套） */
+export const BUILTIN_PROMO_PRESET_NAME = "晋级赛";
+
+/** 当前代码锁定的小组赛内置名组（拷贝，避免外部 mutate） */
+export function getBuiltInNameGroups(): string[][] {
+  return (PRESET_BATTLE_GROUPS || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
+
+/** 当前代码锁定的晋级赛内置名组（拷贝，避免外部 mutate） */
+export function getBuiltInPromoNameGroups(): string[][] {
+  return (PRESET_PROMO_GROUPS || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
+
+/**
+ * 把代码内置表写入 PK 分组命名存档「小组赛」，并同步白名单文本。
+ * 默认 makeActive=true，打开 PK 分组即见最新锁定表。
+ */
+export function syncBuiltInGroupsToPkStorage(options?: {
+  makeActive?: boolean;
+  period?: string;
+  note?: string;
+}): SavedGroupPreset | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = getBuiltInNameGroups();
+  if (!nameGroups.length) return null;
+
+  // 白名单与内置表同序，避免 bot / 导入名单漂旧
+  try {
+    saveRosterText(flattenPresetRosterTextLocal());
+  } catch {
+    /* ignore */
+  }
+
+  const existing = listSavedGroupPresets().find(
+    (p) => String(p.name || "").trim() === BUILTIN_GROUP_PRESET_NAME
+  );
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  const period =
+    String(options?.period || PRESET_BATTLE_META.periodHint || "").trim() || undefined;
+  const note =
+    String(options?.note || "").trim() ||
+    [
+      PRESET_BATTLE_META.source || "内置小组赛分组",
+      `${nameGroups.length} 组 · ${total} 人`,
+      `最强第4 · 啸泽3/啸帆6 · ${PRESET_BATTLE_FIRST_START}×${PRESET_BATTLE_STEP_MINUTES}min`,
+      `同步 ${new Date().toISOString()}`,
+    ].join(" · ");
+
+  return saveNamedGroupPreset({
+    id: existing?.id,
+    name: BUILTIN_GROUP_PRESET_NAME,
+    nameGroups,
+    period,
+    mode: "preset",
+    firstStart: PRESET_BATTLE_FIRST_START,
+    stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+    groupSize: DEFAULT_PK_GROUP_SIZE,
+    note,
+    makeActive: options?.makeActive !== false,
+  });
+}
+
+/**
+ * 把第二套内置表写入 PK 分组命名存档「晋级赛」。
+ * 默认 makeActive=false，不抢当前激活的「小组赛」。
+ * 拖拽微调后可覆盖保存到同名存档。
+ */
+export function syncBuiltInPromoGroupsToPkStorage(options?: {
+  makeActive?: boolean;
+  period?: string;
+  note?: string;
+}): SavedGroupPreset | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = getBuiltInPromoNameGroups();
+  if (!nameGroups.length) return null;
+
+  const existing = listSavedGroupPresets().find(
+    (p) => String(p.name || "").trim() === BUILTIN_PROMO_PRESET_NAME
+  );
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  const period =
+    String(options?.period || PRESET_PROMO_META.periodHint || "").trim() || undefined;
+  const note =
+    String(options?.note || "").trim() ||
+    [
+      PRESET_PROMO_META.source || "内置晋级赛分组",
+      `${nameGroups.length} 组 · ${total} 人`,
+      "每组一强核 · 浩杰G1 · 浩森G8",
+      `${PRESET_PROMO_FIRST_START}×${PRESET_PROMO_STEP_MINUTES}min`,
+      `同步 ${new Date().toISOString()}`,
+    ].join(" · ");
+
+  return saveNamedGroupPreset({
+    id: existing?.id,
+    name: BUILTIN_PROMO_PRESET_NAME,
+    nameGroups,
+    period,
+    mode: "preset",
+    firstStart: PRESET_PROMO_FIRST_START,
+    stepMinutes: PRESET_PROMO_STEP_MINUTES,
+    groupSize: 6,
+    note,
+    makeActive: options?.makeActive === true,
+  });
+}
+
+/**
+ * 同步两套内置到 PK 分组存档：小组赛 + 晋级赛。
+ * 默认激活小组赛；晋级赛仅确保存档存在，可点选加载后拖拽保存。
+ */
+export function syncAllBuiltInGroupsToPkStorage(options?: {
+  makeActiveGroup?: boolean;
+  makeActivePromo?: boolean;
+  period?: string;
+}): { group: SavedGroupPreset | null; promo: SavedGroupPreset | null } {
+  const group = syncBuiltInGroupsToPkStorage({
+    makeActive: options?.makeActiveGroup !== false,
+    period: options?.period,
+  });
+  const promo = syncBuiltInPromoGroupsToPkStorage({
+    makeActive: options?.makeActivePromo === true,
+    period: options?.period,
+  });
+  return { group, promo };
+}
+
+function flattenPresetRosterTextLocal(): string {
+  const fromGroups = getBuiltInNameGroups()
+    .flat()
+    .map((n) => String(n).trim())
+    .filter(Boolean);
+  if (fromGroups.length) return fromGroups.join("\n");
+  return String(PRESET_ROSTER_TEXT || "").trim();
+}
+
+function flattenPromoRosterTextLocal(): string {
+  const fromGroups = getBuiltInPromoNameGroups()
+    .flat()
+    .map((n) => String(n).trim())
+    .filter(Boolean);
+  if (fromGroups.length) return fromGroups.join("\n");
+  return flattenPromoRosterText() || "";
+}
+
+/** 把晋级赛名组解析成 BuildPkGroupsResult */
+export function buildPresetPromoGroupsResult(
+  allMembers: PkMember[],
+  options?: {
+    scoreField?: "wave" | "latestWave";
+    firstStart?: string;
+    stepMinutes?: number;
+  }
+): BuildPkGroupsResult {
+  return buildBattleGroupsResultFromNameGroups(PRESET_PROMO_GROUPS, allMembers, {
+    scoreField: options?.scoreField,
+    firstStart: options?.firstStart || PRESET_PROMO_FIRST_START,
+    stepMinutes: options?.stepMinutes ?? PRESET_PROMO_STEP_MINUTES,
+    mode: "preset",
+    modeLabel: PRESET_PROMO_META.label,
+    source: PRESET_PROMO_META.source,
+    notes: [...PRESET_PROMO_NOTES],
+  });
 }
 
 export function saveNamedGroupPreset(input: {

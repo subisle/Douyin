@@ -12,7 +12,11 @@ import { FamilyTreePage } from "./family-tree-page";
 import { DataPage } from "./data-page";
 import { FlowingFlagCard } from "./flowing-flag-card";
 import { PkRosterPage } from "./pk-roster-page";
+import { PkGroupStagePage } from "./pk-group-stage-page";
 import { DouyinMonitorPage } from "./douyin-monitor-page";
+import { PkMonitorPage } from "./pk-monitor-page";
+import { MultiMonitorPage } from "./multi-monitor-page";
+import { MonitorPlaceholderPage } from "./monitor-placeholder-page";
 import { RewardPage } from "./reward-page";
 import { SettingsPage } from "./settings-page";
 import { PosterBoardPage } from "./poster-board-page";
@@ -46,6 +50,8 @@ export function DesktopShell() {
   const [showStartup, setShowStartup] = useState(true);
   const [unlocked, setUnlocked] = useState(false);
   const [monitorMounted, setMonitorMounted] = useState(false);
+  const [pkMonitorMounted, setPkMonitorMounted] = useState(false);
+  const [multiMonitorMounted, setMultiMonitorMounted] = useState(false);
   const [userRole, setUserRole] = useState<AppRole>("admin");
   const [droppedImportFile, setDroppedImportFile] = useState<DroppedImportFile | null>(null);
 
@@ -142,7 +148,9 @@ export function DesktopShell() {
   }, [currentPage]);
 
   useEffect(() => {
-    if (currentPage === "douyin-monitor") setMonitorMounted(true);
+    if (currentPage === "collect-monitor") setMonitorMounted(true);
+    if (currentPage === "pk-monitor") setPkMonitorMounted(true);
+    if (currentPage === "multi-monitor") setMultiMonitorMounted(true);
   }, [currentPage]);
 
   useEffect(() => {
@@ -250,10 +258,25 @@ export function DesktopShell() {
 
           <ScrollArea className="min-w-0 flex-1">
             <main className="mx-auto max-w-7xl p-3 sm:p-5 md:p-8">
-              {(monitorMounted || currentPage === "douyin-monitor") && (
-                <DouyinMonitorPage active={currentPage === "douyin-monitor"} />
+              {(pkMonitorMounted || currentPage === "pk-monitor") && (
+                <PkMonitorPage active={currentPage === "pk-monitor"} />
               )}
-              {currentPage === "douyin-monitor" ? null : currentPage === "datacenter" ? (
+              {(monitorMounted || currentPage === "collect-monitor") && (
+                <DouyinMonitorPage active={currentPage === "collect-monitor"} />
+              )}
+              {(multiMonitorMounted || currentPage === "multi-monitor") && (
+                <MultiMonitorPage active={currentPage === "multi-monitor"} />
+              )}
+              {currentPage === "pk-monitor" ||
+              currentPage === "collect-monitor" ||
+              currentPage === "multi-monitor"
+                ? null
+                : currentPage === "import-monitor" ? (
+                <MonitorPlaceholderPage
+                  title="外部导入监控"
+                  description="导入外部房间/名单，采集观众 ID 与礼物（与本房采集分流）。"
+                />
+              ) : currentPage === "datacenter" ? (
                 <DashboardPage />
               ) : currentPage === "anchors" ? (
                 <AnchorsPage />
@@ -268,6 +291,8 @@ export function DesktopShell() {
                 <FlowingFlagCard />
               ) : currentPage === "pk" ? (
                 <PkRosterPage />
+              ) : currentPage === "pk-group-stage" ? (
+                <PkGroupStagePage active />
               ) : currentPage === "reward" ? (
                 <RewardPage />
               ) : currentPage === "poster-board" ? (

@@ -253,42 +253,36 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
   ctx.font = "12px sans-serif";
   ctx.fillStyle = C.textMuted;
 
+  // 表头列名统一居中
   let colX = tableX;
   ctx.textAlign = "center";
   ctx.fillText("序号", colX + rankColW / 2, tableY + tableHeaderH / 2);
   colX += rankColW;
 
-  ctx.textAlign = "left";
-  ctx.fillText("主播", colX + 12, tableY + tableHeaderH / 2);
+  ctx.fillText("主播", colX + nameColW / 2, tableY + tableHeaderH / 2);
   colX += nameColW;
 
   if (showNotLiveDays) {
-    ctx.textAlign = "center";
     ctx.fillText(notLiveDaysLabel, colX + notLiveDaysColW / 2, tableY + tableHeaderH / 2);
     colX += notLiveDaysColW;
   }
   if (showDailyWave) {
-    ctx.textAlign = "center";
     ctx.fillText(dailyWaveLabel, colX + dailyWaveColW / 2, tableY + tableHeaderH / 2);
     colX += dailyWaveColW;
   }
   if (showTotalWave) {
-    ctx.textAlign = "right";
-    ctx.fillText("累计总音浪", colX + totalWaveColW - 12, tableY + tableHeaderH / 2);
+    ctx.fillText("累计总音浪", colX + totalWaveColW / 2, tableY + tableHeaderH / 2);
     colX += totalWaveColW;
   }
   if (showDuration) {
-    ctx.textAlign = "center";
     ctx.fillText("直播时长", colX + durationColW / 2, tableY + tableHeaderH / 2);
     colX += durationColW;
   }
   if (showMaster) {
-    ctx.textAlign = "left";
-    ctx.fillText("师傅", colX + 8, tableY + tableHeaderH / 2);
+    ctx.fillText("师傅", colX + masterColW / 2, tableY + tableHeaderH / 2);
     colX += masterColW;
   }
   if (showTier) {
-    ctx.textAlign = "center";
     ctx.fillText("等级", colX + tierColW / 2, tableY + tableHeaderH / 2);
     colX += tierColW;
   }
@@ -353,39 +347,38 @@ export async function exportDailyReportPoster(opts: ExportOptions): Promise<void
       colX += notLiveDaysColW;
     }
 
-    // 当日音浪
+    // 当日音浪：数字画在进度条内居中
     if (showDailyWave) {
+      const barX = colX + 8;
+      const barW = Math.max(40, dailyWaveColW - 16);
+      const barH = 20;
+      const barY = rowYCenter - barH / 2;
       if (r.isLive) {
-        ctx.textAlign = "left";
-        ctx.font = "13px sans-serif";
-        ctx.fillStyle = C.text;
         const waveText = formatWave(r.dailyWave);
-        ctx.fillText(waveText, colX + 12, rowYCenter);
-
-        // 进度条
-        const barX = colX + 12 + ctx.measureText(waveText).width + 10;
-        const barW = Math.min(dailyWaveColW - ctx.measureText(waveText).width - 36, 100);
-        if (barW > 20) {
-          const barH = 6;
-          const barY = rowYCenter - barH / 2;
-          drawRoundRect(ctx, barX, barY, barW, barH, 3);
-          ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+        const fillW = maxDailyWave > 0 ? (r.dailyWave / maxDailyWave) * barW : 0;
+        drawRoundRect(ctx, barX, barY, barW, barH, barH / 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+        ctx.fill();
+        if (fillW > 0) {
+          drawRoundRect(ctx, barX, barY, Math.max(fillW, barH), barH, barH / 2);
+          const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+          barGrad.addColorStop(0, C.cyan);
+          barGrad.addColorStop(1, C.blue);
+          ctx.fillStyle = barGrad;
           ctx.fill();
-          const fillW = maxDailyWave > 0 ? (r.dailyWave / maxDailyWave) * barW : 0;
-          if (fillW > 0) {
-            drawRoundRect(ctx, barX, barY, fillW, barH, 3);
-            const barGrad = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-            barGrad.addColorStop(0, C.cyan);
-            barGrad.addColorStop(1, C.blue);
-            ctx.fillStyle = barGrad;
-            ctx.fill();
-          }
         }
+        ctx.textAlign = "center";
+        ctx.font = "bold 12px monospace";
+        ctx.fillStyle = fillW / Math.max(barW, 1) > 0.52 ? "#FFFFFF" : C.text;
+        ctx.fillText(waveText, barX + barW / 2, rowYCenter);
       } else {
-        ctx.textAlign = "left";
+        drawRoundRect(ctx, barX, barY, barW, barH, barH / 2);
+        ctx.fillStyle = "rgba(244, 63, 94, 0.15)";
+        ctx.fill();
+        ctx.textAlign = "center";
         ctx.font = "bold 11px sans-serif";
         ctx.fillStyle = "#f43f5e";
-        ctx.fillText("未开播", colX + 12, rowYCenter);
+        ctx.fillText("未开播", barX + barW / 2, rowYCenter);
       }
       colX += dailyWaveColW;
     }

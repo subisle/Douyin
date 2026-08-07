@@ -12,14 +12,15 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { NAV_ITEMS, type PageId } from "./types";
+import { getNavLabel, isMonitorPage, type PageId } from "./types";
 
 interface TopbarProps {
   currentPage: PageId;
 }
 
 export function Topbar({ currentPage }: TopbarProps) {
-  const active = NAV_ITEMS.find((item) => item.id === currentPage);
+  const pageLabel = getNavLabel(currentPage);
+  const subtitle = isMonitorPage(currentPage) ? `监控 · ${pageLabel}` : pageLabel;
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function Topbar({ currentPage }: TopbarProps) {
               主播数据管理
             </h1>
             <p className="text-xs text-muted-foreground">
-              {active?.label ?? ""}
+              {subtitle}
             </p>
           </div>
         </div>
