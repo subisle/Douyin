@@ -34,11 +34,16 @@ import {
 } from "./draw-report-canvas";
 import { downloadCsv } from "./csv";
 import { downloadCanvasAsPng } from "./export-image";
-import type { TierRule, DailyReportData } from "@/types/electron";
+import type { TierRule, DailyReportData, MonthlyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
 
 type GenderView = "male" | "female";
-type ExportKind = "image" | "report" | "duration";
+type ExportKind = "image" | "report" | "duration" | "durationImage";
+type ReportViewMode = "daily" | "monthly";
+type ReportSortBy = "wave" | "duration";
+
+// 时长精简图固定四列：序号 / 姓名 / 未播天数 / 当月时长
+const DURATION_IMAGE_COLUMNS: ColumnKey[] = ["rank", "name", "notLiveDays", "duration"];
 
 const DEFAULT_REPORT_TITLE_MALE = "星嗨艺创主播数据统计";
 const DEFAULT_REPORT_TITLE_FEMALE = "薇笑传媒主播数据统计";
@@ -51,6 +56,8 @@ const REPORT_STYLES_STORAGE_KEY = "daily-report-canvas-styles";
 const REPORT_STYLES_STORAGE_VERSION_KEY = "daily-report-canvas-styles-version";
 const REPORT_STYLES_STORAGE_VERSION = "2";
 const REPORT_TITLES_STORAGE_KEY = "daily-report-custom-titles";
+const EXPORT_SPLIT_STORAGE_KEY = "daily-report-export-split";
+const REPORT_SORT_STORAGE_KEY = "daily-report-sort-by";
 const DEFAULT_REPORT_STYLES: Record<GenderView, ReportCanvasStyle> = {
   male: "apple",
   female: "classic",
@@ -166,6 +173,14 @@ export function DailyReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
+  // 月度报告：月份（默认最近有时长快照的月份）
+  const [viewMode, setViewMode] = useState<ReportViewMode>("daily");
+  const [month, setMonth] = useState("");
+  const [monthReady, setMonthReady] = useState(false);
+  const [monthlyReport, setMonthlyReport] = useState<MonthlyReportData | null>(null);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+  const [monthlyError, setMonthlyError] = useState<string | null>(null);
+
   // 等级设置
   const [tiers, setTiers] = useState<TierRule[]>([]);
   const [editingTiers, setEditingTiers] = useState<TierRule[] | null>(null);
@@ -187,12 +202,26 @@ export function DailyReportPage() {
   // 导出
   const [exporting, setExporting] = useState<ExportKind | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // 导出图片分割方式：true=拆成两张，false=一张完整长图
+  const [exportImageSplit, setExportImageSplit] = useState(true);
+  // 报告排序方式：wave=按音浪（默认），duration=按时长
+  const [sortBy, setSortBy] = useState<ReportSortBy>("wave");
+  // 导出设置弹窗（草稿值，点「保存」才生效）
+  const [showExportSettings, setShowExportSettings] = useState(false);
+  const [sortDraft, setSortDraft] = useState<ReportSortBy>("wave");
+  const [splitDraft, setSplitDraft] = useState(true);
 
   // 初始化读取 localStorage
   useEffect(() => {
     setVisibleColumns(loadVisibleColumns());
     setColumnWidths(loadColumnWidths());
     setReportStyles(loadReportStyles());
+    try {
+      setExportImageSplit(localStorage.getItem(EXPORT_SPLIT_STORAGE_KEY) !== "0");
+      setSortBy(localStorage.getItem(REPORT_SORT_STORAGE_KEY) === "duration" ? "duration" : "wave");
+    } catch {
+      // ignore
+    }
     const titles = loadReportTitles();
     setReportTitles(titles);
     setTitleDraft(titles.male);
@@ -231,6 +260,16 @@ export function DailyReportPage() {
 
   useEffect(() => {
     if (!hydrated) return;
+    try {
+      localStorage.setItem(EXPORT_SPLIT_STORAGE_KEY, exportImageSplit ? "1" : "0");
+      localStorage.setItem(REPORT_SORT_STORAGE_KEY, sortBy);
+    } catch {
+      // ignore
+    }
+  }, [exportImageSplit, hydrated, sortBy]);
+
+  useEffect(() => {
+    if (!hydrated) return;
     setTitleDraft(reportTitles[gender]);
   }, [gender, hydrated, reportTitles]);
 
@@ -265,37 +304,67 @@ export function DailyReportPage() {
     setColumnWidths({});
   };
 
+  const openExportSettings = () => {
+    setSortDraft(sortBy);
+    setSplitDraft(exportImageSplit);
+    setShowExportSettings(true);
+  };
+
+  const saveExportSettings = () => {
+    setSortBy(sortDraft);
+    setExportImageSplit(splitDraft);
+    setShowExportSettings(false);
+  };
+
   const rows = useMemo(() => report?.rows ?? [], [report?.rows]);
+  const monthlyRows = useMemo(() => monthlyReport?.rows ?? [], [monthlyReport?.rows]);
+  // 月度报告不展示「日音浪」列（当月数据无日维度）
+  const activeColumns = useMemo(
+    () => (viewMode === "monthly" ? visibleColumns.filter((k) => k !== "dailyWave") : visibleColumns),
+    [viewMode, visibleColumns]
+  );
+  const activeRows = viewMode === "monthly" ? monthlyRows : rows;
+  // 排序：音浪（默认，后端已按音浪降序）/ 时长（按当月时长降序重排）
+  const sortedRows = useMemo(() => {
+    if (sortBy === "wave") return activeRows;
+    return [...activeRows].sort((a, b) => b.totalDuration - a.totalDuration);
+  }, [activeRows, sortBy]);
+  const activeSummary = viewMode === "monthly" ? monthlyReport?.summary : report?.summary;
   const currentReportTitle = reportTitles[gender] || DEFAULT_REPORT_TITLE;
   const reportStyle = reportStyles[gender];
   const dailyWaveLabel = formatDailyWaveLabel(date);
+  const activeDateLabel = viewMode === "monthly" ? month : date;
+  const durationTitleMonth = Number(month.slice(5));
+  const durationReportTitle = `${gender === "male" ? "男" : "女"}主播${Number.isFinite(durationTitleMonth) ? durationTitleMonth : ""}月数据统计`;
 
-  const drawSelectedReport = useCallback(
+  // 时长精简图：序号 / 姓名 / 未播天数 / 当月时长
+  const drawDurationReport = useCallback(
     (
       canvas: HTMLCanvasElement,
       page?: {
-        rows: typeof rows;
+        rows: typeof activeRows;
         rankOffset?: number;
         pageIndex?: number;
         pageCount?: number;
       }
     ) => {
-      const pageRows = page?.rows ?? rows;
+      const pageRows = page?.rows ?? sortedRows;
       const options = {
-        date,
+        date: activeDateLabel,
         rows: pageRows,
         gender,
-        customTitle: currentReportTitle,
-        subtitle: `Data Report • ${date}`,
-        notLiveCount: report?.summary.notLiveCount ?? 0,
-        notLiveDays: report?.summary.notLiveDays ?? 0,
+        customTitle: durationReportTitle,
+        subtitle: `Monthly Duration • ${month}`,
+        hideDateInTitle: true,
+        notLiveCount: activeSummary?.notLiveCount ?? 0,
+        notLiveDays: activeSummary?.notLiveDays ?? 0,
         scale: 2,
-        visibleColumns,
-        columnWidths,
+        visibleColumns: DURATION_IMAGE_COLUMNS,
+        columnWidths: {},
         rankOffset: page?.rankOffset ?? 0,
         pageIndex: page?.pageIndex ?? 1,
         pageCount: page?.pageCount ?? 1,
-        statsRows: rows,
+        statsRows: sortedRows,
       };
       if (reportStyle === "apple") {
         drawAppleReportToCanvas(canvas, options);
@@ -304,15 +373,63 @@ export function DailyReportPage() {
       drawReportToCanvas(canvas, options);
     },
     [
+      activeDateLabel,
+      sortedRows,
+      activeSummary?.notLiveCount,
+      activeSummary?.notLiveDays,
+      durationReportTitle,
+      gender,
+      month,
+      reportStyle,
+    ]
+  );
+
+  const drawSelectedReport = useCallback(
+    (
+      canvas: HTMLCanvasElement,
+      page?: {
+        rows: typeof activeRows;
+        rankOffset?: number;
+        pageIndex?: number;
+        pageCount?: number;
+      }
+    ) => {
+      const pageRows = page?.rows ?? sortedRows;
+      const options = {
+        date: activeDateLabel,
+        rows: pageRows,
+        gender,
+        customTitle: currentReportTitle,
+        subtitle: viewMode === "monthly" ? `Monthly Report • ${month}` : `Data Report • ${date}`,
+        notLiveCount: activeSummary?.notLiveCount ?? 0,
+        notLiveDays: activeSummary?.notLiveDays ?? 0,
+        scale: 2,
+        visibleColumns: activeColumns,
+        columnWidths,
+        rankOffset: page?.rankOffset ?? 0,
+        pageIndex: page?.pageIndex ?? 1,
+        pageCount: page?.pageCount ?? 1,
+        statsRows: sortedRows,
+      };
+      if (reportStyle === "apple") {
+        drawAppleReportToCanvas(canvas, options);
+        return;
+      }
+      drawReportToCanvas(canvas, options);
+    },
+    [
+      activeColumns,
+      activeDateLabel,
+      sortedRows,
+      activeSummary?.notLiveCount,
+      activeSummary?.notLiveDays,
       columnWidths,
       currentReportTitle,
       date,
       gender,
-      report?.summary.notLiveCount,
-      report?.summary.notLiveDays,
+      month,
       reportStyle,
-      rows,
-      visibleColumns,
+      viewMode,
     ]
   );
 
@@ -352,6 +469,30 @@ export function DailyReportPage() {
     }
   }, []);
 
+  const fetchMonthlyReport = useCallback(async (m: string, g: string) => {
+    const api = getDataApi();
+    if (!api) {
+      setUnavailable(true);
+      return;
+    }
+    setMonthlyLoading(true);
+    setMonthlyError(null);
+    try {
+      const res = await api.getMonthlyReport(m, g);
+      if (res.success) {
+        setMonthlyReport(res.data);
+      } else {
+        setMonthlyError(res.error || "加载失败");
+        setMonthlyReport(null);
+      }
+    } catch (e) {
+      setMonthlyError(e instanceof Error ? e.message : String(e));
+      setMonthlyReport(null);
+    } finally {
+      setMonthlyLoading(false);
+    }
+  }, []);
+
   const fetchTiers = useCallback(async () => {
     const api = getDataApi();
     if (!api) return;
@@ -377,12 +518,24 @@ export function DailyReportPage() {
         const res = await api.getDashboardSummary();
         if (cancelled) return;
         const latest =
-          (res.success && (res.data.latestWaveDate || res.data.latestDataDate)) || null;
+          (res.success &&
+            (res.data.latestDurationDate ||
+              res.data.latestWaveDate ||
+              res.data.latestDataDate)) ||
+          null;
         setDate(latest || businessDateStr());
+        setMonth(latest ? latest.slice(0, 7) : businessDateStr().slice(0, 7));
       } catch {
-        if (!cancelled) setDate(businessDateStr());
+        if (!cancelled) {
+          const fallback = businessDateStr();
+          setDate(fallback);
+          setMonth(fallback.slice(0, 7));
+        }
       } finally {
-        if (!cancelled) setDateReady(true);
+        if (!cancelled) {
+          setDateReady(true);
+          setMonthReady(true);
+        }
       }
     })();
     return () => {
@@ -396,28 +549,38 @@ export function DailyReportPage() {
   }, [date, gender, dateReady, fetchReport]);
 
   useEffect(() => {
+    if (!monthReady || !month) return;
+    fetchMonthlyReport(month, gender);
+  }, [month, gender, monthReady, fetchMonthlyReport]);
+
+  useEffect(() => {
     fetchTiers();
   }, [fetchTiers]);
 
   // 绘制 Canvas 预览
   useEffect(() => {
-    if (!report || rows.length === 0 || !canvasRef.current) return;
+    if (!activeRows.length || !canvasRef.current) return;
     drawSelectedReport(canvasRef.current);
-  }, [drawSelectedReport, report, rows.length]);
+  }, [drawSelectedReport, activeRows.length]);
 
   const handleExportImage = async () => {
     const canvas = canvasRef.current;
-    if (!canvas || exporting || rows.length === 0) return;
+    if (!canvas || exporting || activeRows.length === 0) return;
     setExporting("image");
     try {
       const genderText = gender === "male" ? "男" : "女";
       const styleText = reportStyle === "apple" ? "样式二" : "样式一";
-      // 人数过多时自动拆成两张（预览仍是完整一页，仅导出分页）
-      const pages = splitDailyReportRowsForExport(rows);
+      // 分割：按开关「两张」强制拆成两张 /「一张」导出完整长图（预览始终完整一页）
+      const pages = splitDailyReportRowsForExport(sortedRows, {
+        threshold: exportImageSplit ? 1 : 1,
+        maxPages: exportImageSplit ? 2 : 1,
+      });
       for (const page of pages) {
         const pageTag =
           page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "";
-        const filename = `${date}_${genderText}_${styleText}_${rows.length}人${pageTag}.png`;
+        const filename = viewMode === "monthly"
+          ? `${month}_月度报告_${genderText}_${styleText}_${activeRows.length}人${pageTag}.png`
+          : `${date}_${genderText}_${styleText}_${activeRows.length}人${pageTag}.png`;
         await downloadCanvasAsPng(canvas, filename, () => {
           drawSelectedReport(canvas, page);
         });
@@ -436,38 +599,94 @@ export function DailyReportPage() {
     }
   };
 
+  // 时长精简图：序号 / 姓名 / 未播天数 / 当月时长，标题「x主播x月数据统计」
+  const handleExportDurationImage = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || exporting || activeRows.length === 0) return;
+    setExporting("durationImage");
+    try {
+      const genderText = gender === "male" ? "男" : "女";
+      const pages = splitDailyReportRowsForExport(sortedRows, {
+        threshold: exportImageSplit ? 1 : 1,
+        maxPages: exportImageSplit ? 2 : 1,
+      });
+      for (const page of pages) {
+        const pageTag =
+          page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "";
+        const filename = `${month}_${genderText}_时长统计图_${activeRows.length}人${pageTag}.png`;
+        await downloadCanvasAsPng(canvas, filename, () => {
+          drawDurationReport(canvas, page);
+        });
+        if (pages.length > 1) {
+          await new Promise((r) => window.setTimeout(r, 350));
+        }
+      }
+      // 导出后恢复主图预览
+      drawSelectedReport(canvas);
+    } catch (e) {
+      console.error("导出时长图片失败", e);
+      alert("导出失败: " + String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const handleExportCSV = async () => {
-    if (rows.length === 0 || exporting) return;
+    if (activeRows.length === 0 || exporting) return;
     setExporting("report");
     try {
-      const headers = [
-        "排名",
-        "上期排名",
-        "排名变化",
-        "主播ID",
-        "主播姓名",
-        formatMonthNotLiveDaysLabel(date),
-        dailyWaveLabel,
-        "累计总音浪",
-        "有效时长(分钟)",
-        "师傅",
-        "等级",
-        "日期",
-      ];
-      const csvRows = rows.map((r, i) => [
-        i + 1,
-        r.previousRank || "",
-        formatRankDelta(r.rankDelta),
-        r.anchorId,
-        r.name,
-        r.notLiveDays ?? 0,
-        r.isLive ? r.dailyWave : 0,
-        r.totalWave,
-        r.dailyDuration > 0 ? r.dailyDuration : 0,
-        r.masterName || "",
-        r.tier || "",
-        date,
-      ]);
+      const headers = viewMode === "monthly"
+        ? [
+            "排名",
+            "主播ID",
+            "主播姓名",
+            formatMonthNotLiveDaysLabel(month),
+            "当月总音浪",
+            "当月时长(分钟)",
+            "师傅",
+            "等级",
+            "月份",
+          ]
+        : [
+            "排名",
+            "上期排名",
+            "排名变化",
+            "主播ID",
+            "主播姓名",
+            formatMonthNotLiveDaysLabel(date),
+            dailyWaveLabel,
+            "累计总音浪",
+            "当月时长(分钟)",
+            "师傅",
+            "等级",
+            "日期",
+          ];
+      const csvRows = viewMode === "monthly"
+        ? sortedRows.map((r, i) => [
+            i + 1,
+            r.anchorId,
+            r.name,
+            r.notLiveDays ?? 0,
+            r.totalWave,
+            r.totalDuration > 0 ? r.totalDuration : 0,
+            r.masterName || "",
+            r.tier || "",
+            month,
+          ])
+        : sortedRows.map((r, i) => [
+            i + 1,
+            r.previousRank || "",
+            formatRankDelta(r.rankDelta),
+            r.anchorId,
+            r.name,
+            r.notLiveDays ?? 0,
+            r.isLive ? r.dailyWave : 0,
+            r.totalWave,
+            r.totalDuration > 0 ? r.totalDuration : 0,
+            r.masterName || "",
+            r.tier || "",
+            date,
+          ]);
       const csv = [headers, ...csvRows]
         .map((r) => r.map(escapeCsvCell).join(","))
         .join("\n");
@@ -477,7 +696,8 @@ export function DailyReportPage() {
       const a = document.createElement("a");
       a.href = url;
       const genderText = gender === "male" ? "男" : "女";
-      a.download = `${date}_${genderText}_音浪数据_${rows.length}人.csv`;
+      const prefix = viewMode === "monthly" ? `${month}_月度` : `${date}_`;
+      a.download = `${prefix}${genderText}_音浪数据_${activeRows.length}人.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -489,19 +709,18 @@ export function DailyReportPage() {
   };
 
   const handleExportDurationCSV = () => {
-    if (rows.length === 0 || exporting) return;
+    if (activeRows.length === 0 || exporting) return;
     setExporting("duration");
     try {
-      const data = rows.map((row, index) => ({
+      const data = sortedRows.map((row, index) => ({
         排名: index + 1,
-        主播ID: row.anchorId,
-        主播姓名: row.name,
-        日期: date,
-        "当日有效时长(分钟)": row.dailyDuration > 0 ? row.dailyDuration : 0,
-        "累计时长(分钟)": row.totalDuration > 0 ? row.totalDuration : 0,
+         主播ID: row.anchorId,
+         主播姓名: row.name,
+         日期: activeDateLabel,
+        "当月时长(分钟)": row.totalDuration > 0 ? row.totalDuration : 0,
       }));
       const genderText = gender === "male" ? "男" : "女";
-      downloadCsv(data, `${date}_${genderText}_时长数据_${rows.length}人.csv`);
+      downloadCsv(data, `${activeDateLabel}_${genderText}_时长数据_${activeRows.length}人.csv`);
     } catch (e) {
       console.error("导出时长CSV失败", e);
       alert("导出失败: " + String(e));
@@ -530,6 +749,7 @@ export function DailyReportPage() {
         setEditingTiers(null);
         // 刷新报告以更新等级
         fetchReport(date, gender);
+        fetchMonthlyReport(month, gender);
       }
     } catch (e) {
       console.error("保存等级失败", e);
@@ -557,33 +777,61 @@ export function DailyReportPage() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <FileText className="size-5 text-primary" />
-              <CardTitle className="text-base">每日报告</CardTitle>
-              {report && (
+              <CardTitle className="text-base">
+                {viewMode === "monthly" ? "月度报告" : "每日报告"}
+              </CardTitle>
+              <div className="flex rounded-md border">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("daily")}
+                  className={cn(
+                    "px-2 py-1 text-xs",
+                    viewMode === "daily"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  每日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("monthly")}
+                  className={cn(
+                    "px-2 py-1 text-xs",
+                    viewMode === "monthly"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  月度
+                </button>
+              </div>
+              {activeSummary && (
                 <>
                   <Badge variant="secondary">
-                    {gender === "male" ? "男团" : "女队"} {report.summary.total} 人
+                    {gender === "male" ? "男团" : "女队"} {activeSummary.total} 人
                   </Badge>
                   <Badge
                     variant="outline"
                     className={cn(
-                      report.summary.notLiveCount > 0
+                      activeSummary.notLiveCount > 0
                         ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
                         : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300"
                     )}
                   >
-                    未开播人数 {report.summary.notLiveCount} 人
+                    未开播人数 {activeSummary.notLiveCount} 人
                   </Badge>
                   <Badge
                     variant="outline"
                     className={cn(
-                      report.summary.notLiveDays > 0
+                      activeSummary.notLiveDays > 0
                         ? "border-red-300 bg-red-50 text-red-700 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300"
                         : "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/70 dark:bg-emerald-950/30 dark:text-emerald-300"
                     )}
                   >
-                    未开播天数 {report.summary.notLiveDays} 天
+                    未开播天数 {activeSummary.notLiveDays} 天
                   </Badge>
-                  {report.summary.previousDate && (
+                  {viewMode === "daily" && report?.summary.previousDate && (
                     <Badge variant="outline">
                       对比 {report.summary.previousDate}
                     </Badge>
@@ -636,22 +884,42 @@ export function DailyReportPage() {
                   </button>
                 ))}
               </div>
-              {/* 日期选择 */}
+              {/* 日期/月份选择 */}
               <div className="flex h-10 items-center gap-2 rounded-xl border border-border bg-card/90 px-3 shadow-xs">
                 <CalendarDays className="size-4 text-muted-foreground" />
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-semibold text-muted-foreground">日期</span>
-                  <Input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
-                  />
-                </div>
+                {viewMode === "monthly" ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-muted-foreground">月份</span>
+                    <Input
+                      type="month"
+                      value={month}
+                      onChange={(e) => setMonth(e.target.value)}
+                      className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-muted-foreground">日期</span>
+                    <Input
+                      type="date"
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                    />
+                  </div>
+                )}
                 <span className="h-4 w-px bg-border" />
                 <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                  报告 {date}
+                  报告 {viewMode === "monthly" ? month : date}
                 </span>
+                {/* 导出设置：排序方式 / 图片分割 */}
+                <button
+                  onClick={openExportSettings}
+                  className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent"
+                >
+                  <Settings className="size-4" />
+                  导出设置
+                </button>
               </div>
               {/* 标题设置 */}
               <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1">
@@ -676,16 +944,27 @@ export function DailyReportPage() {
               {/* 导出图片 */}
               <button
                 onClick={handleExportImage}
-                disabled={exporting !== null || !report || rows.length === 0}
+                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <Download className="size-4" />
                 {exporting === "image" ? "导出中…" : "导出图片"}
               </button>
+              {/* 导出时长精简图（仅月度模式） */}
+              {viewMode === "monthly" && (
+                <button
+                  onClick={handleExportDurationImage}
+                  disabled={exporting !== null || !activeSummary || activeRows.length === 0}
+                  className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+                >
+                  <Clock className="size-4" />
+                  {exporting === "durationImage" ? "导出中…" : "导出时长图"}
+                </button>
+              )}
               {/* 导出 CSV */}
               <button
                 onClick={handleExportCSV}
-                disabled={exporting !== null || !report || rows.length === 0}
+                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <FileSpreadsheet className="size-4" />
@@ -694,7 +973,7 @@ export function DailyReportPage() {
               {/* 单独导出时长 CSV */}
               <button
                 onClick={handleExportDurationCSV}
-                disabled={exporting !== null || !report || rows.length === 0}
+                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
                 className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
               >
                 <Clock className="size-4" />
@@ -724,6 +1003,98 @@ export function DailyReportPage() {
             </div>
           </div>
         </CardHeader>
+
+        {/* 导出设置弹窗 */}
+        {showExportSettings && (
+          <div
+            className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => setShowExportSettings(false)}
+          >
+            <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+              <Card className="border border-border shadow-2xl">
+                <CardHeader className="pb-4">
+                  <CardTitle className="text-base">导出设置</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">报告排序方式</p>
+                    <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card p-0.5">
+                      <button
+                        onClick={() => setSortDraft("wave")}
+                        className={cn(
+                          "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
+                          sortDraft === "wave"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        按音浪
+                      </button>
+                      <button
+                        onClick={() => setSortDraft("duration")}
+                        className={cn(
+                          "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
+                          sortDraft === "duration"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        按时长
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      影响表格预览与全部导出（图片 / 时长图 / CSV）
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">导出图片分割</p>
+                    <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card p-0.5">
+                      <button
+                        onClick={() => setSplitDraft(true)}
+                        className={cn(
+                          "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
+                          splitDraft
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        两张
+                      </button>
+                      <button
+                        onClick={() => setSplitDraft(false)}
+                        className={cn(
+                          "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
+                          !splitDraft
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        一张
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      两张：人数不少于 2 时拆成上下两张；一张：导出完整长图
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      onClick={() => setShowExportSettings(false)}
+                      className="rounded-lg border border-border px-4 py-1.5 text-sm font-medium transition hover:bg-accent"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={saveExportSettings}
+                      className="rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+                    >
+                      保存
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
 
         {/* 字段设置面板 */}
         {showColumnSettings && (
@@ -771,7 +1142,8 @@ export function DailyReportPage() {
                         type="checkbox"
                         checked={checked}
                         onChange={() => toggleColumn(col.key)}
-                        className="size-4 cursor-pointer accent-primary"
+                        disabled={viewMode === "monthly" && col.key === "dailyWave"}
+                        className="size-4 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-40"
                       />
                       <span className="truncate font-medium">
                         {col.key === "dailyWave" ? dailyWaveLabel : col.label}
@@ -794,6 +1166,7 @@ export function DailyReportPage() {
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
               至少保留 1 个字段。列宽留空为自动，单位 px。
+              {viewMode === "monthly" && " 月度报告不展示「日音浪」列。"}
             </p>
           </div>
         )}
@@ -867,7 +1240,22 @@ export function DailyReportPage() {
         )}
 
         <CardContent>
-          {loading ? (
+          {viewMode === "monthly" ? (
+            monthlyLoading ? (
+              <LoadingState label="加载月度报告…" />
+            ) : monthlyError ? (
+              <ErrorState message={monthlyError} onRetry={() => fetchMonthlyReport(month, gender)} />
+            ) : !monthlyReport || monthlyRows.length === 0 ? (
+              <EmptyState label={`该月份无${gender === "male" ? "男" : "女"}队数据`} />
+            ) : (
+              <div className="flex justify-center">
+                <canvas
+                  ref={canvasRef}
+                  style={{ maxWidth: "100%", height: "auto", border: "1px solid var(--border)", borderRadius: "4px" }}
+                />
+              </div>
+            )
+          ) : loading ? (
             <LoadingState label="加载每日报告…" />
           ) : error ? (
             <ErrorState message={error} onRetry={() => fetchReport(date, gender)} />

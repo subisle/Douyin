@@ -13,13 +13,6 @@ const {
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
 const { toDailyReportImagePages } = require("./weixin-bot-report");
-const {
-  parsePresetGroupRankCommand,
-  buildPresetGroupRank,
-  formatPresetGroupRankText,
-  formatAllPresetGroupRanksText,
-  PRESET_GROUP_COUNT,
-} = require("../shared/pk-preset-group-rank");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -154,45 +147,6 @@ function parseBotCommand(input) {
   if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
   if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
 
-  // PK 分组：内置 / 顺序 / 均衡 / 能出分（可选 2026-07 / 7月）
-  const pkGroupMatch = withoutGender.match(
-    /^(?:\/?(?:内置分组|锁定分组|固定分组|顺序分组|从高到低分组|高低分组|强弱分组|均衡分组|平均分组|蛇形分组|能出分分组|出分分组|PK分组|争霸赛分组|自动分组|分组))(?:\s*(.+))?$/i
-  );
-  if (
-    pkGroupMatch ||
-    /^(?:内置|锁定|固定|顺序|从高到低|高低|强弱|均衡|平均|蛇形|能出分|出分)\s*分组/.test(withoutGender)
-  ) {
-    const raw = withoutGender;
-    // 默认内置锁定分组
-    let mode = "preset";
-    if (/顺序|从高到低|高低|强弱|高到低/.test(raw)) mode = "high_to_low";
-    if (/均衡|平均|蛇形/.test(raw)) mode = "balanced";
-    if (/能出分|出分/.test(raw)) mode = "score_capable";
-    if (/内置|锁定|固定/.test(raw)) mode = "preset";
-    const rest = (pkGroupMatch && pkGroupMatch[1]) || "";
-    const periodMatch =
-      rest.match(/(20\d{2})[年./-](\d{1,2})(?:月)?/) ||
-      raw.match(/(20\d{2})[年./-](\d{1,2})(?:月)?/) ||
-      rest.match(/(\d{1,2})\s*月/) ||
-      raw.match(/(\d{1,2})\s*月/);
-    let period = null;
-    if (periodMatch) {
-      if (periodMatch[2]) {
-        period = `${periodMatch[1]}-${String(Number(periodMatch[2])).padStart(2, "0")}`;
-      } else {
-        const now = new Date();
-        period = `${now.getFullYear()}-${String(Number(periodMatch[1])).padStart(2, "0")}`;
-      }
-    }
-    return {
-      type: "pk-groups",
-      mode,
-      period,
-      sendCsv: /csv|CSV|表格|文件/.test(original),
-      sendImage: !/(?:不要图|无图|不出图|不要图片)/.test(original),
-    };
-  }
-
   const reportMatch = withoutGender.match(/^(?:\/?(?:每日报告|日报|报告))(?:\s*(.+))?$/i);
   if (reportMatch) {
     return {
@@ -248,16 +202,12 @@ function parseBotCommand(input) {
     };
   }
 
-  // 内置组总分排名：5组 / 第5组总分 / 各组
-  const groupRank = parsePresetGroupRankCommand(withoutGender);
-  if (groupRank) return groupRank;
-
   // 直接输入主播名/抖音号/主播 ID：返回库内全部相关数据
   if (
     withoutGender.length >= 1
     && withoutGender.length <= 40
     && !/[，。！？、；：,.!?;:]/.test(withoutGender)
-    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能|第?[1-7一二三四五六七]组|组[1-7一二三四五六七]|各组)/.test(withoutGender)
+    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能|第?[1-9一二三四五六七八九十]组|组[1-9一二三四五六七八九十]|各组)/.test(withoutGender)
   ) {
     return { type: "anchor-profile", query: withoutGender };
   }
@@ -707,130 +657,6 @@ async function handleExportWaveFile(args, command, db) {
   await args.replyFile({ buffer, fileName: `${date}_音浪数据.csv` });
 }
 
-async function loadWaveSourceForPresetRank(db) {
-  const summary = typeof db.getDashboardSummary === "function" ? await db.getDashboardSummary() : {};
-  const asOfDate = String(summary?.latestWaveDate || summary?.latestDataDate || "").trim() || null;
-  // 优先 PK 花名册（月总分 wave）；失败则回落双团日报 totalWave
-  if (typeof db.getPkRoster === "function") {
-    try {
-      const period = asOfDate && /^\d{4}-\d{2}/.test(asOfDate)
-        ? asOfDate.slice(0, 7)
-        : (() => {
-            const now = new Date();
-            return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-          })();
-      const roster = await db.getPkRoster(period, 8);
-      const list = [...(roster?.males || []), ...(roster?.females || [])];
-      if (list.length) {
-        return {
-          asOfDate: asOfDate || (list.find((r) => r.latestWaveDate)?.latestWaveDate || null),
-          waveSource: list,
-          source: "pk-roster",
-          period,
-        };
-      }
-    } catch {
-      // fall through
-    }
-  }
-  if (typeof db.getDailyWaveReport === "function" && asOfDate) {
-    const rows = [];
-    for (const gender of ["male", "female"]) {
-      try {
-        const report = await db.getDailyWaveReport(asOfDate, gender);
-        for (const row of report?.rows || []) rows.push(row);
-      } catch {
-        // ignore single gender failure
-      }
-    }
-    if (rows.length) {
-      return {
-        asOfDate,
-        waveSource: rows.map((r) => ({
-          name: r.name,
-          wave: Number(r.totalWave) || 0,
-          totalWave: Number(r.totalWave) || 0,
-        })),
-        source: "daily-report",
-        period: asOfDate.slice(0, 7),
-      };
-    }
-  }
-  return { asOfDate, waveSource: [], source: "empty", period: null };
-}
-
-async function handlePresetGroupRank(args, command, db) {
-  const loaded = await loadWaveSourceForPresetRank(db);
-  if (!loaded.waveSource?.length) {
-    await args.replyText("暂时没有可用的音浪总分数据，请先导入本月音浪。");
-    return;
-  }
-  if (command.all) {
-    const text = formatAllPresetGroupRanksText(loaded.waveSource, { asOfDate: loaded.asOfDate || undefined });
-    // 微信单条过长时拆开按组发送
-    const blocks = text.split(/\n\n+/).filter(Boolean);
-    if (blocks.length <= 1) {
-      await args.replyText(text);
-      return;
-    }
-    for (const block of blocks) {
-      await args.replyText(block);
-    }
-    return;
-  }
-  const groupNo = Number(command.groupNo);
-  if (!Number.isInteger(groupNo) || groupNo < 1 || groupNo > PRESET_GROUP_COUNT) {
-    await args.replyText(`组号须为 1–${PRESET_GROUP_COUNT}，例如「5组」或「第5组总分」。`);
-    return;
-  }
-  const rank = buildPresetGroupRank(groupNo, loaded.waveSource);
-  await args.replyText(formatPresetGroupRankText(rank, { asOfDate: loaded.asOfDate || undefined }));
-}
-
-async function handlePkGroups(args, command, db) {
-  const { createWeixinBotSkills } = require("./weixin-bot-skills");
-  const skills = createWeixinBotSkills({
-    db,
-    renderReportPng: async () => Buffer.alloc(0),
-  });
-  const result = await skills.execute("make_pk_groups", {
-    mode: command.mode || "preset",
-    period: command.period || undefined,
-    sendCsv: Boolean(command.sendCsv),
-    // 默认出图；显式 noimage/无图 可关
-    sendImage: command.sendImage !== false,
-    usePresetRoster: true,
-  });
-  if (!result?.ok) {
-    await args.replyText(result?.error || "分组失败");
-    return;
-  }
-  const text = String(result.replyText || result.text || "").slice(0, 3500);
-  if (text) await args.replyText(text);
-
-  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
-  for (const artifact of artifacts) {
-    if (artifact?.kind === "image" && artifact.buffer && typeof args.replyImage === "function") {
-      await args.replyImage({
-        buffer: artifact.buffer,
-        fileName: artifact.fileName || result.imageFileName || "PK分组.png",
-      });
-    } else if (artifact?.kind === "file" && artifact.buffer && typeof args.replyFile === "function") {
-      await args.replyFile({
-        buffer: artifact.buffer,
-        fileName: artifact.fileName || result.csvFileName || "PK分组.csv",
-      });
-    }
-  }
-  // 兼容旧字段：仅有 csv 无 artifacts
-  if (!artifacts.length && result.csv && typeof args.replyFile === "function") {
-    await args.replyFile({
-      buffer: Buffer.from(String(result.csv), "utf8"),
-      fileName: result.csvFileName || `PK分组_${result.modeLabel || "分组"}.csv`,
-    });
-  }
-}
-
 function pendingImportKey(args = {}) {
   const accountId = String(args.accountId || "").trim() || "unknown";
   const groupId = String(args.groupId || "").trim();
@@ -999,8 +825,6 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ana
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
-  else if (command.type === "preset-group-rank") await handlePresetGroupRank(args, command, db);
-  else if (command.type === "pk-groups") await handlePkGroups(args, command, db);
   else return false;
   return true;
 }
@@ -1145,12 +969,6 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
 
       // AI 模式：短指令可走确定性路径；其余交 Agent
       if (agentMode) {
-        // 「3组 / 第3组总分 / 各组」等高置信指令不依赖模型，避免 AI 慢/挂时无输出
-        const agentFast = parseBotCommand(args.text);
-        if (agentFast?.type === "preset-group-rank") {
-          const ok = await dispatchBusinessCommand(args, agentFast, deps);
-          return { handled: ok, via: "fast-route" };
-        }
         if (aiReady) {
           return { handled: false, via: "ai" };
         }

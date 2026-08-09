@@ -174,7 +174,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
       { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 28,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
       { key: "dailyWave", label: dailyWaveLabel,   minWidth: 168, flex: 0.7, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
       { key: "totalWave", label: "累计总音浪",     minWidth: 120, flex: 0.4, align: "right",  getText: (r) => formatWave(r.totalWave) },
-      { key: "duration",  label: "有效时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
+      { key: "duration",  label: "当月时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => formatDailyDurationText(r.totalDuration) },
       { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "—" },
       { key: "tier",      label: "等级",           minWidth: 64,  flex: 0.15, align: "center", getText: (r) => r.tier || "" },
     ];
@@ -185,7 +185,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
     { key: "notLiveDays", label: notLiveDaysLabel, minWidth: 30,  flex: 0, align: "center", getText: (r) => String(r.notLiveDays ?? 0) },
     { key: "dailyWave", label: dailyWaveLabel,   minWidth: 160, flex: 0.55, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
     { key: "totalWave", label: "累计总音浪",     minWidth: 130, flex: 1.2, align: "right",  getText: (r) => formatWave(r.totalWave) },
-    { key: "duration",  label: "有效时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => formatDailyDurationText(r.dailyDuration) },
+    { key: "duration",  label: "当月时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => formatDailyDurationText(r.totalDuration) },
     { key: "master",    label: "师傅",           minWidth: 96,  flex: 1.2, align: "left",   getText: (r) => r.masterName || "—" },
     { key: "tier",      label: "等级",           minWidth: 72,  flex: 0.35, align: "center", getText: (r) => r.tier || "" },
   ];
@@ -309,6 +309,8 @@ export interface DrawReportOptions {
   statsRows?: DailyReportRow[];
   /** 是否绘制未开播页脚；默认仅末页或未分页时绘制 */
   showInactiveFooter?: boolean;
+  /** 标题后不追加日期（用于月度等整月口径的标题） */
+  hideDateInTitle?: boolean;
 }
 
 /** 超过该人数时，导出自动拆成上下两张，避免单图过高 */
@@ -371,6 +373,7 @@ export function drawReportToCanvas(
     pageIndex = 1,
     pageCount = 1,
     statsRows,
+    hideDateInTitle = false,
   } = opts;
 
   const parts = date.split("-");
@@ -382,7 +385,9 @@ export function drawReportToCanvas(
   const genderText = gender === "male" ? "男" : "女";
   const titleBase = customTitle.trim() || "星嗨艺创主播数据统计";
   const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
-  const titleText = `${titleBase} ${formattedDate}${pageSuffix ? ` ${pageSuffix}` : ""}`;
+  const titleText = hideDateInTitle
+    ? `${titleBase}${pageSuffix ? ` ${pageSuffix}` : ""}`
+    : `${titleBase} ${formattedDate}${pageSuffix ? ` ${pageSuffix}` : ""}`;
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const tablePaddingX = 20 * scale;
@@ -453,6 +458,9 @@ export function drawReportToCanvas(
     ? Math.max(...liveRows.map((r) => r.dailyWave))
     : 1;
   const safeMaxWave = maxWave > 0 ? maxWave : 1;
+  // 时长进度条基准：全量行中当月时长最大值（分页时两页比例一致）
+  const maxDuration = allRows.reduce((m, r) => Math.max(m, Number(r.totalDuration) || 0), 0);
+  const safeMaxDuration = maxDuration > 0 ? maxDuration : 1;
 
   rows.forEach((row, index) => {
     const rank = rankOffset + index + 1;
@@ -570,12 +578,41 @@ export function drawReportToCanvas(
           ctx.fillText(row.tier, drawX + col.width / 2, cy + 1 * scale);
         }
       } else if (col.key === "duration") {
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const durationText = formatDailyDurationText(row.dailyDuration);
-        ctx.fillStyle = isInactive ? "#B91C1C" : "#7C3AED";
-        ctx.font = `${13 * scale}px sans-serif`;
-        ctx.fillText(durationText, drawX + col.width / 2, cy);
+        const padX = 8 * scale;
+        const barH = 22 * scale;
+        const barLeft = drawX + padX;
+        const barTrackW = Math.max(48 * scale, col.width - padX * 2);
+        const barTop = cy - barH / 2;
+        const dur = Number(row.totalDuration) || 0;
+        if (dur <= 0) {
+          ctx.fillStyle = "#F1F5F9";
+          ctx.beginPath();
+          drawRoundRect(ctx, barLeft, barTop, barTrackW, barH, barH / 2);
+          ctx.fill();
+          ctx.fillStyle = "#94A3B8";
+          ctx.font = `bold ${13 * scale}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("—", barLeft + barTrackW / 2, cy);
+        } else {
+          const durText = formatDailyDurationText(dur);
+          const fillW = Math.max(0, Math.min(barTrackW, (barTrackW * dur) / safeMaxDuration));
+          ctx.fillStyle = "#EDE9FE";
+          ctx.beginPath();
+          drawRoundRect(ctx, barLeft, barTop, barTrackW, barH, barH / 2);
+          ctx.fill();
+          if (fillW > 0) {
+            ctx.fillStyle = "#A78BFA";
+            ctx.beginPath();
+            drawRoundRect(ctx, barLeft, barTop, Math.max(fillW, barH), barH, barH / 2);
+            ctx.fill();
+          }
+          ctx.font = `bold ${13 * scale}px monospace`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = fillW / Math.max(barTrackW, 1) > 0.52 ? "#FFFFFF" : "#5B21B6";
+          ctx.fillText(truncateCanvasText(ctx, durText, barTrackW - 12 * scale), barLeft + barTrackW / 2, cy);
+        }
       } else if (col.key === "notLiveDays") {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -697,17 +734,19 @@ function drawAppleInlineWaveBar(
   text: string,
   scale: number,
   font: string,
-  color: string
+  color: string,
+  trackColor = "#EAF3FF",
+  trackBorder = "#D6E8FF"
 ) {
   const radius = h / 2;
   const fillW = Math.max(0, Math.min(w, w * ratio));
 
-  ctx.fillStyle = "#EAF3FF";
+  ctx.fillStyle = trackColor;
   ctx.beginPath();
   drawRoundRect(ctx, x, y, w, h, radius);
   ctx.fill();
 
-  ctx.strokeStyle = "#D6E8FF";
+  ctx.strokeStyle = trackBorder;
   ctx.lineWidth = 1 * scale;
   ctx.beginPath();
   drawRoundRect(ctx, x, y, w, h, radius);
@@ -764,6 +803,8 @@ export function drawAppleReportToCanvas(
   const showInactiveFooter =
     opts.showInactiveFooter ?? (pageCount <= 1 || pageIndex >= pageCount);
   const maxWave = liveRows.length > 0 ? Math.max(...liveRows.map((r) => r.dailyWave)) : 1;
+  // 时长进度条基准：全量行中当月时长最大值（分页时两页比例一致）
+  const maxDuration = allRows.reduce((m, r) => Math.max(m, Number(r.totalDuration) || 0), 0);
 
   const pagePad = 0;
   const cardPad = 0;
@@ -826,6 +867,7 @@ export function drawAppleReportToCanvas(
 
   let y = cardY + cardPad;
   const blue = "#007AFF";
+  const purple = "#8B5CF6";
   const centerX = cardX + cardW / 2;
   ctx.fillStyle = "#101828";
   ctx.font = `700 ${25 * scale}px ${font}`;
@@ -975,11 +1017,42 @@ export function drawAppleReportToCanvas(
           `700 ${11 * scale}px ${font}`
         );
       } else if (col.key === "duration") {
-        ctx.fillStyle = isInactive ? "#B42318" : "#344054";
-        ctx.font = `600 ${13 * scale}px ${font}`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(row.dailyDuration > 0 ? formatDurationText(row.dailyDuration) : "-", drawX + col.width / 2, cy);
+        const padX = 8 * scale;
+        const barX = drawX + padX;
+        const barW = Math.max(48 * scale, col.width - padX * 2);
+        const barH = denseColumns ? 20 * scale : 22 * scale;
+        const dur = Number(row.totalDuration) || 0;
+        if (dur <= 0) {
+          drawAppleInlineWaveBar(
+            ctx,
+            barX,
+            cy - barH / 2,
+            barW,
+            barH,
+            0,
+            "-",
+            scale,
+            mono,
+            purple,
+            "#F1F1F3",
+            "#E4E4E7"
+          );
+        } else {
+          drawAppleInlineWaveBar(
+            ctx,
+            barX,
+            cy - barH / 2,
+            barW,
+            barH,
+            dur / Math.max(maxDuration, 1),
+            formatDurationText(dur),
+            scale,
+            mono,
+            purple,
+            "#F3F0FF",
+            "#E5E0FF"
+          );
+        }
       } else if (col.key === "notLiveDays") {
         ctx.fillStyle = (row.notLiveDays ?? 0) > 0 ? "#B42318" : "#027A48";
         ctx.font = `700 ${13 * scale}px ${font}`;

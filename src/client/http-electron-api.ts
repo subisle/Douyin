@@ -376,6 +376,7 @@ export function createHttpElectronApi(): ElectronAPI {
     getTierRules: () => request("/reports/tier-rules"),
     saveTierRules: (rules) => request("/reports/tier-rules", { method: "PUT", body: { rules } }),
     getDailyWaveReport: (date, gender) => request(`/reports/daily-wave${qs({ date, gender })}`),
+    getMonthlyReport: (month, gender) => request(`/reports/monthly${qs({ month, gender })}`),
     getPkRoster: (period, groupSize) => request(`/pk/roster${qs({ period, groupSize })}`),
     buildPkGroups: (payload) => request("/pk/groups", { method: "POST", body: payload }),
     getStarBattleScores: (period) => request(`/star-battle/scores${qs({ period })}`),

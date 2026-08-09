@@ -94,6 +94,9 @@ export async function GET(request: Request, context: RouteContext) {
     if (one === "reports" && two === "daily-wave") {
       return apiOk(await call("getDailyWaveReport", str(sp.get("date")), str(sp.get("gender"), "all")));
     }
+    if (one === "reports" && two === "monthly") {
+      return apiOk(await call("getMonthlyReport", str(sp.get("month")), str(sp.get("gender"), "all")));
+    }
     if (one === "reports" && two === "tier-rules") return apiOk(await call("getTierRules"));
 
     if (one === "flags" && two === "groups") return apiOk(await call("getFlagGroups", str(sp.get("period"))));

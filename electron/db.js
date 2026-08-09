@@ -89,11 +89,44 @@ async function recordImport(db, kind, importDate, meta) {
   );
 }
 
+/**
+ * 时长导入统一按「月」覆盖：'YYYY-MM'（或 'YYYY-MM-DD'）都归一到该月最后一天，
+ * 同一月份的导入落在同一 import_date 快照点，UPSERT 即覆盖整月时长。
+ */
+function monthStart(monthEnd) {
+  return `${String(monthEnd).slice(0, 7)}-01`;
+}
+
+function normalizeDurationImportDate(value) {
+  const text = String(value || "").trim();
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(text);
+  if (monthMatch) {
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (month < 1 || month > 12) throw new Error(`无效的时长导入月份: ${text}`);
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return `${monthMatch[1]}-${monthMatch[2]}-${String(lastDay).padStart(2, "0")}`;
+  }
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (dayMatch) {
+    const month = Number(dayMatch[2]);
+    const day = Number(dayMatch[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+      throw new Error(`无效的时长导入日期: ${text}`);
+    }
+    return normalizeDurationImportDate(`${dayMatch[1]}-${dayMatch[2]}`);
+  }
+  throw new Error(`无效的时长导入日期(应为 YYYY-MM 月份): ${text}`);
+}
+
 async function importSnapshotRows(db, kind, importDate, rows, meta) {
   if (!Array.isArray(rows) || rows.length === 0) return { inserted: 0 };
 
   let values;
   let upsertSql;
+  // duration 月覆盖：事务内先删除该月范围内这批主播的旧时长快照，
+  // 再写入本月的月末快照，保证「选 7 月导入 = 7 月时长整体覆盖」。
+  let monthClear = null;
   if (kind === "wave") {
     values = rows
       .map((row) => {
@@ -112,6 +145,8 @@ async function importSnapshotRows(db, kind, importDate, rows, meta) {
      VALUES ?
      ON DUPLICATE KEY UPDATE wave_value = VALUES(wave_value), \`rank\` = VALUES(\`rank\`)`;
   } else if (kind === "duration") {
+    importDate = normalizeDurationImportDate(importDate);
+    const monthStartDate = monthStart(importDate);
     values = rows
       .map((row) => {
         const anchorId = String(row.anchorId ?? "").trim();
@@ -120,6 +155,14 @@ async function importSnapshotRows(db, kind, importDate, rows, meta) {
         return [anchorId, importDate, Math.round(totalMinutes) || 0];
       })
       .filter(Boolean);
+    const monthAnchorIds = Array.from(new Set(values.map((v) => v[0])));
+    if (monthAnchorIds.length > 0) {
+      monthClear = {
+        sql: `DELETE FROM duration_snapshots
+               WHERE import_date BETWEEN ? AND ? AND anchor_id IN (${monthAnchorIds.map(() => "?").join(",")})`,
+        params: [monthStartDate, importDate, ...monthAnchorIds],
+      };
+    }
     upsertSql = `INSERT INTO duration_snapshots (anchor_id, import_date, total_minutes)
      VALUES ?
      ON DUPLICATE KEY UPDATE total_minutes = VALUES(total_minutes)`;
@@ -139,6 +182,7 @@ async function importSnapshotRows(db, kind, importDate, rows, meta) {
     await conn.beginTransaction();
     transactionStarted = true;
     await assertImportNotRecorded(conn, kind, importDate, importMeta);
+    if (monthClear) await conn.query(monthClear.sql, monthClear.params);
     const [result] = await conn.query(upsertSql, [values]);
     await recordImport(conn, kind, importDate, importMeta);
     await conn.commit();
@@ -755,6 +799,7 @@ async function importDurationSnapshots(importDate, rows, meta) {
 
 async function getImportPreview(kind, importDate, anchorIds, meta) {
   const db = getPool();
+  if (kind === "duration") importDate = normalizeDurationImportDate(importDate);
   const ids = Array.from(
     new Set((Array.isArray(anchorIds) ? anchorIds : []).map((id) => String(id || "").trim()).filter(Boolean))
   );
@@ -805,10 +850,17 @@ async function getImportPreview(kind, importDate, anchorIds, meta) {
   }
 
   const [rows] = await db.query(
-    `SELECT anchor_id, total_minutes AS value
-       FROM duration_snapshots
-      WHERE import_date = ? AND anchor_id IN (${ph})`,
-    [importDate, ...ids]
+    `SELECT d.anchor_id, d.total_minutes AS value
+       FROM duration_snapshots d
+       INNER JOIN (
+         SELECT anchor_id, MAX(import_date) AS latest_date
+           FROM duration_snapshots
+          WHERE import_date BETWEEN ? AND ? AND anchor_id IN (${ph})
+          GROUP BY anchor_id
+       ) latest
+         ON latest.anchor_id = d.anchor_id
+        AND latest.latest_date = d.import_date`,
+    [monthStart(importDate), importDate, ...ids]
   );
   return {
     existing: rows.map((r) => ({
@@ -2258,6 +2310,198 @@ async function getDailyWaveReport(date, gender) {
 }
 
 /**
+ * 生成月度报告：整月维度（当月音浪 + 当月时长 + 当月未播天数）。
+ * month 格式 'YYYY-MM'，gender 为 'male' 或 'female'。
+ * 时长取该月内最近一次累计快照（月导入落在月末，即整月时长）；
+ * 未播天数 = 当月天数 - 该月有音浪(>= 阈值)的天数。
+ */
+async function getMonthlyReport(month, gender) {
+  const db = getPool();
+  await ensureDailyReportVisibilityColumn(db);
+  const monthText = String(month || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(monthText)) throw new Error(`无效的报告月份: ${monthText}`);
+  const [y, m] = monthText.split("-").map(Number);
+  if (m < 1 || m > 12) throw new Error(`无效的报告月份: ${monthText}`);
+  const monthStart = `${monthText}-01`;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const monthEnd = `${monthText}-${String(lastDay).padStart(2, "0")}`;
+  const daysInMonth = lastDay;
+  const genderAll = gender === "all";
+  const genderSql = genderAll ? "" : "p.gender = ? AND ";
+  const genderParams = genderAll ? [] : [gender];
+
+  // 1. 获取指定性别的主播 + 其名下所有账号 anchor（含合并副号）
+  const [personRows] = await db.query(
+    "SELECT p.id AS person_id, p.name, p.master_id, a.anchor_id " +
+    "FROM persons p " +
+    "INNER JOIN accounts a ON a.person_id = p.id " +
+    "WHERE " + genderSql + "a.anchor_id IS NOT NULL AND a.anchor_id != '' " +
+    "AND COALESCE(p.hide_in_daily_report, 0) = 0 " +
+    "ORDER BY p.id",
+    genderParams
+  );
+  const personMap = new Map();
+  for (const r of personRows) {
+    if (!personMap.has(r.person_id)) {
+      personMap.set(r.person_id, {
+        person_id: r.person_id,
+        name: r.name,
+        master_id: r.master_id,
+        anchorIds: [],
+      });
+    }
+    personMap.get(r.person_id).anchorIds.push(r.anchor_id);
+  }
+  const persons = Array.from(personMap.values());
+  const [allPersons] = await db.query("SELECT id, name FROM persons");
+  const nameById = new Map(allPersons.map((p) => [p.id, p.name]));
+  if (persons.length === 0) {
+    return {
+      month: monthText,
+      gender,
+      rows: [],
+      summary: { total: 0, notLiveCount: 0, notLiveDays: 0, notLiveNames: [], daysInMonth },
+    };
+  }
+
+  const anchorIds = [];
+  for (const p of persons) anchorIds.push(...p.anchorIds);
+  const ph = anchorIds.map(() => "?").join(",");
+
+  // 2. 等级规则
+  const [tierRows] = await db.query(
+    "SELECT label, min_wave FROM tier_rules ORDER BY min_wave DESC"
+  );
+
+  // 3. 当月音浪（1 号 ~ 月末）
+  const [monthlyWaves] = await db.query(
+    "SELECT anchor_id, COALESCE(SUM(wave_value), 0) AS total FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ? GROUP BY anchor_id",
+    [...anchorIds, monthStart, monthEnd]
+  );
+  const totalWaveMap = new Map();
+  for (const r of monthlyWaves) totalWaveMap.set(r.anchor_id, Number(r.total) || 0);
+
+  // 4. 当月时长：该月范围内最近一次累计快照（月导入落在月末 = 整月时长）
+  const totalDurMap = await getLatestDurationMap(db, {
+    anchorIds,
+    fromDate: monthStart,
+    asOfDate: monthEnd,
+  });
+
+  // 5. 开播天数：按人按日聚合该月音浪，>= 阈值记一天
+  const [monthlyWaveDates] = await db.query(
+    "SELECT anchor_id, import_date, wave_value FROM wave_snapshots " +
+    "WHERE anchor_id IN (" + ph + ") AND import_date BETWEEN ? AND ?",
+    [...anchorIds, monthStart, monthEnd]
+  );
+  const personIdByAnchor = new Map();
+  for (const p of persons) {
+    for (const aid of p.anchorIds) personIdByAnchor.set(aid, p.person_id);
+  }
+  const normalizeDate = (value) =>
+    value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+  const waveByPersonDate = new Map();
+  for (const row of monthlyWaveDates) {
+    const personId = personIdByAnchor.get(row.anchor_id);
+    if (!personId) continue;
+    const key = `${personId}:${normalizeDate(row.import_date)}`;
+    waveByPersonDate.set(key, (waveByPersonDate.get(key) || 0) + (Number(row.wave_value) || 0));
+  }
+  const liveDateSet = new Set();
+  const liveDatesByPerson = new Map();
+  for (const [key, wave] of waveByPersonDate) {
+    if (wave < LIVE_WAVE_THRESHOLD) continue;
+    const [personIdRaw, dateKey] = key.split(":");
+    const personId = Number(personIdRaw);
+    liveDateSet.add(dateKey);
+    const dates = liveDatesByPerson.get(personId) ?? new Set();
+    dates.add(dateKey);
+    liveDatesByPerson.set(personId, dates);
+  }
+  const dateToUtc = (value) => {
+    const [yy, mm, dd] = String(value).split("-").map(Number);
+    return Date.UTC(yy, mm - 1, dd);
+  };
+  let notLiveDays = 0;
+  const reportDates = [];
+  for (let cursor = dateToUtc(monthStart), end = dateToUtc(monthEnd); cursor <= end; cursor += 24 * 60 * 60 * 1000) {
+    const key = new Date(cursor).toISOString().slice(0, 10);
+    reportDates.push(key);
+    if (!liveDateSet.has(key)) notLiveDays++;
+  }
+
+  // 6. 组装行（每人 = 其名下所有 anchor 之和；时长取名下最多的账号）
+  const rows = persons.map((p) => {
+    let tw = 0;
+    for (const aid of p.anchorIds) tw += totalWaveMap.get(aid) || 0;
+    const td = maxDurationAmongAnchors(p.anchorIds, totalDurMap);
+    const personLiveDates = liveDatesByPerson.get(p.person_id) ?? new Set();
+    const personNotLiveDays = reportDates.filter((key) => !personLiveDates.has(key)).length;
+    let tier = "";
+    for (const tr of tierRows) {
+      if (tw >= Number(tr.min_wave)) { tier = tr.label; break; }
+    }
+    return {
+      _personId: p.person_id,
+      rank: 0,
+      previousRank: null,
+      rankDelta: null,
+      name: p.name,
+      anchorId: p.anchorIds[0] || "",
+      dailyWave: 0,
+      totalWave: tw,
+      dailyDuration: 0,
+      totalDuration: td,
+      notLiveDays: personNotLiveDays,
+      tier,
+      isLive: personLiveDates.size > 0,
+      masterName: p.master_id ? nameById.get(p.master_id) || null : null,
+    };
+  });
+
+  rows.sort((a, b) =>
+    b.totalWave - a.totalWave ||
+    b.totalDuration - a.totalDuration ||
+    a._personId - b._personId
+  );
+
+  const tierCounts = new Map();
+  for (const row of rows) {
+    const baseTier = String(row.tier || "").trim();
+    if (!baseTier || /\d+$/.test(baseTier)) continue;
+    tierCounts.set(baseTier, (tierCounts.get(baseTier) || 0) + 1);
+  }
+  const tierSeq = new Map();
+  for (const row of rows) {
+    const baseTier = String(row.tier || "").trim();
+    if (!baseTier || /\d+$/.test(baseTier) || (tierCounts.get(baseTier) || 0) <= 1) continue;
+    const next = (tierSeq.get(baseTier) || 0) + 1;
+    tierSeq.set(baseTier, next);
+    row.tier = `${baseTier}${next}`;
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    rows[i].rank = i + 1;
+    delete rows[i]._personId;
+  }
+
+  const notLive = rows.filter((r) => !r.isLive);
+  return {
+    month: monthText,
+    gender,
+    rows,
+    summary: {
+      total: rows.length,
+      notLiveCount: notLive.length,
+      notLiveDays,
+      notLiveNames: notLive.map((r) => r.name),
+      daysInMonth,
+    },
+  };
+}
+
+/**
  * 生成 PK 名单数据。
  * period 格式 'YYYY-MM'。计算每位主播当月去最高日均音浪（trimmed mean），
  * 按总音浪降序返回男女分组列表。
@@ -2910,6 +3154,7 @@ module.exports = {
   getTierRules,
   saveTierRules,
   getDailyWaveReport,
+  getMonthlyReport,
   getPkRoster,
   buildPkGroups,
   getStarBattleScores,
@@ -2920,5 +3165,5 @@ module.exports = {
   exportFamilyRoster,
   verifyAppPassword,
   hasAppPassword,
-  __testing: { importSnapshotRows },
+  __testing: { importSnapshotRows, normalizeDurationImportDate },
 };

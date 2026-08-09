@@ -741,6 +741,19 @@ export interface DailyReportData {
   };
 }
 
+export interface MonthlyReportData {
+  month: string;
+  gender: string;
+  rows: DailyReportRow[];
+  summary: {
+    total: number;
+    notLiveCount: number;
+    notLiveDays: number;
+    notLiveNames: string[];
+    daysInMonth: number;
+  };
+}
+
 // ── 自动更新相关类型 ──
 export interface UpdateStatus {
   status: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
@@ -1156,6 +1169,10 @@ declare global {
       date: string,
       gender: string
     ) => Promise<IpcResult<DailyReportData>>;
+    getMonthlyReport: (
+      month: string,
+      gender: string
+    ) => Promise<IpcResult<MonthlyReportData>>;
     getPkRoster: (
       period?: string,
       groupSize?: number

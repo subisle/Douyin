@@ -39,4 +39,17 @@ export default [
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  {
+    // node --test 的 CommonJS 测试文件依赖 require/module
+    files: ["**/*.test.js", "**/*.test.ts", "**/*.test.tsx"],
+    languageOptions: {
+      globals: {
+        module: "readonly",
+        require: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ];

@@ -808,13 +808,11 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    resizable: false,
-    maximizable: false,
-    fullScreenable: false,
-    minWidth: 1440,
-    minHeight: 900,
-    maxWidth: 1440,
-    maxHeight: 900,
+    resizable: true,
+    maximizable: true,
+    fullScreenable: true,
+    minWidth: 1280,
+    minHeight: 800,
     frame: false,
     backgroundColor: APP_BACKGROUND,
     icon: APP_ICON_PNG,
@@ -1262,6 +1260,10 @@ ipcMain.handle(
 ipcMain.handle(
   "data:getDailyWaveReport",
   wrap((date, gender) => db.getDailyWaveReport(date, gender))
+);
+ipcMain.handle(
+  "data:getMonthlyReport",
+  wrap((month, gender) => db.getMonthlyReport(month, gender))
 );
 ipcMain.handle(
   "data:getPkRoster",

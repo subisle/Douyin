@@ -38,6 +38,11 @@ function createDatabaseMock(options = {}) {
         assert.ok(Array.isArray(params[0]));
         return [{ affectedRows: options.affectedRows ?? 1 }];
       }
+      if (/^DELETE FROM duration_snapshots/.test(sql.trim())) {
+        events.push("clear-month");
+        options.onClearMonth?.(sql, params);
+        return [{ affectedRows: 0 }];
+      }
       if (/^INSERT INTO import_records/.test(sql.trim())) {
         events.push("record");
         if (errorAt === "record") throw errors.record;
@@ -140,6 +145,7 @@ test("duration UPSERT failure rolls back and releases the connection", async () 
     "get-connection",
     "begin",
     "assert",
+    "clear-month",
     "upsert",
     "rollback",
     "release",
@@ -224,4 +230,123 @@ test("rollback failure preserves the import error and releases the connection", 
   );
 
   assert.deepEqual(events.slice(-2), ["rollback", "release"]);
+});
+
+test("normalizeDurationImportDate maps YYYY-MM to the month's last day", () => {
+  assert.equal(__testing.normalizeDurationImportDate("2026-07"), "2026-07-31");
+  assert.equal(__testing.normalizeDurationImportDate("2026-02"), "2026-02-28");
+  assert.equal(__testing.normalizeDurationImportDate("2028-02"), "2028-02-29");
+  assert.equal(__testing.normalizeDurationImportDate("2026-12"), "2026-12-31");
+});
+
+test("normalizeDurationImportDate maps YYYY-MM-DD into its month's last day", () => {
+  assert.equal(__testing.normalizeDurationImportDate("2026-07-22"), "2026-07-31");
+  assert.equal(__testing.normalizeDurationImportDate("2026-07-01"), "2026-07-31");
+});
+
+test("normalizeDurationImportDate rejects malformed input", () => {
+  assert.throws(() => __testing.normalizeDurationImportDate("2026-13"), /无效的时长导入月份/);
+  assert.throws(() => __testing.normalizeDurationImportDate("2026-7"), /无效的时长导入日期/);
+  assert.throws(() => __testing.normalizeDurationImportDate("2026-07-32"), /无效的时长导入日期/);
+  assert.throws(() => __testing.normalizeDurationImportDate(""), /无效的时长导入日期/);
+});
+
+test("duration import normalizes the month to the last day before UPSERT", async () => {
+  const { db, events } = createDatabaseMock({ affectedRows: 2 });
+
+  const result = await __testing.importSnapshotRows(
+    db,
+    "duration",
+    "2026-07",
+    [{ anchorId: "anchor-a", totalMinutes: 360 }],
+    META
+  );
+
+  assert.deepEqual(result, { inserted: 2 });
+  assert.deepEqual(events, [
+    "ensure-schema",
+    "get-connection",
+    "begin",
+    "assert",
+    "clear-month",
+    "upsert",
+    "record",
+    "commit",
+    "release",
+  ]);
+});
+
+test("duration import rejects a non-date month value", async () => {
+  const { db } = createDatabaseMock();
+
+  await assert.rejects(
+    __testing.importSnapshotRows(
+      db,
+      "duration",
+      "2026-7",
+      [{ anchorId: "anchor-a", totalMinutes: 360 }],
+      META
+    ),
+    /无效的时长导入日期/
+  );
+});
+
+test("duration month import clears the whole month for imported anchors before UPSERT", async () => {
+  let cleared = null;
+  const { db, events } = createDatabaseMock({
+    affectedRows: 2,
+    onClearMonth: (sql, params) => {
+      cleared = { sql, params };
+    },
+  });
+
+  const result = await __testing.importSnapshotRows(
+    db,
+    "duration",
+    "2026-07",
+    [
+      { anchorId: "anchor-a", totalMinutes: 360 },
+      { anchorId: "anchor-b", totalMinutes: 720 },
+      { anchorId: "anchor-a", totalMinutes: 420 },
+    ],
+    META
+  );
+
+  assert.deepEqual(result, { inserted: 2 });
+  assert.deepEqual(events, [
+    "ensure-schema",
+    "get-connection",
+    "begin",
+    "assert",
+    "clear-month",
+    "upsert",
+    "record",
+    "commit",
+    "release",
+  ]);
+  assert.match(cleared.sql, /^DELETE FROM duration_snapshots/);
+  assert.match(cleared.sql, /import_date BETWEEN \? AND \?/);
+  // 月份范围 2026-07-01 ~ 2026-07-31 + 去重后的主播
+  assert.deepEqual(cleared.params, ["2026-07-01", "2026-07-31", "anchor-a", "anchor-b"]);
+});
+
+test("wave import never clears monthly rows", async () => {
+  let cleared = false;
+  const { db, events } = createDatabaseMock({
+    affectedRows: 1,
+    onClearMonth: () => {
+      cleared = true;
+    },
+  });
+
+  await __testing.importSnapshotRows(
+    db,
+    "wave",
+    "2026-07-22",
+    [{ anchorId: "anchor-a", waveValue: 1200, rank: 1 }],
+    META
+  );
+
+  assert.equal(cleared, false);
+  assert.ok(!events.includes("clear-month"));
 });

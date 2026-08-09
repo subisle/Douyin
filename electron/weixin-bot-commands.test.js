@@ -86,21 +86,6 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
     gender: "both",
     dateSpec: { type: "day", day: 18 },
   });
-  assert.deepEqual(parseBotCommand("5组"), {
-    type: "preset-group-rank",
-    groupNo: 5,
-    all: false,
-  });
-  assert.deepEqual(parseBotCommand("第3组总分"), {
-    type: "preset-group-rank",
-    groupNo: 3,
-    all: false,
-  });
-  assert.deepEqual(parseBotCommand("各组"), {
-    type: "preset-group-rank",
-    groupNo: null,
-    all: true,
-  });
   assert.deepEqual(parseBotCommand("人工客服"), { type: "agent-enable" });
   assert.deepEqual(parseBotCommand("退出客服"), { type: "agent-disable" });
   assert.deepEqual(parseBotCommand("音浪文件18号"), {
@@ -1014,83 +999,9 @@ test("CSV怎么导入 not fast-route as anchor profile", () => {
   assert.equal(matchFastRoute("业务日是什么", { parseBotCommand }), null);
 });
 
-
-test("agent mode still fast-routes 第三组 preset rank", async () => {
-  const replies = [];
-  const males = [
-    { name: "浩冬", wave: 878_000 },
-    { name: "浩辰", wave: 739_000 },
-    { name: "狼赫", wave: 531_000 },
-    { name: "狼明", wave: 446_000 },
-    { name: "狼兴", wave: 415_000 },
-    { name: "狼轩", wave: 409_000 },
-    { name: "啸森", wave: 252_000 },
-    { name: "狼影", wave: 204_000 },
-  ];
-  const handler = createWeixinCommandHandler({
-    db: {
-      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-30", latestDataDate: "2026-07-30" }),
-      getPkRoster: async () => ({ males, females: [] }),
-    },
-    renderReportPng: async () => Buffer.alloc(0),
-    agent: {
-      enableSession() {},
-      disableSession() {},
-      getPublicStatus() { return { enabled: true, configured: true }; },
-    },
-  });
-  const ctx = { fromUserId: "g3-user", conversationId: "g3-user" };
-  assert.equal(handler.modeStore.isAgent(ctx), true);
-  const result = await handler({
-    ...ctx,
-    text: "第三组",
-    items: [],
-    replyText: async (t) => { replies.push(t); },
-  });
-  assert.equal(result.handled, true);
-  assert.equal(result.via, "fast-route");
-  assert.match(replies[0] || "", /第3组总分/);
-  assert.match(replies[0] || "", /浩冬/);
-});
-
-test("preset group rank command returns sorted totals for group 5", async () => {
-  const replies = [];
-  const males = [
-    { name: "浩鸣", wave: 1_647_144 },
-    { name: "南方楠", wave: 1_144_749 },
-    { name: "狼澈", wave: 1_051_502 },
-    { name: "玖玥", wave: 581_357 },
-    { name: "啸帆", wave: 515_701 },
-    { name: "啸安", wave: 391_389 },
-    { name: "狼仔", wave: 303_679 },
-    { name: "玖玉", wave: 267_491 },
-    { name: "啸辰", wave: 100 },
-  ];
-  // pad leaderboard so top10/top20 thresholds exist
-  for (let i = 0; i < 25; i += 1) {
-    males.push({ name: `占位${i}`, wave: 450_000 - i * 10_000 });
-  }
-  const handler = createWeixinCommandHandler({
-    db: {
-      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-30", latestDataDate: "2026-07-30" }),
-      getPkRoster: async () => ({
-        period: "2026-07",
-        males,
-        females: [],
-      }),
-    },
-    renderReportPng: async () => Buffer.from("x"),
-  });
-  const result = await handler({
-    text: "5组",
-    items: [{ type: 1, text_item: { text: "5组" } }],
-    replyText: async (t) => { replies.push(t); },
-  });
-  assert.equal(result.handled, true);
-  assert.equal(replies.length, 1);
-  assert.match(replies[0], /第5组总分 · 09:15/);
-  assert.match(replies[0], /1 浩鸣 164\.7万（#1 已进前10）/);
-  assert.match(replies[0], /5 啸帆 .*已进前10/);
-  assert.match(replies[0], /6 啸安 .*距前10差.*已进前20/);
-  assert.match(replies[0], /8 玖玉 .*距前10差.*距前20差/);
+test("5组 not parsed as anchor profile after group features removed", () => {
+  const { parseBotCommand } = require("./weixin-bot-commands");
+  assert.equal(parseBotCommand("5组"), null);
+  assert.equal(parseBotCommand("各组"), null);
+  assert.equal(parseBotCommand("第3组总分"), null);
 });

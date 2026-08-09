@@ -503,7 +503,6 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
 
         if (
           !autoSettleLockRef.current &&
-          stageKey !== "finals" &&
           isStageFullyScored(next.stages[stageKey])
         ) {
           autoSettleLockRef.current = true;
@@ -521,7 +520,6 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
         }
       } else if (
         !autoSettleLockRef.current &&
-        stageKey !== "finals" &&
         isStageFullyScored(next.stages[stageKey])
       ) {
         autoSettleLockRef.current = true;
