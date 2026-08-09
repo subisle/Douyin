@@ -41,12 +41,13 @@ const HISTORY_LIMIT = 200;
 const SEEN_MESSAGE_LIMIT = 500;
 const RUNNER_LEASE_TTL_MS = 120_000;
 
-const DEFAULT_AI_BASE_URL = "http://162.243.93.40:8317/v1";
-const DEFAULT_AI_MODEL = "grok-4.5";
+const DEFAULT_AI_BASE_URL = "http://192.168.5.12/v1";
+const DEFAULT_AI_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
 const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
+  "192.168.5.12",
   "162.243.93.40",
 ]);
 

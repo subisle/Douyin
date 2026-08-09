@@ -133,8 +133,8 @@ test("AI store migrates legacy 45s timeout to 90s", (t) => {
       customCommands: [],
       ai: {
         enabled: true,
-        baseUrl: "http://162.243.93.40:8317/v1",
-        model: "grok-4.5",
+        baseUrl: "http://192.168.5.12/v1",
+        model: "deepseek-ai/deepseek-v4-flash-0731",
         timeoutMs: 45_000,
         maxToolRounds: 4,
       },
@@ -181,11 +181,11 @@ test("AI rejects unknown plaintext HTTP and permits localhost and built-in relay
 
   const relay = service.saveSettings({ ai: {
     enabled: true,
-    baseUrl: "http://162.243.93.40:8317/v1",
-    model: "grok-4.5",
+    baseUrl: "http://192.168.5.12/v1",
+    model: "deepseek-ai/deepseek-v4-flash-0731",
     apiKey: "test-key",
   } });
-  assert.equal(relay.ai.baseUrl, "http://162.243.93.40:8317/v1");
+  assert.equal(relay.ai.baseUrl, "http://192.168.5.12/v1");
 });
 
 test("security-sensitive sources contain no embedded API keys or public browser token", () => {
@@ -206,7 +206,7 @@ test("security-sensitive sources contain no embedded API keys or public browser 
   // 允许 localhost / 内置中继 IP；禁止其它明文 HTTP 端点写死在源码
   assert.doesNotMatch(
     serverSources,
-    /http:\/\/(?!localhost(?=[:/])|127\.0\.0\.1(?=[:/])|\[::1\](?=[:/])|162\.243\.93\.40(?=[:/]))[^\s"'`)]+/i
+    /http:\/\/(?!localhost(?=[:/])|127\.0\.0\.1(?=[:/])|\[::1\](?=[:/])|192\.168\.5\.12(?=[:/])|162\.243\.93\.40(?=[:/]))[^\s"'`)]+/i
   );
   assert.doesNotMatch(browserSources, /NEXT_PUBLIC_API_TOKEN/);
 });

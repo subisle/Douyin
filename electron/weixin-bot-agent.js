@@ -1,9 +1,9 @@
 "use strict";
 
-const DEFAULT_BASE_URL = "http://162.243.93.40:8317/v1";
-const DEFAULT_MODEL = "grok-4.5";
-// grok-4.5 等带 reasoning 的模型，单次 tool-call completion 实测常 20–40s；
-// 45s 过紧，默认放宽到 90s（仍受 120s 硬顶）。
+const DEFAULT_BASE_URL = "http://192.168.5.12/v1";
+const DEFAULT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
+// deepseek-v4-flash 单次 tool-call completion 实测 ~1-5s；
+// 保留 90s 余量（仍受 120s 硬顶）。
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_MAX_TOOL_ROUNDS = 4;
 const HARD_MAX_TOOL_ROUNDS = 6;
@@ -17,6 +17,7 @@ const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
   "127.0.0.1",
   "::1",
+  "192.168.5.12",
   "162.243.93.40",
 ]);
 

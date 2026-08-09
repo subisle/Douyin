@@ -48,32 +48,33 @@
 
 | 模型 | 厂商 | 特点 | 引擎角色 |
 |------|------|------|----------|
-| `deepseek-ai/deepseek-v4-flash-0731` | DeepSeek | 快速、推理强、中文好 | **主力分析模型**（日报/诊断/趋势） |
-| `z-ai/glm-5.2` | 智谱 | 中文理解优秀、速度快 | **备用分析 + 异常检测** |
-| `openai/gpt-oss-120b` | OpenAI | 通用推理 | 备选 |
-| `meta/llama-3.3-nemotron-super-49b-v1.5` | NVIDIA | 推理 | 排名分析辅助 |
-| `mistralai/mistral-nemotron` | Mistral | 轻量 | 轻量摘要 |
-| `nvidia/nemotron-mini-4b-instruct` | NVIDIA | 极轻量 | 快速分类/意图判断 |
-| `google/gemma-4-31b-it` | Google | 通用 | 备选 |
+| `deepseek-ai/deepseek-v4-flash-0731` | DeepSeek | 快速(~1s)、推理强、中文好 | **主力分析模型**（日报/诊断/趋势） |
+| `minimaxai/minimax-m3` | MiniMax | 极快(~0.5s)、中文好 | **异常检测 + 排名分析** |
+| `nvidia/nemotron-mini-4b-instruct` | NVIDIA | 极快(~0.7s)、轻量 | 快速分类/意图判断 |
+| `nvidia/nemotron-3-super-120b-a12b` | NVIDIA | 快速(~1s)、推理 | 备选分析 |
+| `nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA | 快速(~1.7s)、大模型 | 备选深度分析 |
+
+> ⚠️ **实测不可用模型**（2026-08-10）：`z-ai/glm-5.2`、`openai/gpt-oss-120b` 在 192.168.5.12 节点 30s+ 超时，暂不使用。
 
 ### 2.2 分工策略
 
 ```
-用户消息 ──► 意图分类（nvidia/nemotron-mini-4b，~1s）
+用户消息 ──► 意图分类（nvidia/nemotron-mini-4b，~0.7s）
               │
               ├─ 数据查询类 ──► 现有技能（search_anchors 等）
               ├─ 日报类 ──────► deepseek-v4-flash 生成日报文案
-              ├─ 异常检测类 ──► glm-5.2 分析异常
+              ├─ 异常检测类 ──► minimax-m3 分析异常
               ├─ 诊断类 ──────► deepseek-v4-flash 深度诊断
               ├─ 趋势类 ──────► deepseek-v4-flash 趋势解读
-              └─ 排名类 ──────► glm-5.2 排名分析
+              └─ 排名类 ──────► minimax-m3 排名分析
 ```
 
-**选型理由：**
-- DeepSeek V4 Flash：中文理解+推理+速度均衡，适合需要结合数据生成自然语言文案的场景
-- GLM-5.2：中文原生优化，异常检测需要理解上下文语义偏差，GLM 在中文语境下的异常判断更准确
-- Nemotron Mini 4B：仅做意图分类，不需要强推理，追求低延迟（<1s）
-- 两个主力模型互补：DeepSeek 偏生成，GLM 偏判断
+**选型理由（实测 2026-08-10）：**
+- DeepSeek V4 Flash：延迟 ~1s，中文理解+推理+速度均衡，适合需要结合数据生成自然语言文案的场景
+- MiniMax M3：延迟 ~0.5s 极快，中文原生优化，适合异常检测和排名分析等判断型任务
+- Nemotron Mini 4B：延迟 ~0.7s，仅做意图分类，追求低延迟
+- GLM-5.2 / GPT-OSS-120b：本节点实测 30s+ 超时，暂不使用
+- 两个主力模型互补：DeepSeek 偏生成，MiniMax 偏判断
 
 ### 2.3 调用方式
 
@@ -82,7 +83,7 @@
 ```javascript
 // electron/ai-engine/client.js
 const AI_ENDPOINTS = {
-  primary: process.env.AI_BASE_URL || "http://162.243.93.40:8317/v1",
+  primary: process.env.AI_BASE_URL || "http://192.168.5.12/v1",
   apiKey: process.env.AI_API_KEY,
 };
 
@@ -90,10 +91,10 @@ const AI_ENDPOINTS = {
 const MODEL_ROUTING = {
   intent_classify: "nvidia/nemotron-mini-4b-instruct",
   daily_report: "deepseek-ai/deepseek-v4-flash-0731",
-  anomaly_detect: "z-ai/glm-5.2",
+  anomaly_detect: "minimaxai/minimax-m3",
   anchor_diagnosis: "deepseek-ai/deepseek-v4-flash-0731",
   trend_analysis: "deepseek-ai/deepseek-v4-flash-0731",
-  rank_analysis: "z-ai/glm-5.2",
+  rank_analysis: "minimaxai/minimax-m3",
   fallback: "deepseek-ai/deepseek-v4-flash-0731",
 };
 ```
@@ -149,7 +150,7 @@ Top 5 主播：
 
 **输入：** 日期（可选，默认最新）、性别（可选）
 **数据源：** `db.getDailyWaveReport` + `db.getAnchorWaveTrend`（7天/14天序列）
-**模型：** `z-ai/glm-5.2`
+**模型：** `minimaxai/minimax-m3`（延迟 ~0.5s，极快）
 
 **检测维度：**
 1. **音浪骤降**：日音浪 < 7日均值 × 0.3
@@ -243,7 +244,7 @@ Top 5 主播：
 
 **输入：** 日期（默认最新）、性别、范围（Top 10 / 全团 / 指定区间）
 **数据源：** `db.getDailyWaveReport` 返回的 rows（已含 rank、previousRank、rankDelta）
-**模型：** `z-ai/glm-5.2`
+**模型：** `minimaxai/minimax-m3`（延迟 ~0.5s）
 
 **分析维度：**
 1. **排名变动**：上升最多 / 下降最多 / 新进榜 / 跌出榜
@@ -337,16 +338,16 @@ electron/
 ```javascript
 "use strict";
 
-const DEFAULT_BASE_URL = "http://162.243.93.40:8317/v1";
-const ALLOWED_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "162.243.93.40"]);
+const DEFAULT_BASE_URL = "http://192.168.5.12/v1";
+const ALLOWED_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "192.168.5.12", "162.243.93.40"]);
 
 const MODEL_ROUTING = {
   intent_classify: "nvidia/nemotron-mini-4b-instruct",
   daily_report: "deepseek-ai/deepseek-v4-flash-0731",
-  anomaly_detect: "z-ai/glm-5.2",
+  anomaly_detect: "minimaxai/minimax-m3",
   anchor_diagnosis: "deepseek-ai/deepseek-v4-flash-0731",
   trend_analysis: "deepseek-ai/deepseek-v4-flash-0731",
-  rank_analysis: "z-ai/glm-5.2",
+  rank_analysis: "minimaxai/minimax-m3",
   fallback: "deepseek-ai/deepseek-v4-flash-0731",
 };
 
@@ -700,10 +701,10 @@ const result = await aiEngine.diagnoseAnchor({ query: "XXX" });
 AI_ENGINE_ENABLED=1
 # 主力分析模型（留空则用默认路由）
 AI_MODEL_DAILY_REPORT=deepseek-ai/deepseek-v4-flash-0731
-AI_MODEL_ANOMALY=z-ai/glm-5.2
+AI_MODEL_ANOMALY=minimaxai/minimax-m3
 AI_MODEL_DIAGNOSIS=deepseek-ai/deepseek-v4-flash-0731
 AI_MODEL_TREND=deepseek-ai/deepseek-v4-flash-0731
-AI_MODEL_RANK=z-ai/glm-5.2
+AI_MODEL_RANK=minimaxai/minimax-m3
 # 分析超时（毫秒）
 AI_ANALYSIS_TIMEOUT_MS=60000
 ```
