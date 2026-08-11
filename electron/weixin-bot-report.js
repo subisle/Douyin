@@ -92,7 +92,7 @@ function formatClassicDate(date) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-/** 超过该人数导出拆成两张，避免男团日报单图过高 */
+/** 超过该人数导出拆成两张（男团）；女团人数过多时保持单图，避免过长。 */
 const DAILY_REPORT_EXPORT_SPLIT_THRESHOLD = 30;
 
 function formatDailyReportPageSuffix(pageIndex, pageCount) {
@@ -623,9 +623,10 @@ async function renderDailyReportPngPages(report, options = {}) {
   const allRows = normalizeRows(report);
   if (!allRows.length) throw new Error("该日期没有可生成的报告数据");
   const gender = report.gender === "female" ? "female" : "male";
+  const maxPages = options.maxPages ?? (gender === "female" ? 1 : 2);
   const pages = splitDailyReportRowsForExport(allRows, {
     threshold: options.threshold,
-    maxPages: options.maxPages,
+    maxPages: maxPages,
   });
   const out = [];
   for (const page of pages) {
