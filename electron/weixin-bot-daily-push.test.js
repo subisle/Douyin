@@ -27,10 +27,10 @@ test("buildDailyTop3Text includes male and female name-only blocks", () => {
     { rows: [{ name: "玖妹", dailyWave: 120_000 }] }
   );
   assert.match(text, /2026-07-30 每日报告/);
-  assert.match(text, /【男团】今日前三/);
+  assert.match(text, /【男团】每日之星（前三名）/);
   assert.match(text, /1\. 浩鸣/);
   assert.doesNotMatch(text, /浩鸣 · 50 万/);
-  assert.match(text, /【女队】今日前三/);
+  assert.match(text, /【女队】每日之星（前三名）/);
   assert.match(text, /1\. 玖妹/);
 });
 
@@ -42,12 +42,12 @@ test("buildGenderTop3Text can include date and names only", () => {
     { withDate: true }
   );
   assert.match(withDate, /2026-07-30 每日报告/);
-  assert.match(withDate, /【男团】今日前三/);
+  assert.match(withDate, /【男团】每日之星（前三名）/);
   assert.match(withDate, /1\. 浩鸣\n2\. 狼澈\n3\. 啸帆/);
   assert.doesNotMatch(withDate, /万/);
 
   const female = buildGenderTop3Text("2026-07-30", "female", { rows: [{ name: "玖妹", dailyWave: 12 }] });
-  assert.equal(female.startsWith("【女队】今日前三"), true);
+  assert.equal(female.startsWith("【女队】每日之星（前三名）"), true);
   assert.doesNotMatch(female, /2026-07-30/);
 });
 

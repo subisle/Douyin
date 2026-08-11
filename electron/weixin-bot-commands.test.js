@@ -13,6 +13,15 @@ const {
   pendingImportKey,
   resolveDateSpec,
 } = require("./weixin-bot-commands");
+
+async function mockDailyStarPng(date, gender) {
+  const label = gender === "female" ? "女队" : "男团";
+  return {
+    buffer: Buffer.from(`STAR-${gender}`),
+    fileName: `${date}_${label}_每日之星.png`,
+  };
+}
+
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const {
   buildMediaItem,
@@ -421,6 +430,7 @@ test("report command with long male roster sends two images", async () => {
       }),
     },
     renderReportPng: light,
+    renderDailyStarPng: mockDailyStarPng,
   });
   await handler({
     text: "男团每日报告",
@@ -428,11 +438,12 @@ test("report command with long male roster sends two images", async () => {
     replyText: async (text) => { replies.push(text); },
     replyImage: async (image) => { images.push(image); },
   });
-  assert.equal(images.length, 2);
-  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告_1of2.png");
-  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_2of2.png");
+  assert.equal(images.length, 3);
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日之星.png");
+  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_1of2.png");
+  assert.equal(images[2].fileName, "2026-07-18_男团_每日报告_2of2.png");
   assert.match(replies[0], /2026-07-18 每日报告/);
-  assert.match(replies[0], /【男团】今日前三/);
+  assert.match(replies[0], /【男团】每日之星（前三名）/);
 });
 
 
@@ -453,6 +464,7 @@ test("command handler ignores a filename date and imports to yesterday by defaul
       },
     },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
   });
   const result = await handler({
     text: "",
@@ -498,6 +510,7 @@ test("CSV import checks the runner lease after media staging and before the DB w
       },
     },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
   });
 
   const result = await handler({
@@ -534,6 +547,7 @@ test("pending explicit date then CSV imports to that date", async () => {
       },
     },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
   });
   const ctx = { fromUserId: "tester-2", conversationId: "tester-2" };
   const remember = await handler({
@@ -579,6 +593,7 @@ test("report command without gender sends male then female images", async () => 
       },
     },
     renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
+    renderDailyStarPng: mockDailyStarPng,
   });
   await handler({
     text: "每日报告",
@@ -587,16 +602,18 @@ test("report command without gender sends male then female images", async () => 
     replyImage: async (image) => { images.push(image); },
   });
   assert.deepEqual(genders, ["male", "female"]);
-  // 顺序：男团前三(含日期) → 男团图 → 女队前三 → 女队图
+  // 顺序：男团每日之星文案/图/报告 → 女队每日之星文案/图/报告
   assert.equal(replies.length, 2);
   assert.match(replies[0], /2026-07-18 每日报告/);
-  assert.match(replies[0], /【男团】今日前三/);
-  assert.match(replies[1], /【女队】今日前三/);
+  assert.match(replies[0], /【男团】每日之星（前三名）/);
+  assert.match(replies[1], /【女队】每日之星（前三名）/);
   assert.doesNotMatch(replies[1], /2026-07-18 每日报告/);
-  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
-  assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
-  assert.deepEqual(images[0].buffer, Buffer.from("PNG-male"));
-  assert.deepEqual(images[1].buffer, Buffer.from("PNG-female"));
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日之星.png");
+  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告.png");
+  assert.equal(images[2].fileName, "2026-07-18_女队_每日之星.png");
+  assert.equal(images[3].fileName, "2026-07-18_女队_每日报告.png");
+  assert.deepEqual(images[1].buffer, Buffer.from("PNG-male"));
+  assert.deepEqual(images[3].buffer, Buffer.from("PNG-female"));
 });
 
 test("report command with explicit gender still sends only one team", async () => {
@@ -618,6 +635,7 @@ test("report command with explicit gender still sends only one team", async () =
       },
     },
     renderReportPng: async () => Buffer.from("PNG"),
+    renderDailyStarPng: mockDailyStarPng,
   });
   await handler({
     text: "女团每日报告",
@@ -628,8 +646,9 @@ test("report command with explicit gender still sends only one team", async () =
   assert.deepEqual(genders, ["female"]);
   assert.equal(replies.length, 1);
   assert.match(replies[0], /2026-07-18 每日报告/);
-  assert.match(replies[0], /【女队】今日前三/);
-  assert.equal(images[0].fileName, "2026-07-18_女队_每日报告.png");
+  assert.match(replies[0], /【女队】每日之星（前三名）/);
+  assert.equal(images[0].fileName, "2026-07-18_女队_每日之星.png");
+  assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
 });
 
 
@@ -713,6 +732,7 @@ test("report command falls back when dashboard summary is empty", async () => {
       }),
     },
     renderReportPng: async () => Buffer.from("PNG"),
+    renderDailyStarPng: mockDailyStarPng,
   });
   await handler({
     text: "每日报告",
@@ -722,10 +742,12 @@ test("report command falls back when dashboard summary is empty", async () => {
   });
   assert.equal(replies.length, 2);
   assert.match(replies[0], /2026-07-16 每日报告/);
-  assert.match(replies[0], /【男团】今日前三/);
-  assert.match(replies[1], /【女队】今日前三/);
-  assert.equal(images[0].fileName, "2026-07-16_男团_每日报告.png");
-  assert.equal(images[1].fileName, "2026-07-16_女队_每日报告.png");
+  assert.match(replies[0], /【男团】每日之星（前三名）/);
+  assert.match(replies[1], /【女队】每日之星（前三名）/);
+  assert.equal(images[0].fileName, "2026-07-16_男团_每日之星.png");
+  assert.equal(images[1].fileName, "2026-07-16_男团_每日报告.png");
+  assert.equal(images[2].fileName, "2026-07-16_女队_每日之星.png");
+  assert.equal(images[3].fileName, "2026-07-16_女队_每日报告.png");
 });
 
 test("anchor duration uses latestDurationDate when it diverges from wave", async () => {
@@ -747,6 +769,7 @@ test("anchor duration uses latestDurationDate when it diverges from wave", async
       },
     },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
   });
   await handler({
     text: "小张时长",
@@ -770,6 +793,7 @@ test("command handler replies instead of throwing when summary fails hard", asyn
       },
     },
     renderReportPng: async () => Buffer.from("PNG"),
+    renderDailyStarPng: mockDailyStarPng,
   });
   const result = await handler({
     text: "每日报告",
@@ -859,6 +883,7 @@ test("agent mode: AI-ready business text falls through to agent, not FastRoute",
       },
     },
     renderReportPng: async () => Buffer.from("PNG"),
+    renderDailyStarPng: mockDailyStarPng,
     agent: mockAgent,
   });
   const ctx = { fromUserId: "agent-user", conversationId: "agent-user" };
@@ -892,6 +917,7 @@ test("default agent: free text returns handled false for agent fallback", async 
       getAnchors: async () => [],
     },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
     agent: {
       enableSession() {},
       disableSession() {},
@@ -923,6 +949,7 @@ test("AI not ready still runs deterministic commands as fallback", async () => {
       }),
     },
     renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
+    renderDailyStarPng: mockDailyStarPng,
     agent: {
       enableSession() {},
       disableSession() {},
@@ -949,6 +976,7 @@ test("退出客服 switches to instruction mode", async () => {
   const handler = createWeixinCommandHandler({
     db: { getDashboardSummary: async () => ({}) },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
     agent: {
       enableSession() {},
       disableSession() { disabled = true; },
@@ -973,6 +1001,7 @@ test("清除习惯 clears profile without changing conversation mode", async () 
   const handler = createWeixinCommandHandler({
     db: { getDashboardSummary: async () => ({}) },
     renderReportPng: async () => Buffer.alloc(0),
+    renderDailyStarPng: mockDailyStarPng,
     agent: {
       enableSession() {},
       disableSession() {},

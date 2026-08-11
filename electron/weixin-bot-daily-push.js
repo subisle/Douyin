@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * 每日报告自动推送：文案（男女当日音浪前三）+ 报告图。
+ * 每日报告自动推送：文案（每日之星前三）+ 每日之星图 + 报告图。
  * 纯函数与编排辅助，便于单测；真正发信由 WeixinBotService 完成。
  */
 
@@ -44,7 +44,7 @@ const MEDAL = ["1.", "2.", "3."];
  */
 function formatTopBlock(label, rows, options = {}) {
   const namesOnly = options.namesOnly !== false; // 默认只发人名
-  const lines = [`【${label}】今日前三`];
+  const lines = [`【${label}】每日之星（前三名）`];
   if (!rows.length) {
     lines.push("暂无数据");
     return lines.join("\n");

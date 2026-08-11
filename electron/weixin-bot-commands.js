@@ -13,6 +13,7 @@ const {
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
 const { toDailyReportImagePages } = require("./weixin-bot-report");
+const { renderDailyStarPng } = require("./weixin-bot-daily-star");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -489,7 +490,7 @@ function genderLabel(gender) {
 }
 
 /**
- * 发送单团日报：今日前三（人名）→ 报告图（可多页）。
+ * 发送单团日报：每日之星文案 → 每日之星图 → 报告图（可多页）。
  * @param {{ withDate?: boolean }} [options] withDate 时在文案前加日期标题
  */
 async function sendOneGenderReport(args, date, gender, db, renderReportPng, options = {}) {
@@ -499,12 +500,29 @@ async function sendOneGenderReport(args, date, gender, db, renderReportPng, opti
     await args.replyText(`${date} 没有${label}主播数据。`);
     return false;
   }
-  // 文案：日期（可选）+ 今日前三人名
+  // 文案：日期（可选）+ 每日之星前三人名
   const top3Text = buildGenderTop3Text(date, gender, report, {
     withDate: Boolean(options.withDate),
     namesOnly: true,
   });
   await args.replyText(top3Text);
+
+  // 每日之星海报（前三名）
+  const renderStar = typeof options.renderDailyStarPng === "function"
+    ? options.renderDailyStarPng
+    : renderDailyStarPng;
+  try {
+    const star = await renderStar(date, gender, report);
+    if (star?.buffer?.length) {
+      await args.replyImage({
+        buffer: star.buffer,
+        fileName: star.fileName || `${date}_${label}_每日之星.png`,
+      });
+    }
+  } catch (error) {
+    await args.replyText(`${label}每日之星图片生成失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+
   try {
     // 标题交给渲染层按性别默认（男团星嗨艺创 / 女队薇笑传媒），与软件日报一致
     // 人数过多时自动拆成最多两张（与桌面端导出一致）
@@ -523,7 +541,7 @@ async function sendOneGenderReport(args, date, gender, db, renderReportPng, opti
   }
 }
 
-async function sendReport(args, command, db, renderReportPng) {
+async function sendReport(args, command, db, renderReportPng, extra = {}) {
   const date = await resolveReportDate(db, command.dateSpec, "wave");
   const available = await db.exportWaveSnapshots(date);
   if (!available.length) {
@@ -531,11 +549,14 @@ async function sendReport(args, command, db, renderReportPng) {
     return;
   }
 
-  // 顺序：男团前三 → 男团图 → 女队前三 → 女队图；日期只出现在首条文案
+  // 顺序：男团每日之星文案/图/报告 → 女队每日之星文案/图/报告；日期只出现在首条文案
   const genders = command.gender === "both" ? ["male", "female"] : [command.gender === "female" ? "female" : "male"];
   let first = true;
   for (const gender of genders) {
-    await sendOneGenderReport(args, date, gender, db, renderReportPng, { withDate: first });
+    await sendOneGenderReport(args, date, gender, db, renderReportPng, {
+      withDate: first,
+      renderDailyStarPng: extra.renderDailyStarPng,
+    });
     first = false;
   }
 }
@@ -805,7 +826,7 @@ function matchCustomCommand(text, customCommands) {
   return null;
 }
 
-async function handleCustomCommand(args, command, db, renderReportPng) {
+async function handleCustomCommand(args, command, db, renderReportPng, extra = {}) {
   if (command.action === "reply") {
     const text = command.replyText || "已收到。";
     await args.replyText(text);
@@ -816,15 +837,15 @@ async function handleCustomCommand(args, command, db, renderReportPng) {
     return;
   }
   if (command.action === "daily_report") {
-    await sendReport(args, { type: "report", gender: "both", dateSpec: null }, db, renderReportPng);
+    await sendReport(args, { type: "report", gender: "both", dateSpec: null }, db, renderReportPng, extra);
     return;
   }
   if (command.action === "male_report") {
-    await sendReport(args, { type: "report", gender: "male", dateSpec: null }, db, renderReportPng);
+    await sendReport(args, { type: "report", gender: "male", dateSpec: null }, db, renderReportPng, extra);
     return;
   }
   if (command.action === "female_report") {
-    await sendReport(args, { type: "report", gender: "female", dateSpec: null }, db, renderReportPng);
+    await sendReport(args, { type: "report", gender: "female", dateSpec: null }, db, renderReportPng, extra);
     return;
   }
   if (command.action === "wave_file") {
@@ -832,9 +853,9 @@ async function handleCustomCommand(args, command, db, renderReportPng) {
   }
 }
 
-async function dispatchBusinessCommand(args, command, { db, renderReportPng, analytics }) {
+async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics }) {
   if (!command) return false;
-  if (command.type === "report") await sendReport(args, command, db, renderReportPng);
+  if (command.type === "report") await sendReport(args, command, db, renderReportPng, { renderDailyStarPng });
   else if (command.type === "anchor-profile") await handleAnchorProfile(args, command, db, analytics);
   else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db, analytics);
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
@@ -844,13 +865,13 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ana
   return true;
 }
 
-function createWeixinCommandHandler({ db, renderReportPng, agent = null, analytics: sharedAnalytics = null, dailyPush = null } = {}) {
+function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt = null, agent = null, analytics: sharedAnalytics = null, dailyPush = null } = {}) {
   if (!db) throw new Error("微信机器人命令处理缺少数据库");
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
   const pendingImportDates = createPendingImportDateStore();
   const modeStore = createModeStore();
   const analytics = sharedAnalytics || createWeixinAnalytics({ db, renderReportPng });
-  const deps = { db, renderReportPng, analytics };
+  const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics };
 
   async function handleCommand(args) {
     try {
@@ -887,7 +908,7 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
           }
           if (pushCommand.type === "enable") {
             dailyPush.setEnabled(true, { actorUserId, accountId });
-            await args.replyText("已开启日报自动推送。音浪数据更新后将发送前三文案与报告图。发「关闭日报推送」可关闭。");
+            await args.replyText("已开启日报自动推送。音浪数据更新后将发送每日之星（前三名）与报告图。发「关闭日报推送」可关闭。");
             return { handled: true };
           }
           if (pushCommand.type === "disable") {
@@ -989,7 +1010,7 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
       // 纯指令模式（或 AI 未就绪兜底）：确定性命令
       const custom = matchCustomCommand(args.text, args.settings?.customCommands);
       if (custom) {
-        await handleCustomCommand(args, custom, db, renderReportPng);
+        await handleCustomCommand(args, custom, db, renderReportPng, { renderDailyStarPng: renderDailyStarPngOpt });
         return { handled: true };
       }
 
