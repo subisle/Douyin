@@ -16,13 +16,7 @@ import { getDataApi } from "@/client/http-electron-api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type {
-  QqBotAccessMode,
-  QqBotMessage,
-  QqBotPhase,
-  QqBotSettings,
-  QqBotStatus,
-} from "@/types/electron";
+import type { QqBotMessage, QqBotPhase, QqBotSettings, QqBotStatus } from "@/types/electron";
 
 const api = getDataApi();
 
@@ -40,12 +34,17 @@ const DEFAULT_SETTINGS: QqBotSettings = {
   clientSecret: "",
   apiBase: "https://api.sgroup.qq.com",
   intents: 1 << 25,
-  autoConnect: false,
+  autoConnect: true,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist",
+  accessMode: "open",
   allowUserIds: [],
   allowGroupIds: [],
+  boundUserIds: [],
+  adminUserIds: [],
+  adminRemarks: {},
+  reminderEnabled: true,
+  lastReminderDate: null,
 };
 
 const PHASE_LABEL: Record<QqBotPhase, string> = {
@@ -56,23 +55,10 @@ const PHASE_LABEL: Record<QqBotPhase, string> = {
   error: "异常",
 };
 
-function linesToList(text: string): string[] {
-  return text
-    .split(/[\n,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function listToLines(values: string[]): string {
-  return (values || []).join("\n");
-}
-
-export function QqBotPage() {
+export function QqBotPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [status, setStatus] = useState<QqBotStatus>(EMPTY_STATUS);
   const [settings, setSettings] = useState<QqBotSettings>(DEFAULT_SETTINGS);
   const [messages, setMessages] = useState<QqBotMessage[]>([]);
-  const [allowUsersText, setAllowUsersText] = useState("");
-  const [allowGroupsText, setAllowGroupsText] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -103,8 +89,6 @@ export function QqBotPage() {
       if (!se.success) throw new Error(se.error || "读取设置失败");
       setStatus(st.data);
       setSettings({ ...DEFAULT_SETTINGS, ...se.data });
-      setAllowUsersText(listToLines(se.data.allowUserIds || []));
-      setAllowGroupsText(listToLines(se.data.allowGroupIds || []));
       await refreshMessages();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -143,7 +127,10 @@ export function QqBotPage() {
     return "bg-muted text-muted-foreground";
   }, [status.phase]);
 
-  async function runAction(name: string, fn: () => Promise<{ success: boolean; error?: string; data?: unknown }>) {
+  async function runAction(
+    name: string,
+    fn: () => Promise<{ success: boolean; error?: string; data?: unknown }>
+  ) {
     setBusy(name);
     setError(null);
     try {
@@ -171,14 +158,15 @@ export function QqBotPage() {
     await runAction("save", async () => {
       const payload = {
         ...settings,
-        allowUserIds: linesToList(allowUsersText),
-        allowGroupIds: linesToList(allowGroupsText),
+        accessMode: "open" as const,
+        allowUserIds: [],
+        allowGroupIds: [],
+        adminUserIds: [],
+        adminRemarks: {},
       };
       const result = await api.saveQqBotSettings(payload);
       if (result.success) {
         setSettings({ ...DEFAULT_SETTINGS, ...result.data });
-        setAllowUsersText(listToLines(result.data.allowUserIds || []));
-        setAllowGroupsText(listToLines(result.data.allowGroupIds || []));
       }
       return result;
     });
@@ -196,41 +184,66 @@ export function QqBotPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            <MessageCircle className="size-5 text-violet-500" />
-            QQ 机器人
-          </h1>
-          <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-            官方 QQ 开放平台通道。业务能力与微信机器人共用（Agent / 技能 / 日报）。
-            需在{" "}
-            <a
-              className="text-violet-600 underline underline-offset-2"
-              href="https://q.qq.com"
-              target="_blank"
-              rel="noreferrer"
-            >
-              q.qq.com
-            </a>{" "}
-            创建机器人，订阅「群聊@消息 / 私聊消息」，填入 AppID 与 ClientSecret。
-            AI Key 与微信机器人为同一套桌面配置。
-          </p>
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <Badge className={cn("border-0", phaseTone)}>
-            {PHASE_LABEL[status.phase] || status.phase}
-          </Badge>
-          {status.connected ? (
-            <Badge variant="secondary" className="gap-1">
-              <CheckCircle2 className="size-3" />
-              在线
-            </Badge>
+        <div className="min-w-0">
+          {embedded ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={cn("border-0", phaseTone)}>
+                {PHASE_LABEL[status.phase] || status.phase}
+              </Badge>
+              {status.connected ? (
+                <Badge variant="secondary" className="gap-1">
+                  <CheckCircle2 className="size-3" />
+                  在线
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="gap-1 text-muted-foreground">
+                  离线
+                </Badge>
+              )}
+              <span className="text-xs text-muted-foreground">
+                凭证与消息日志在下方；AI Key 与微信共用
+              </span>
+            </div>
           ) : (
-            <Badge variant="outline" className="gap-1 text-muted-foreground">
-              离线
-            </Badge>
+            <>
+              <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+                <MessageCircle className="size-5 text-violet-500" />
+                QQ 机器人
+              </h1>
+              <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+                官方 QQ 开放平台通道。业务能力与微信机器人共用（Agent / 技能 / 日报）。任意用户私聊、任意群
+                @ 均可使用。需在{" "}
+                <a
+                  className="text-violet-600 underline underline-offset-2"
+                  href="https://q.qq.com"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  q.qq.com
+                </a>{" "}
+                创建机器人，订阅「群聊@消息 / 私聊消息」，填入 AppID 与 ClientSecret。AI Key
+                与微信机器人为同一套桌面配置。
+              </p>
+            </>
           )}
         </div>
+        {!embedded ? (
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Badge className={cn("border-0", phaseTone)}>
+              {PHASE_LABEL[status.phase] || status.phase}
+            </Badge>
+            {status.connected ? (
+              <Badge variant="secondary" className="gap-1">
+                <CheckCircle2 className="size-3" />
+                在线
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="gap-1 text-muted-foreground">
+                离线
+              </Badge>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {(error || status.error) && (
@@ -288,6 +301,14 @@ export function QqBotPage() {
             <label className="flex items-center gap-2 text-xs">
               <input
                 type="checkbox"
+                checked={Boolean(settings.reminderEnabled)}
+                onChange={(e) => setSettings((s) => ({ ...s, reminderEnabled: e.target.checked }))}
+              />
+              午夜提醒（每天 0 点后发「请发送音浪文件」）
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
                 checked={settings.autoReplyEnabled}
                 onChange={(e) =>
                   setSettings((s) => ({ ...s, autoReplyEnabled: e.target.checked }))
@@ -307,48 +328,11 @@ export function QqBotPage() {
             />
           </label>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block space-y-1 text-xs">
-              <span className="text-muted-foreground">访问模式</span>
-              <select
-                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                value={settings.accessMode}
-                onChange={(e) =>
-                  setSettings((s) => ({
-                    ...s,
-                    accessMode: e.target.value as QqBotAccessMode,
-                  }))
-                }
-              >
-                <option value="allowlist">白名单</option>
-                <option value="open">开放（任意用户）</option>
-              </select>
-            </label>
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-              白名单使用 QQ 开放平台下发的 <code>openid</code> / <code>group_openid</code>
-              ，不是 QQ 号。可从下方消息日志复制。
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block space-y-1 text-xs">
-              <span className="text-muted-foreground">允许用户 openid（每行一个）</span>
-              <textarea
-                className="min-h-[110px] w-full rounded-md border bg-background p-2 font-mono text-xs"
-                value={allowUsersText}
-                onChange={(e) => setAllowUsersText(e.target.value)}
-                disabled={settings.accessMode === "open"}
-              />
-            </label>
-            <label className="block space-y-1 text-xs">
-              <span className="text-muted-foreground">允许群 group_openid（每行一个）</span>
-              <textarea
-                className="min-h-[110px] w-full rounded-md border bg-background p-2 font-mono text-xs"
-                value={allowGroupsText}
-                onChange={(e) => setAllowGroupsText(e.target.value)}
-                disabled={settings.accessMode === "open"}
-              />
-            </label>
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+            开放访问：任意用户私聊、任意群 @ 均可使用（无白名单 / 无管理员）。午夜提醒发给全部已对接用户。
+            {settings.boundUserIds?.length
+              ? ` 当前已对接 ${settings.boundUserIds.length} 人。`
+              : " 尚未有对接用户。"}
           </div>
 
           <div className="flex flex-wrap gap-2 pt-1">
@@ -396,7 +380,7 @@ export function QqBotPage() {
           </div>
         </section>
 
-        <section className="flex min-h-[420px] flex-col rounded-xl border bg-card p-4 shadow-sm">
+        <section className="flex max-h-[min(60vh,560px)] min-h-[280px] flex-col rounded-xl border bg-card p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-2">
             <div className="text-sm font-semibold">消息日志</div>
             <div className="flex items-center gap-2">
@@ -423,7 +407,7 @@ export function QqBotPage() {
           </div>
           <div className="flex-1 space-y-2 overflow-auto rounded-lg border bg-muted/20 p-2">
             {messages.length === 0 ? (
-              <div className="flex h-full min-h-[280px] items-center justify-center text-xs text-muted-foreground">
+              <div className="flex h-full min-h-[160px] items-center justify-center text-xs text-muted-foreground">
                 连接后，群@或私聊消息会显示在这里
               </div>
             ) : (

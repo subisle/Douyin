@@ -33,12 +33,16 @@ const DEFAULT_SETTINGS = Object.freeze({
   clientSecret: "",
   apiBase: DEFAULT_API_BASE,
   intents: INTENT_GROUP_AND_C2C,
-  autoConnect: false,
+  autoConnect: true,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist", // allowlist | open
+  accessMode: "open", // 开放：任意用户 / 任意群
   allowUserIds: [],
   allowGroupIds: [],
+  // 绑定记录：任意 C2C 用户发消息即记录，用于午夜提醒触达
+  boundUserIds: [],
+  reminderEnabled: true,
+  lastReminderDate: null,
 });
 
 const MAX_MESSAGES = 200;
@@ -63,7 +67,8 @@ function uniqueStrings(values) {
 
 function normalizeSettings(input = {}, fallback = DEFAULT_SETTINGS) {
   const src = input && typeof input === "object" ? input : {};
-  const accessMode = src.accessMode === "open" ? "open" : "allowlist";
+  // 产品：始终开放访问；allow* 字段仅兼容旧存储读写，不参与权限判断
+  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
   return {
     appId: String(src.appId ?? fallback.appId ?? "").trim(),
     clientSecret: String(src.clientSecret ?? fallback.clientSecret ?? "").trim(),
@@ -72,9 +77,18 @@ function normalizeSettings(input = {}, fallback = DEFAULT_SETTINGS) {
     autoConnect: Boolean(src.autoConnect),
     autoReplyEnabled: Boolean(src.autoReplyEnabled),
     autoReplyText: String(src.autoReplyText ?? fallback.autoReplyText).slice(0, 1000),
-    accessMode,
-    allowUserIds: uniqueStrings(src.allowUserIds ?? fallback.allowUserIds),
-    allowGroupIds: uniqueStrings(src.allowGroupIds ?? fallback.allowGroupIds),
+    accessMode: "open",
+    allowUserIds: [],
+    allowGroupIds: [],
+    boundUserIds: uniqueStrings(src.boundUserIds ?? fallback.boundUserIds),
+    reminderEnabled: hasOwn(src, "reminderEnabled")
+      ? Boolean(src.reminderEnabled)
+      : Boolean(fallback.reminderEnabled),
+    lastReminderDate: String(
+      hasOwn(src, "lastReminderDate")
+        ? src.lastReminderDate
+        : fallback.lastReminderDate || ""
+    ).trim() || null,
   };
 }
 
@@ -108,6 +122,8 @@ class QqBotService extends EventEmitter {
     this.commandHandler = null;
     this.agentHandler = null;
     this.modeStore = null;
+    this.getSharedAiSettings =
+      typeof options.getSharedAiSettings === "function" ? options.getSharedAiSettings : null;
     this.sessionQueues = createSessionQueues();
 
     this.settings = { ...DEFAULT_SETTINGS };
@@ -206,6 +222,74 @@ class QqBotService extends EventEmitter {
     this._persist();
     this._emitStatus();
     return this.getSettings();
+  }
+
+  /** 记录 C2C 绑定用户（用于午夜提醒等触达）；不再区分管理员 */
+  _registerBoundUser(openid) {
+    const uid = String(openid || "").trim();
+    if (!uid) return;
+    const bound = uniqueStrings([...(this.settings.boundUserIds || []), uid]);
+    if (bound.length !== (this.settings.boundUserIds || []).length) {
+      this.settings = { ...this.settings, boundUserIds: bound };
+      this._persist();
+    }
+  }
+
+  /**
+   * 午夜提醒：给所有已对接（C2C 会话过）的用户发「请发送音浪文件」。
+   * 由 main.js 调度器每天跨 0 点后调用一次；受 reminderEnabled 与 lastReminderDate 防重。
+   */
+  async sendMidnightReminder(text = "请发送音浪文件即可") {
+    if (!this.settings.reminderEnabled) {
+      return { sent: 0, fail: 0, skipped: "disabled", at: null };
+    }
+    const now = new Date();
+    const todayKey = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+    if (this.settings.lastReminderDate === todayKey) {
+      return { sent: 0, fail: 0, skipped: "already_sent", at: todayKey };
+    }
+
+    const targets = this.settings.boundUserIds || [];
+    let sent = 0;
+    let fail = 0;
+    for (const openid of targets) {
+      try {
+        await this._ensureToken();
+        await sendC2cMessage({
+          accessToken: this.accessToken,
+          appId: this.settings.appId,
+          apiBase: this.settings.apiBase,
+          fetchImpl: this.fetchImpl,
+          openid,
+          content: String(text).slice(0, 1000),
+          msgType: MSG_TYPE.TEXT,
+        });
+        this._pushMessage({
+          id: `out-reminder-${Date.now()}-${sent}`,
+          direction: "out",
+          chatType: "c2c",
+          conversationId: `c2c:${openid}`,
+          fromUserId: openid,
+          text: String(text).slice(0, 1000),
+          at: new Date().toISOString(),
+        });
+        sent += 1;
+      } catch (error) {
+        fail += 1;
+        console.warn("[qq-midnight-reminder] send failed", openid, error?.message || error);
+      }
+    }
+
+    this.settings = {
+      ...this.settings,
+      lastReminderDate: todayKey,
+    };
+    this._persist();
+    return { sent, fail, skipped: sent ? null : "no_target", at: todayKey };
   }
 
   async connect() {
@@ -460,27 +544,15 @@ class QqBotService extends EventEmitter {
     if (typeof this.reconnectTimer.unref === "function") this.reconnectTimer.unref();
   }
 
-  _isSenderAllowed(inbound) {
-    if (this.settings.accessMode === "open") return true;
-    const uid = String(inbound.fromUserId || "").trim();
-    const gid = String(inbound.groupId || "").trim();
-    if (gid && this.settings.allowGroupIds.includes(gid)) return true;
-    if (uid && this.settings.allowUserIds.includes(uid)) return true;
-    return false;
-  }
-
   async _handleInbound(inbound) {
     const dedupeKey = `${inbound.eventType}:${inbound.msgId}`;
     if (inbound.msgId && this._processing.has(dedupeKey)) return;
     if (inbound.msgId) this._processing.add(dedupeKey);
 
     try {
-      if (!this._isSenderAllowed(inbound)) {
-        await this._replyText(
-          inbound,
-          "当前账号无权限使用机器人，请联系管理员开通。"
-        );
-        return;
+      // C2C 消息即「绑定」：记录已对接用户；首个绑定用户自动成为管理员
+      if (inbound.chatType === "c2c" && inbound.fromUserId) {
+        this._registerBoundUser(inbound.fromUserId);
       }
 
       const replyApi = {
@@ -509,7 +581,17 @@ class QqBotService extends EventEmitter {
           allowUserIds: this.settings.allowUserIds,
           allowGroupIds: this.settings.allowGroupIds,
           customCommands: [],
-          ai: { enabled: true },
+          // 与微信共用桌面 AI 偏好；未注入时不伪造 enabled=true 以免误判
+          ai: (() => {
+            const shared = typeof this.getSharedAiSettings === "function"
+              ? this.getSharedAiSettings()
+              : null;
+            const enabled = shared?.enabled !== false;
+            return {
+              enabled,
+              progressEnabled: shared?.progressEnabled !== false,
+            };
+          })(),
         },
         signal: undefined,
         assertLease: () => {},

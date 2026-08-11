@@ -474,7 +474,13 @@ test("command handler ignores a filename date and imports to yesterday by defaul
     { anchorId: "anchor-b", waveValue: 800, rank: 2 },
   ]);
   assert.equal(importCall.meta.rowCount, 2);
-  assert.match(replies.at(-1), new RegExp(`已导入 ${yesterday} 音浪数据`));
+  // 导入确认文案用「X号」友好格式（默认昨天）
+  const friendly = (() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 1);
+    return `${now.getDate()}号`;
+  })();
+  assert.match(replies.at(-1), new RegExp(`已导入 ${friendly} 的${"音浪"}数据`));
 });
 
 test("CSV import checks the runner lease after media staging and before the DB write", async () => {

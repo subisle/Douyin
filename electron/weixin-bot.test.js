@@ -449,8 +449,8 @@ test("concurrent inbound work stays bound to its Weixin account", async (t) => {
   );
 });
 
-test("account ACLs are isolated and file imports require an explicit user allowlist", async (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-account-acl-"));
+test("open access: any user/group may chat and any CSV may be imported", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-open-access-"));
   const handlerCalls = [];
   const sentTexts = [];
   const service = new WeixinBotService({
@@ -486,10 +486,11 @@ test("account ACLs are isolated and file imports require an explicit user allowl
   addAccount("acl-a@im.bot");
   addAccount("acl-b@im.bot");
   service.activeAccountId = "acl-a@im.bot";
+  // 即便存储里有旧的 allowlist 配置，也不再限制任何用户
   service.saveSettings({
     accountId: "acl-a@im.bot",
     accessMode: "allowlist",
-    allowUserIds: ["shared-user@im.wechat"],
+    allowUserIds: [],
   });
   service.setCommandHandler(async (args) => {
     handlerCalls.push({ accountId: args.accountId, kind: args.items[0]?.type || 1 });
@@ -500,36 +501,29 @@ test("account ACLs are isolated and file imports require an explicit user allowl
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  const inbound = (messageId, item, contextToken) => ({
+  const inbound = (messageId, item, contextToken, fromUser = "stranger@im.wechat") => ({
     message_id: messageId,
-    from_user_id: "shared-user@im.wechat",
+    from_user_id: fromUser,
     message_type: 1,
     context_token: contextToken,
     create_time_ms: Date.now(),
     item_list: [item],
   });
+  // 未在白名单的陌生用户，文本命令可执行
   await service._handleInboundMessage(
     inbound(1, { type: 1, text_item: { text: "help" } }, "CTX_A"),
     service.accounts.get("acl-a@im.bot")
   );
+  // 未在白名单的陌生用户，文件导入可直接处理（不弹权限拒绝）
   await service._handleInboundMessage(
-    inbound(2, { type: 1, text_item: { text: "help" } }, "CTX_B"),
-    service.accounts.get("acl-b@im.bot")
-  );
-  assert.deepEqual(handlerCalls, [{ accountId: "acl-a@im.bot", kind: 1 }]);
-  assert.match(sentTexts.at(-1), /无权限/);
-
-  service.saveSettings({
-    accountId: "acl-a@im.bot",
-    accessMode: "open",
-    allowUserIds: [],
-  });
-  await service._handleInboundMessage(
-    inbound(3, { type: 4, file_item: { file_name: "data.csv" } }, "CTX_FILE"),
+    inbound(2, { type: 4, file_item: { file_name: "data.csv" } }, "CTX_FILE"),
     service.accounts.get("acl-a@im.bot")
   );
-  assert.equal(handlerCalls.length, 1, "unauthorized files must be rejected before command handling");
-  assert.match(sentTexts.at(-1), /文件导入权限/);
+  assert.deepEqual(handlerCalls, [
+    { accountId: "acl-a@im.bot", kind: 1 },
+    { accountId: "acl-a@im.bot", kind: 4 },
+  ]);
+  assert.equal(sentTexts.filter((text) => /无权限|权限/.test(text)).length, 0);
 });
 
 test("manual sends cannot bypass a runner lease held elsewhere", async (t) => {
@@ -1249,4 +1243,149 @@ test("typed iLink session expiry stops polling and marks the account expired", a
   assert.equal(status.monitoring, false);
   assert.equal(status.error, "请重新扫码连接");
   assert.equal(status.accounts[0].phase, "session_expired");
+});
+
+test("QR bind keeps open access and does not auto-set an admin", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-admin-"));
+  const storeFile = path.join(tempDir, "weixin-bot.v1.json");
+  const token = "ADMIN_TOKEN";
+  const seen = [];
+
+  const fetchImpl = async (url, options = {}) => {
+    if (url.includes("get_bot_qrcode")) {
+      return jsonResponse({ qrcode: "QR_ADMIN", qrcode_img_content: "https://weixin.qq.com/x/m" });
+    }
+    if (url.includes("get_qrcode_status")) {
+      seen.push("confirm");
+      return jsonResponse({
+        status: "confirmed",
+        bot_token: token,
+        ilink_bot_id: "admin@im.bot",
+        ilink_user_id: "owner@im.wechat",
+        baseurl: "https://ilinkai.weixin.qq.com",
+      });
+    }
+    if (url.includes("get_updates")) {
+      return jsonResponse({ updates: [], cursor: "CUR_1" });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const service = new WeixinBotService({
+    fetchImpl,
+    storagePath: () => storeFile,
+    encryptToken: (value) => Buffer.from(`sealed:${value}`, "utf8").toString("base64"),
+    decryptToken: (value) => Buffer.from(value, "base64").toString("utf8").replace(/^sealed:/, ""),
+    generateQrDataUrl: async () => "data:image/png;base64,FIXTURE",
+  });
+  t.after(async () => {
+    await service.shutdown();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const running = waitForEvent(service, "status", (value) => value.phase === "running");
+  await service.startLogin();
+  await running;
+
+  // 开放模式：任意绑定用户都可指令（无管理员墙），扫码不再自动设置 adminUserIds
+  assert.equal(service.isDailyPushAdmin("owner@im.wechat", "admin@im.bot"), true);
+  assert.equal(service.isDailyPushAdmin("anyone@im.wechat", "admin@im.bot"), true);
+  const stored = JSON.parse(fs.readFileSync(storeFile, "utf8"));
+  assert.deepEqual(stored.settings.dailyReportPush.adminUserIds, []);
+  // reminderEnabled 默认开启（兼容旧配置）
+  assert.equal(stored.settings.dailyReportPush.reminderEnabled, true);
+  await service.stopMonitoring();
+});
+
+test("weixin sendMidnightReminder targets all bound contacts and dedupes", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-bot-rm-"));
+  const storeFile = path.join(tempDir, "weixin-bot.v1.json");
+  const token = "RM_TOKEN";
+  const sentMessages = [];
+
+  const fetchImpl = async (url, options = {}) => {
+    if (url.includes("ilink/bot/sendmessage")) {
+      sentMessages.push(JSON.parse(String(options.body || "{}")));
+      return jsonResponse({ ret: 0 });
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const service = new WeixinBotService({
+    fetchImpl,
+    storagePath: () => storeFile,
+    encryptToken: (value) => Buffer.from(`sealed:${value}`, "utf8").toString("base64"),
+    decryptToken: (value) => Buffer.from(value, "base64").toString("utf8").replace(/^sealed:/, ""),
+  });
+  t.after(async () => {
+    await service.shutdown();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const accountId = "rm@im.bot";
+  const uid = "admin@im.wechat";
+  const key = (a, c) => JSON.stringify([String(a), String(c)]);
+  service.accounts.set(accountId, {
+    accountId,
+    credentials: { token, accountId, userId: uid, baseUrl: "https://ilinkai.weixin.qq.com", savedAt: "" },
+    monitorController: null,
+    monitorPromise: null,
+    phase: "running",
+    lastPollAt: null,
+    error: null,
+    receivedCount: 0,
+    sentCount: 0,
+  });
+  service.activeAccountId = accountId;
+  service.accountPolicies.set(accountId, {
+    accessMode: "allowlist",
+    allowUserIds: [uid],
+    allowGroupIds: [],
+  });
+  service.settings = {
+    ...service.settings,
+    dailyReportPush: {
+      ...service.settings.dailyReportPush,
+      adminUserIds: [uid],
+    },
+  };
+  // 构造一个带上下文的管理员会话
+  service.knownContacts.set(key(accountId, uid), {
+    accountId,
+    id: uid,
+    kind: "user",
+    conversationId: uid,
+    groupId: null,
+    lastContent: "",
+    lastSeenAt: "",
+    contextToken: "CTX",
+    toUserId: uid,
+    allowed: true,
+  });
+  service.contexts.set(key(accountId, uid), {
+    accountId,
+    contextToken: "CTX",
+    toUserId: uid,
+    groupId: null,
+  });
+
+  const first = await service.sendMidnightReminder();
+  assert.equal(first.sent, 1);
+  assert.equal(first.fail, 0);
+  assert.equal(first.skipped, null);
+  assert.equal(sentMessages.length, 1);
+  const msg = sentMessages[0].msg || sentMessages[0];
+  assert.equal(msg.item_list[0].text_item.text, "请发送音浪文件即可");
+
+  const second = await service.sendMidnightReminder();
+  assert.equal(second.skipped, "already_sent");
+  assert.equal(sentMessages.length, 1, "dedup: 不应重复发送");
+
+  service.settings.dailyReportPush = {
+    ...service.settings.dailyReportPush,
+    reminderEnabled: false,
+  };
+  const third = await service.sendMidnightReminder();
+  assert.equal(third.skipped, "disabled");
+  assert.equal(sentMessages.length, 1);
 });

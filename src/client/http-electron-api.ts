@@ -83,12 +83,17 @@ const WEB_QQ_SETTINGS = {
   clientSecret: "",
   apiBase: "https://api.sgroup.qq.com",
   intents: 1 << 25,
-  autoConnect: false,
+  autoConnect: true,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist" as const,
+  accessMode: "open" as const,
   allowUserIds: [] as string[],
   allowGroupIds: [] as string[],
+  boundUserIds: [] as string[],
+  adminUserIds: [] as string[],
+  adminRemarks: {} as Record<string, string>,
+  reminderEnabled: true,
+  lastReminderDate: null,
 };
 const WEB_WEIXIN_STATUS = {
   available: false,
@@ -114,7 +119,7 @@ const WEB_WEIXIN_SETTINGS = {
   accountId: null,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist" as const,
+  accessMode: "open" as const,
   allowUserIds: [] as string[],
   allowGroupIds: [] as string[],
   customCommands: [] as [],
@@ -130,7 +135,10 @@ const WEB_WEIXIN_SETTINGS = {
   contacts: [] as [],
   dailyReportPush: {
     enabled: false,
+    reminderEnabled: true,
+    lastReminderDate: null,
     adminUserIds: [] as string[],
+    adminRemarks: {} as Record<string, string>,
     recipientUserIds: [] as string[],
     recipientGroupIds: [] as string[],
     lastPush: null,
@@ -301,6 +309,17 @@ export function createHttpElectronApi(): ElectronAPI {
           dailyReportPush: {
             ...WEB_WEIXIN_SETTINGS.dailyReportPush,
             ...(payload.dailyReportPush || {}),
+            reminderEnabled:
+              payload.dailyReportPush && "reminderEnabled" in payload.dailyReportPush
+                ? Boolean(payload.dailyReportPush.reminderEnabled)
+                : WEB_WEIXIN_SETTINGS.dailyReportPush.reminderEnabled,
+            lastReminderDate:
+              payload.dailyReportPush && "lastReminderDate" in payload.dailyReportPush
+                ? payload.dailyReportPush.lastReminderDate ?? null
+                : WEB_WEIXIN_SETTINGS.dailyReportPush.lastReminderDate,
+            adminRemarks:
+              payload.dailyReportPush?.adminRemarks
+              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.adminRemarks,
             adminUserIds:
               payload.dailyReportPush?.adminUserIds
               ?? WEB_WEIXIN_SETTINGS.dailyReportPush.adminUserIds,

@@ -58,24 +58,26 @@ test("matchDailyPushCommand parses admin toggles", () => {
   assert.equal(matchDailyPushCommand("每日报告"), null);
 });
 
-test("resolveDailyPushTargets prefers explicit recipients with context", () => {
+test("resolveDailyPushTargets returns all contacts with session context", () => {
   const contexts = new Map([
     ["acc::u1", { contextToken: "tok1", toUserId: "u1" }],
     ["acc::g1", { contextToken: "tokg", toUserId: "u9", groupId: "g1" }],
+    // u2 无 context → 跳过
   ]);
   const targets = resolveDailyPushTargets({
     accountId: "acc",
     contacts: [
       { accountId: "acc", id: "u1", kind: "user", conversationId: "u1", contextToken: "tok1" },
-      { accountId: "acc", id: "u2", kind: "user", conversationId: "u2", contextToken: "tok2" },
+      { accountId: "acc", id: "u2", kind: "user", conversationId: "u2" },
       { accountId: "acc", id: "g1", kind: "group", conversationId: "g1", groupId: "g1", contextToken: "tokg", toUserId: "u9" },
     ],
     contexts,
-    accessPolicy: { accessMode: "allowlist", allowUserIds: ["u1", "u2"], allowGroupIds: ["g1"] },
+    // 旧 recipient* / allowlist 配置一律忽略
+    accessPolicy: { accessMode: "allowlist", allowUserIds: ["u1"], allowGroupIds: [] },
     pushSettings: {
       enabled: true,
       recipientUserIds: ["u1"],
-      recipientGroupIds: ["g1"],
+      recipientGroupIds: [],
       adminUserIds: [],
     },
     accountScopedKey: (a, c) => `${a}::${c}`,
@@ -90,13 +92,39 @@ test("normalize + status text", () => {
   assert.deepEqual(cfg.adminUserIds, ["a"]);
   const text = formatDailyPushStatusText(cfg);
   assert.match(text, /已开启/);
-  assert.match(text, /管理员：a/);
+  assert.match(text, /午夜提醒/);
+  assert.match(text, /全部有会话用户\/群/);
+  assert.doesNotMatch(text, /管理员/);
+  assert.doesNotMatch(text, /推送用户：/);
+  assert.doesNotMatch(text, /推送群聊：/);
+});
+
+test("normalize reminder defaults & remarks merge", () => {
+  const defaults = normalizeDailyReportPushSettings({});
+  assert.equal(defaults.reminderEnabled, true);
+  assert.equal(defaults.lastReminderDate, null);
+  assert.deepEqual(defaults.adminRemarks, {});
+
+  // 旧配置无 reminderEnabled 字段时仍默认开启
+  const legacy = normalizeDailyReportPushSettings({ enabled: false, adminUserIds: ["a"] });
+  assert.equal(legacy.reminderEnabled, true);
+
+  // 显式关闭可覆盖
+  const off = normalizeDailyReportPushSettings({ reminderEnabled: false });
+  assert.equal(off.reminderEnabled, false);
+
+  // 备注与 fallback 合并：src 优先，非空键才保留
+  const merged = normalizeDailyReportPushSettings(
+    { adminRemarks: { a: "老板", b: "  " } },
+    { adminRemarks: { a: "旧备注", c: "运营" } }
+  );
+  assert.deepEqual(merged.adminRemarks, { a: "老板", c: "运营" });
 });
 
 
 const { createWeixinCommandHandler } = require("./weixin-bot-commands");
 
-test("command handler toggles daily push for admin", async () => {
+test("command handler toggles daily push without an admin gate", async () => {
   let enabled = false;
   const replies = [];
   const handler = createWeixinCommandHandler({
@@ -107,7 +135,7 @@ test("command handler toggles daily push for admin", async () => {
     },
     renderReportPng: async () => Buffer.from("x"),
     dailyPush: {
-      isAdmin: (id) => id === "admin1",
+      isAdmin: () => true,
       getStatusText: () => `日报自动推送：${enabled ? "已开启" : "已关闭"}`,
       setEnabled: (v) => { enabled = Boolean(v); return { enabled }; },
       notifyAfterImport: async () => ({}),
@@ -124,9 +152,8 @@ test("command handler toggles daily push for admin", async () => {
   assert.equal(enabled, true);
   assert.equal((await handler({ ...base, text: "日报推送状态" })).handled, true);
   assert.match(replies.at(-1), /已开启/);
+  // 任意用户都可开关（无管理员墙）
   assert.equal((await handler({ ...base, fromUserId: "other", text: "关闭日报推送" })).handled, true);
-  assert.equal(enabled, true);
-  assert.match(replies.at(-1), /仅管理员/);
-  assert.equal((await handler({ ...base, text: "关闭日报推送" })).handled, true);
   assert.equal(enabled, false);
+  assert.match(replies.at(-1), /已关闭/);
 });

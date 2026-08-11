@@ -113,30 +113,50 @@ function normalizeDailyReportPushSettings(input = {}, fallback = {}) {
     }
     return out;
   };
+  // 备注表：键=userId，值=备注；src 优先，其次 base，只保留非空键与有效备注
+  const pickRemarks = (holder) => {
+    const out = {};
+    if (holder && typeof holder === "object") {
+      for (const [id, remark] of Object.entries(holder)) {
+        const key = String(id || "").trim();
+        const value = String(remark ?? "").trim();
+        if (!key || !value) continue;
+        out[key] = value.slice(0, 100);
+      }
+    }
+    return out;
+  };
+  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+  const hasReminder =
+    hasOwn(src, "reminderEnabled") || hasOwn(base, "reminderEnabled");
   const lastPushRaw = src.lastPush && typeof src.lastPush === "object"
     ? src.lastPush
     : (base.lastPush && typeof base.lastPush === "object" ? base.lastPush : null);
   return {
     enabled: Boolean(
-      Object.prototype.hasOwnProperty.call(src, "enabled")
-        ? src.enabled
-        : base.enabled
+      hasOwn(src, "enabled") ? src.enabled : base.enabled
     ),
+    // 午夜提醒默认开启；旧配置无此字段时也为 true
+    reminderEnabled: hasReminder
+      ? Boolean(
+          hasOwn(src, "reminderEnabled") ? src.reminderEnabled : base.reminderEnabled
+        )
+      : true,
+    lastReminderDate: String(
+      hasOwn(src, "lastReminderDate")
+        ? src.lastReminderDate
+        : base.lastReminderDate || ""
+    ).trim() || null,
     adminUserIds: unique(
-      Object.prototype.hasOwnProperty.call(src, "adminUserIds")
-        ? src.adminUserIds
-        : base.adminUserIds
+      hasOwn(src, "adminUserIds") ? src.adminUserIds : base.adminUserIds
     ),
-    recipientUserIds: unique(
-      Object.prototype.hasOwnProperty.call(src, "recipientUserIds")
-        ? src.recipientUserIds
-        : base.recipientUserIds
-    ),
-    recipientGroupIds: unique(
-      Object.prototype.hasOwnProperty.call(src, "recipientGroupIds")
-        ? src.recipientGroupIds
-        : base.recipientGroupIds
-    ),
+    adminRemarks: {
+      ...pickRemarks(base.adminRemarks),
+      ...pickRemarks(src.adminRemarks),
+    },
+    // 产品：始终推全部有会话联系人；旧 recipient* 名单不再生效，normalize 时清空
+    recipientUserIds: [],
+    recipientGroupIds: [],
     lastPush: lastPushRaw
       ? {
           date: String(lastPushRaw.date || "") || null,
@@ -152,7 +172,10 @@ function normalizeDailyReportPushSettings(input = {}, fallback = {}) {
 const DEFAULT_DAILY_REPORT_PUSH = Object.freeze(
   normalizeDailyReportPushSettings({
     enabled: false,
+    reminderEnabled: true,
+    lastReminderDate: null,
     adminUserIds: [],
+    adminRemarks: {},
     recipientUserIds: [],
     recipientGroupIds: [],
     lastPush: null,
@@ -182,9 +205,8 @@ function formatDailyPushStatusText(push) {
   const cfg = normalizeDailyReportPushSettings(push);
   const lines = [
     `日报自动推送：${cfg.enabled ? "已开启" : "已关闭"}`,
-    `管理员：${cfg.adminUserIds.length ? cfg.adminUserIds.join("、") : "未设置（请在桌面端配置）"}`,
-    `推送用户：${cfg.recipientUserIds.length ? `${cfg.recipientUserIds.length} 人` : "名单用户（有会话）"}`,
-    `推送群聊：${cfg.recipientGroupIds.length ? `${cfg.recipientGroupIds.length} 个` : "名单群（有会话）"}`,
+    `午夜提醒：${cfg.reminderEnabled ? "已开启" : "已关闭"}`,
+    "推送对象：全部有会话用户/群",
   ];
   if (cfg.lastPush?.at) {
     lines.push(
@@ -198,28 +220,16 @@ function formatDailyPushStatusText(push) {
 
 /**
  * 解析应推送的会话目标。
- * 规则：
- * - 若配置了 recipientUserIds / recipientGroupIds，则仅推这些
- * - 否则推当前账号 allowlist 内、且已有会话上下文的联系人
- * - open 模式下未配名单时：推所有有上下文的联系人
+ * 产品：始终推当前账号下全部有会话上下文的用户/群（忽略旧 recipient* 配置）。
  */
 function resolveDailyPushTargets({
   accountId,
   contacts = [],
   contexts = new Map(),
-  accessPolicy,
-  pushSettings,
+  accessPolicy: _accessPolicy,
+  pushSettings: _pushSettings,
   accountScopedKey,
 }) {
-  const cfg = normalizeDailyReportPushSettings(pushSettings);
-  const policy = accessPolicy || { accessMode: "allowlist", allowUserIds: [], allowGroupIds: [] };
-  const hasExplicitRecipients = cfg.recipientUserIds.length > 0 || cfg.recipientGroupIds.length > 0;
-  const explicitUsers = new Set(cfg.recipientUserIds);
-  const explicitGroups = new Set(cfg.recipientGroupIds);
-  const allowUsers = new Set(policy.allowUserIds || []);
-  const allowGroups = new Set(policy.allowGroupIds || []);
-  const open = policy.accessMode === "open";
-
   const targets = [];
   const seen = new Set();
 
@@ -228,13 +238,7 @@ function resolveDailyPushTargets({
     const id = String(contact.id || "").trim();
     if (!id) continue;
     const kind = contact.kind === "group" ? "group" : "user";
-    const conversationId = String(contact.conversationId || (kind === "group" ? id : id)).trim() || id;
-
-    if (hasExplicitRecipients) {
-      if (kind === "group" ? !explicitGroups.has(id) : !explicitUsers.has(id)) continue;
-    } else if (!open) {
-      if (kind === "group" ? !allowGroups.has(id) : !allowUsers.has(id)) continue;
-    }
+    const conversationId = String(contact.conversationId || id).trim() || id;
 
     const ctxKey = typeof accountScopedKey === "function"
       ? accountScopedKey(contact.accountId || accountId, conversationId)

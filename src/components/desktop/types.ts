@@ -11,7 +11,6 @@ import {
   Trophy,
   Image,
   Bot,
-  MessageCircle,
   Activity,
   Radio,
   Download,
@@ -31,8 +30,7 @@ export type PageId =
   | "import-monitor"
   | "reward"
   | "poster-board"
-  | "weixin-bot"
-  | "qq-bot"
+  | "bot"
   | "settings";
 
 export type AppRole = "admin" | "guest";
@@ -172,17 +170,10 @@ export const NAV_ITEMS: NavItem[] = [
     adminOnly: true,
   },
   {
-    id: "weixin-bot",
-    label: "微信机器人",
+    id: "bot",
+    label: "机器人",
     icon: Bot,
-    description: "微信 iLink 消息连接与回复",
-    adminOnly: true,
-  },
-  {
-    id: "qq-bot",
-    label: "QQ 机器人",
-    icon: MessageCircle,
-    description: "官方 QQ 开放平台机器人",
+    description: "微信 iLink + QQ 开放平台",
     adminOnly: true,
   },
   {
@@ -269,17 +260,10 @@ export const NAV_TREE: NavEntry[] = [
     adminOnly: true,
   },
   {
-    id: "weixin-bot",
-    label: "微信机器人",
+    id: "bot",
+    label: "机器人",
     icon: Bot,
-    description: "微信 iLink 消息连接与回复",
-    adminOnly: true,
-  },
-  {
-    id: "qq-bot",
-    label: "QQ 机器人",
-    icon: MessageCircle,
-    description: "官方 QQ 开放平台机器人",
+    description: "微信 iLink + QQ 开放平台",
     adminOnly: true,
   },
   {
@@ -290,6 +274,16 @@ export const NAV_TREE: NavEntry[] = [
     adminOnly: true,
   },
 ];
+
+
+/** 旧版侧栏 id 兼容：合并前 weixin-bot / qq-bot → bot */
+export function normalizePageId(page: string | null | undefined): PageId | null {
+  const raw = String(page || "").trim();
+  if (!raw) return null;
+  if (raw === "weixin-bot" || raw === "qq-bot") return "bot";
+  const known = NAV_ITEMS.some((item) => item.id === raw);
+  return known ? (raw as PageId) : null;
+}
 
 export function getNavLabel(page: PageId): string {
   const item = NAV_ITEMS.find((entry) => entry.id === page);

@@ -300,13 +300,11 @@ weixinBot.setCommandHandler(weixinCommandHandler);
 if (weixinCommandHandler.modeStore) {
   weixinBot.setModeStore(weixinCommandHandler.modeStore);
 }
-weixinBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
-
 const qqBot = new QqBotService({
   storagePath: () => path.join(app.getPath("userData"), "qq-bot.v1.json"),
+  getSharedAiSettings: () => weixinBot.getSettings()?.ai || null,
 });
 qqBot.setCommandHandler(weixinCommandHandler);
-qqBot.setAgentHandler((args) => weixinBotAgent.handleMessage(args));
 if (weixinCommandHandler.modeStore) {
   qqBot.setModeStore(weixinCommandHandler.modeStore);
 }
@@ -319,6 +317,34 @@ qqBot.on("message", (message) => {
 qqBot.on("messages-cleared", () => {
   sendToMainWindow("qq-bot:messages-cleared");
 });
+
+// 午夜提醒：每天跨 0 点后给微信/QQ 管理员发「请发送音浪文件即可」。
+// 通知开关分别存于 weixin dailyReportPush.reminderEnabled 与 qq settings.reminderEnabled（默认开）。
+let midnightReminderTimer = null;
+let lastMidnightCheckDay = "";
+function localDayKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function setupMidnightReminder() {
+  lastMidnightCheckDay = localDayKey();
+  const tick = () => {
+    const day = localDayKey();
+    if (day === lastMidnightCheckDay) return;
+    lastMidnightCheckDay = day;
+    const now = new Date();
+    // 跨天后至少 1 分钟（00:01 之后）再触发，避开 0 点边界抖动
+    if (now.getHours() === 0 && now.getMinutes() < 1) return;
+    const remind = (label, promise) => {
+      Promise.resolve(promise)
+        .then((result) => console.log(`[midnight-reminder] ${label}`, JSON.stringify(result)))
+        .catch((error) => console.warn(`[midnight-reminder] ${label} failed`, error?.message || String(error)));
+    };
+    remind("weixin", weixinBot.sendMidnightReminder());
+    remind("qq", qqBot.sendMidnightReminder());
+  };
+  midnightReminderTimer = setInterval(tick, 60_000);
+  if (typeof midnightReminderTimer.unref === "function") midnightReminderTimer.unref();
+}
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";
@@ -970,6 +996,8 @@ app.whenReady().then(() => {
     console.error("[qq-bot] 初始化失败", error?.message || String(error));
   });
 
+  setupMidnightReminder();
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -986,6 +1014,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  if (midnightReminderTimer) clearInterval(midnightReminderTimer);
   void weixinBot.shutdown();
   void qqBot.shutdown();
 });

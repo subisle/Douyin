@@ -54,7 +54,7 @@ const ALLOWED_AI_HTTP_HOSTS = new Set([
 const DEFAULT_SETTINGS = Object.freeze({
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist", // allowlist | open (explicit per-account opt-in)
+  accessMode: "open", // 开放：任意用户 / 任意群；allow* 字段仅兼容旧存储
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
@@ -577,23 +577,26 @@ class WeixinBotService extends EventEmitter {
 
   getSettings(accountId) {
     const targetAccountId = String(accountId || this._getActiveAccount()?.accountId || "").trim();
-    const policy = this._getAccessPolicy(targetAccountId);
     return {
       accountId: targetAccountId || null,
       autoReplyEnabled: Boolean(this.settings.autoReplyEnabled),
       autoReplyText: String(this.settings.autoReplyText || ""),
-      accessMode: policy.accessMode,
-      allowUserIds: [...policy.allowUserIds],
-      allowGroupIds: [...policy.allowGroupIds],
+      // 产品：开放访问；旧 allowlist 配置忽略
+      accessMode: "open",
+      allowUserIds: [],
+      allowGroupIds: [],
       customCommands: (this.settings.customCommands || []).map((item) => ({ ...item })),
       ai: {
-        enabled: Boolean(this.getAiRuntimeConfig().enabled),
-        baseUrl: String(this.getAiRuntimeConfig().baseUrl || DEFAULT_AI_BASE_URL),
-        model: String(this.getAiRuntimeConfig().model || DEFAULT_AI_MODEL),
-        timeoutMs: Number(this.getAiRuntimeConfig().timeoutMs) || 90_000,
+        // 回显用户勾选/填写偏好，不回写 runtime 有效态
+        // 否则 AI_ENABLED=1 / AI_PROGRESS=1 会在点保存后把 UI 开关顶回勾选
+        enabled: this.settings.ai?.enabled !== false,
+        baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
+        model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
+        timeoutMs: clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
         maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
-        progressEnabled: Boolean(this.getAiRuntimeConfig().progressEnabled),
-        hasApiKey: Boolean(this.encryptedAiKey || environmentAiApiKey()),
+        progressEnabled: this.settings.ai?.progressEnabled !== false,
+        // 仅表示本机已保存的加密 Key；env 中的 Key 只影响 runtime，避免「清除」后仍显示已保存
+        hasApiKey: Boolean(this.encryptedAiKey),
       },
       contacts: this.getContacts().filter((item) => !targetAccountId || item.accountId === targetAccountId),
       dailyReportPush: normalizeDailyReportPushSettings(this.settings.dailyReportPush),
@@ -604,22 +607,17 @@ class WeixinBotService extends EventEmitter {
     // strip tokens from public contact view
     return [...this.knownContacts.values()]
       .sort((a, b) => String(b.lastSeenAt || "").localeCompare(String(a.lastSeenAt || "")))
-      .map((item) => {
-        const policy = this._getAccessPolicy(item.accountId);
-        return {
-          accountId: item.accountId,
-          id: item.id,
-          kind: item.kind === "group" ? "group" : "user",
-          conversationId: item.conversationId,
-          groupId: item.groupId || null,
-          lastContent: item.lastContent || "",
-          lastSeenAt: item.lastSeenAt || "",
-          hasContext: Boolean(item.contextToken),
-          allowed: item.kind === "group"
-            ? policy.allowGroupIds.includes(item.id)
-            : policy.allowUserIds.includes(item.id),
-        };
-      });
+      .map((item) => ({
+        accountId: item.accountId,
+        id: item.id,
+        kind: item.kind === "group" ? "group" : "user",
+        conversationId: item.conversationId,
+        groupId: item.groupId || null,
+        lastContent: item.lastContent || "",
+        lastSeenAt: item.lastSeenAt || "",
+        hasContext: Boolean(item.contextToken),
+        allowed: true,
+      }));
   }
 
   getAiRuntimeConfig() {
@@ -642,12 +640,12 @@ class WeixinBotService extends EventEmitter {
       baseUrl = DEFAULT_AI_BASE_URL;
     }
     const model = String(envModel || this.settings.ai?.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
-    // 产品：默认开启；env AI_ENABLED 可强制关；有 Key+模型+地址即视为可用
+    // 用户勾选优先；env AI_ENABLED=0 可强制关；=1 只表示「允许开启」不覆盖 UI 关闭
+    // 真正可用还需要 Key + 模型 + 地址
+    const preferenceOn = this.settings.ai?.enabled !== false;
     const enabled = envEnabled === false
       ? false
-      : envEnabled === true
-        ? true
-        : Boolean(this.settings.ai?.enabled !== false && apiKey && model && baseUrl);
+      : Boolean(preferenceOn && apiKey && model && baseUrl);
     const envTimeoutMs = environmentAiTimeoutMs();
     return {
       enabled,
@@ -666,12 +664,10 @@ class WeixinBotService extends EventEmitter {
     if (autoReplyEnabled && !autoReplyText) throw new Error("请填写自动回复内容");
 
     const targetAccountId = String(input.accountId || this._getActiveAccount()?.accountId || "").trim();
-    const currentPolicy = this._getAccessPolicy(targetAccountId);
-    const accessMode = String(input.accessMode ?? currentPolicy.accessMode) === "open"
-      ? "open"
-      : "allowlist";
-    const allowUserIds = uniqueIds(input.allowUserIds ?? currentPolicy.allowUserIds);
-    const allowGroupIds = uniqueIds(input.allowGroupIds ?? currentPolicy.allowGroupIds);
+    // 产品：开放访问，不再接受白名单配置
+    const accessMode = "open";
+    const allowUserIds = [];
+    const allowGroupIds = [];
     const customCommands = normalizeCustomCommands(input.customCommands ?? this.settings.customCommands);
     const dailyReportPush = normalizeDailyReportPushSettings(
       input.dailyReportPush && typeof input.dailyReportPush === "object"
@@ -682,13 +678,16 @@ class WeixinBotService extends EventEmitter {
 
     const prevAi = this.settings.ai || {};
     const nextAiInput = input.ai && typeof input.ai === "object" ? input.ai : {};
+    const hasAiEnabledInput = Object.prototype.hasOwnProperty.call(nextAiInput, "enabled");
+    const hasProgressInput = Object.prototype.hasOwnProperty.call(nextAiInput, "progressEnabled");
     const ai = {
-      enabled: Boolean(nextAiInput.enabled ?? prevAi.enabled),
+      // 默认开启；仅显式 false 关闭。无关保存不得把 undefined 收成 false
+      enabled: hasAiEnabledInput ? Boolean(nextAiInput.enabled) : prevAi.enabled !== false,
       baseUrl: String(nextAiInput.baseUrl ?? prevAi.baseUrl ?? DEFAULT_AI_BASE_URL).trim() || DEFAULT_AI_BASE_URL,
       model: String(nextAiInput.model ?? prevAi.model ?? DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
       timeoutMs: clampAiTimeoutMs(nextAiInput.timeoutMs ?? prevAi.timeoutMs, 90_000),
       maxToolRounds: Math.min(6, Math.max(1, Number(nextAiInput.maxToolRounds ?? prevAi.maxToolRounds) || 4)),
-      progressEnabled: Object.prototype.hasOwnProperty.call(nextAiInput, "progressEnabled")
+      progressEnabled: hasProgressInput
         ? Boolean(nextAiInput.progressEnabled)
         : prevAi.progressEnabled !== false,
     };
@@ -707,12 +706,15 @@ class WeixinBotService extends EventEmitter {
         this.encryptedAiKey = "";
       }
     }
-    if (ai.enabled && !this.encryptedAiKey && !environmentAiApiKey()) {
-      // 无 Key 时不允许真正启用；若用户显式打开开关则报错，否则静默降级以免无关保存失败
-      if (Object.prototype.hasOwnProperty.call(nextAiInput, "enabled") && nextAiInput.enabled) {
-        throw new Error("启用 AI 前请先填写 API Key");
-      }
-      ai.enabled = false;
+    // 无 Key 时 runtime 本来就不可用；UI 偏好保持用户选择。
+    // 仅在「显式打开启用」且无 Key 时拒绝，避免无关保存把开关静默关掉。
+    if (
+      hasAiEnabledInput
+      && nextAiInput.enabled
+      && !this.encryptedAiKey
+      && !environmentAiApiKey()
+    ) {
+      throw new Error("启用 AI 前请先填写 API Key");
     }
 
     const nextPolicy = { accessMode, allowUserIds, allowGroupIds };
@@ -724,9 +726,9 @@ class WeixinBotService extends EventEmitter {
     this.settings = {
       autoReplyEnabled,
       autoReplyText,
-      accessMode: this.defaultAccessPolicy.accessMode,
-      allowUserIds: this.defaultAccessPolicy.allowUserIds,
-      allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
+      accessMode: "open",
+      allowUserIds: [],
+      allowGroupIds: [],
       customCommands,
       ai,
       dailyReportPush,
@@ -1413,41 +1415,8 @@ class WeixinBotService extends EventEmitter {
       });
     }
 
-    if (!this._isSenderAllowed(accountId, fromUserId, groupId)) {
-      if (contextToken) {
-        try {
-          await this._sendTextWithContext(
-            conversationId,
-            "当前账号无权限使用机器人，请联系管理员开通。",
-            context,
-            owner,
-            { runnerWork: work }
-          );
-        } catch {
-          // ignore
-        }
-      }
-      return;
-    }
-
     const containsFile = (Array.isArray(rawMessage.item_list) ? rawMessage.item_list : [])
       .some((item) => Number(item?.type) === 4);
-    if (containsFile && !this._isSenderAllowedToWrite(accountId, fromUserId)) {
-      if (contextToken) {
-        try {
-          await this._sendTextWithContext(
-            conversationId,
-            "当前账号没有文件导入权限，请联系管理员将你的用户 ID 加入允许名单。",
-            context,
-            owner,
-            { runnerWork: work }
-          );
-        } catch {
-          // ignore
-        }
-      }
-      return;
-    }
 
     let commandHandled = false;
     const inboundText = extractMessageText(rawMessage);
@@ -1824,28 +1793,12 @@ class WeixinBotService extends EventEmitter {
     return this.seenMessageIds.has(accountScopedKey(accountId, id));
   }
 
-  _isSenderAllowed(accountId, userId, groupId) {
-    const policy = this._getAccessPolicy(accountId);
-    if (policy.accessMode !== "allowlist") return true;
-    const uid = String(userId || "").trim();
-    const gid = String(groupId || "").trim();
-    if (gid && policy.allowGroupIds.includes(gid)) return true;
-    if (uid && policy.allowUserIds.includes(uid)) return true;
-    return false;
-  }
-
-  _isSenderAllowedToWrite(accountId, userId) {
-    const uid = String(userId || "").trim();
-    return Boolean(uid && this._getAccessPolicy(accountId).allowUserIds.includes(uid));
-  }
-
   _rememberContact(contact) {
     const accountId = String(contact?.accountId || "").trim();
     const id = String(contact?.id || "").trim();
     if (!accountId || !id) return;
     const key = accountScopedKey(accountId, id);
     const prev = this.knownContacts.get(key) || {};
-    const policy = this._getAccessPolicy(accountId);
     this.knownContacts.set(key, {
       accountId,
       id,
@@ -1856,9 +1809,7 @@ class WeixinBotService extends EventEmitter {
       lastSeenAt: String(contact.lastSeenAt || prev.lastSeenAt || new Date().toISOString()),
       contextToken: String(contact.contextToken || prev.contextToken || "").trim(),
       toUserId: String(contact.toUserId || prev.toUserId || (contact.kind === "group" ? "" : id)).trim(),
-      allowed: contact.kind === "group"
-        ? policy.allowGroupIds.includes(id)
-        : policy.allowUserIds.includes(id),
+      allowed: true,
     });
     // Keep map bounded
     if (this.knownContacts.size > 300) {
@@ -1932,9 +1883,9 @@ class WeixinBotService extends EventEmitter {
     this.settings = {
       autoReplyEnabled: Boolean(parsed.settings?.autoReplyEnabled),
       autoReplyText: String(parsed.settings?.autoReplyText ?? DEFAULT_SETTINGS.autoReplyText).slice(0, 1000),
-      accessMode: this.defaultAccessPolicy.accessMode,
-      allowUserIds: this.defaultAccessPolicy.allowUserIds,
-      allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
+      accessMode: "open",
+      allowUserIds: [],
+      allowGroupIds: [],
       customCommands: normalizeCustomCommands(parsed.settings?.customCommands),
       ai: {
         // 默认开启智能；仅显式 false 时关闭
@@ -1978,9 +1929,7 @@ class WeixinBotService extends EventEmitter {
         lastSeenAt: String(item.lastSeenAt || ""),
         contextToken,
         toUserId,
-        allowed: item.kind === "group"
-          ? this._getAccessPolicy(accountId).allowGroupIds.includes(id)
-          : this._getAccessPolicy(accountId).allowUserIds.includes(id),
+        allowed: true,
       });
       if (contextToken) {
         this.contexts.set(accountScopedKey(accountId, conversationId), {
@@ -2039,27 +1988,16 @@ class WeixinBotService extends EventEmitter {
     if (typeof renderReportPng === "function") this.dailyPushRenderReportPng = renderReportPng;
   }
 
-  isDailyPushAdmin(userId, accountId) {
-    const uid = String(userId || "").trim();
-    if (!uid) return false;
-    const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
-    if (push.adminUserIds.includes(uid)) return true;
-    // 未配置管理员时：允许名单内用户也可开关（避免首次无法操作）
-    if (!push.adminUserIds.length) {
-      const policy = this._getAccessPolicy(accountId || this._getActiveAccount()?.accountId);
-      return policy.allowUserIds.includes(uid);
-    }
-    return false;
+  isDailyPushAdmin(userId) {
+    // 无权限墙：任意用户都可指令开关日报推送
+    return Boolean(String(userId || "").trim());
   }
 
   getDailyReportPushStatusText() {
     return formatDailyPushStatusText(this.settings.dailyReportPush);
   }
 
-  setDailyReportPushEnabled(enabled, { actorUserId, accountId } = {}) {
-    if (actorUserId && !this.isDailyPushAdmin(actorUserId, accountId)) {
-      throw new Error("仅管理员可开关日报推送，请在桌面端「微信机器人」设置管理员");
-    }
+  setDailyReportPushEnabled(enabled, { actorUserId: _actorUserId, accountId: _accountId } = {}) {
     const dailyReportPush = normalizeDailyReportPushSettings({
       ...normalizeDailyReportPushSettings(this.settings.dailyReportPush),
       enabled: Boolean(enabled),
@@ -2067,6 +2005,69 @@ class WeixinBotService extends EventEmitter {
     this.settings = { ...this.settings, dailyReportPush };
     this._writeStore();
     return dailyReportPush;
+  }
+
+  /**
+   * 午夜提醒：给所有已对接（有会话上下文）的用户发「请发送音浪文件」。
+   * 由 main.js 调度器每天跨 0 点后调用一次；受 reminderEnabled 与 lastReminderDate 防重。
+   */
+  async sendMidnightReminder(text = "请发送音浪文件即可") {
+    const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
+    if (!push.reminderEnabled) {
+      return { sent: 0, fail: 0, skipped: "disabled", at: null };
+    }
+    const now = new Date();
+    const todayKey = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+    if (push.lastReminderDate === todayKey) {
+      return { sent: 0, fail: 0, skipped: "already_sent", at: todayKey };
+    }
+
+    const targets = [];
+    for (const contact of this.knownContacts.values()) {
+      if (contact.kind !== "user") continue;
+      const account = this.accounts.get(contact.accountId);
+      if (!account?.credentials?.token) continue;
+      const conversationId = String(contact.conversationId || contact.id);
+      const context = this.contexts.get(accountScopedKey(contact.accountId, conversationId));
+      if (!context?.contextToken) continue;
+      targets.push({ conversationId, context, account });
+    }
+
+    let sent = 0;
+    let fail = 0;
+    if (targets.length) {
+      if (!this.runnerLease) this._acquireRunnerLease();
+      try {
+        for (const target of targets) {
+          try {
+            await this._sendTextWithContext(
+              target.conversationId,
+              String(text).slice(0, 1000),
+              target.context,
+              target.account
+            );
+            sent += 1;
+          } catch (error) {
+            fail += 1;
+            console.warn("[weixin-midnight-reminder] send failed", target.conversationId, error?.message || error);
+          }
+        }
+      } finally {
+        this._releaseRunnerLeaseIfIdle();
+      }
+    }
+
+    const dailyReportPush = normalizeDailyReportPushSettings({
+      ...push,
+      lastReminderDate: todayKey,
+    });
+    this.settings = { ...this.settings, dailyReportPush };
+    this._writeStore();
+    return { sent, fail, skipped: sent ? null : "no_target", at: todayKey };
   }
 
   /**
@@ -2132,7 +2133,6 @@ class WeixinBotService extends EventEmitter {
     }
     const accountId = account.accountId;
     const push = normalizeDailyReportPushSettings(this.settings.dailyReportPush);
-    const policy = this._getAccessPolicy(accountId);
 
     // 用内部联系人（含 contextToken）
     const internalContacts = [...this.knownContacts.values()].filter((c) => c.accountId === accountId);
@@ -2140,7 +2140,7 @@ class WeixinBotService extends EventEmitter {
       accountId,
       contacts: internalContacts,
       contexts: this.contexts,
-      accessPolicy: policy,
+      accessPolicy: { accessMode: "open", allowUserIds: [], allowGroupIds: [] },
       pushSettings: push,
       accountScopedKey,
     });
@@ -2295,12 +2295,13 @@ class WeixinBotService extends EventEmitter {
       settings: {
         autoReplyEnabled: this.settings.autoReplyEnabled,
         autoReplyText: this.settings.autoReplyText,
-        accessMode: this.defaultAccessPolicy.accessMode,
-        allowUserIds: this.defaultAccessPolicy.allowUserIds,
-        allowGroupIds: this.defaultAccessPolicy.allowGroupIds,
+        accessMode: "open",
+        allowUserIds: [],
+        allowGroupIds: [],
         customCommands: this.settings.customCommands,
+        dailyReportPush: normalizeDailyReportPushSettings(this.settings.dailyReportPush),
         ai: {
-          enabled: Boolean(this.settings.ai?.enabled),
+          enabled: this.settings.ai?.enabled !== false,
           baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
           model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
           timeoutMs: clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),

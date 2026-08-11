@@ -20,10 +20,9 @@ import { MonitorPlaceholderPage } from "./monitor-placeholder-page";
 import { RewardPage } from "./reward-page";
 import { SettingsPage } from "./settings-page";
 import { PosterBoardPage } from "./poster-board-page";
-import { WeixinBotPage } from "./weixin-bot-page";
-import { QqBotPage } from "./qq-bot-page";
+import { BotPage } from "./bot-page";
 import { LockScreen } from "./lock-screen";
-import { type PageId, type AppRole } from "./types";
+import { type PageId, type AppRole, normalizePageId } from "./types";
 import type { DailyReportRow } from "@/types/electron";
 import type { DroppedImportFile } from "./import-page";
 
@@ -139,8 +138,9 @@ export function DesktopShell() {
   // 监听来自仪表盘快捷按钮的导航事件
   useEffect(() => {
     const handler = (e: CustomEvent) => {
-      if (e.detail && e.detail !== currentPage) {
-        setCurrentPage(e.detail);
+      const next = normalizePageId(e.detail);
+      if (next && next !== currentPage) {
+        setCurrentPage(next);
       }
     };
     window.addEventListener("app:navigate", handler as EventListener);
@@ -297,10 +297,8 @@ export function DesktopShell() {
                 <RewardPage />
               ) : currentPage === "poster-board" ? (
                 <PosterBoardPage />
-              ) : currentPage === "weixin-bot" ? (
-                <WeixinBotPage />
-              ) : currentPage === "qq-bot" ? (
-                <QqBotPage />
+              ) : currentPage === "bot" ? (
+                <BotPage />
               ) : currentPage === "settings" ? (
                 <SettingsPage />
               ) : null}

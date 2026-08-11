@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { type ComponentProps, type MouseEvent as ReactMouseEvent, useEffect, useRef, useState } from "react";
+import { type ComponentProps, useEffect, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -71,7 +71,10 @@ const EMPTY_STATUS: WeixinBotStatus = {
 
 const DEFAULT_DAILY_PUSH: WeixinBotDailyReportPushSettings = {
   enabled: false,
+  reminderEnabled: true,
+  lastReminderDate: null,
   adminUserIds: [],
+  adminRemarks: {},
   recipientUserIds: [],
   recipientGroupIds: [],
   lastPush: null,
@@ -81,7 +84,7 @@ const DEFAULT_SETTINGS: WeixinBotSettings = {
   accountId: null,
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
-  accessMode: "allowlist",
+  accessMode: "open",
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
@@ -105,8 +108,8 @@ const COMMAND_HINTS: { example: string; desc: string }[] = [
   { example: "艺名+时长", desc: "累计时长" },
   { example: "艺名+音浪", desc: "最新音浪" },
   { example: "音浪文件", desc: "导出 CSV" },
-  { example: "开启日报推送", desc: "管理员开" },
-  { example: "关闭日报推送", desc: "管理员关" },
+  { example: "开启日报推送", desc: "任意用户可开关" },
+  { example: "关闭日报推送", desc: "任意用户可开关" },
   { example: "日报推送状态", desc: "查看开关" },
   { example: "清空对话", desc: "清会话记忆" },
 ];
@@ -140,7 +143,6 @@ type BusyAction =
   | "disconnect"
   | "save"
   | "save-ai"
-  | "save-access"
   | "save-commands"
   | "save-reply"
   | "save-push";
@@ -153,7 +155,7 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
     accountId: input?.accountId ? String(input.accountId) : null,
     autoReplyEnabled: Boolean(input?.autoReplyEnabled),
     autoReplyText: String(input?.autoReplyText ?? DEFAULT_SETTINGS.autoReplyText),
-    accessMode: input?.accessMode === "open" ? "open" : "allowlist",
+    accessMode: "open",
     allowUserIds: Array.isArray(input?.allowUserIds) ? input!.allowUserIds.map(String) : [],
     allowGroupIds: Array.isArray(input?.allowGroupIds) ? input!.allowGroupIds.map(String) : [],
     customCommands: Array.isArray(input?.customCommands)
@@ -168,7 +170,8 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
         }))
       : [],
     ai: {
-      enabled: Boolean(ai.enabled),
+      // 与后端一致：默认开启；仅显式 false 视为关闭，避免保存后被默认值顶回勾选语义混乱
+      enabled: ai.enabled !== false,
       baseUrl: String(ai.baseUrl || DEFAULT_SETTINGS.ai.baseUrl),
       model: String(ai.model || DEFAULT_SETTINGS.ai.model),
       timeoutMs: Number(ai.timeoutMs) || DEFAULT_SETTINGS.ai.timeoutMs,
@@ -191,9 +194,21 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
       : [],
     dailyReportPush: {
       enabled: Boolean(input?.dailyReportPush?.enabled),
+      reminderEnabled:
+        input?.dailyReportPush?.reminderEnabled === undefined
+          ? true
+          : Boolean(input.dailyReportPush.reminderEnabled),
+      lastReminderDate: input?.dailyReportPush?.lastReminderDate ?? null,
       adminUserIds: Array.isArray(input?.dailyReportPush?.adminUserIds)
         ? input!.dailyReportPush!.adminUserIds.map(String)
         : [],
+      adminRemarks:
+        input?.dailyReportPush?.adminRemarks &&
+        typeof input.dailyReportPush.adminRemarks === "object"
+          ? Object.fromEntries(
+              Object.entries(input.dailyReportPush.adminRemarks).map(([k, v]) => [k, String(v ?? "")])
+            )
+          : {},
       recipientUserIds: Array.isArray(input?.dailyReportPush?.recipientUserIds)
         ? input!.dailyReportPush!.recipientUserIds.map(String)
         : [],
@@ -205,7 +220,7 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
   };
 }
 
-export function WeixinBotPage() {
+export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {}) {
   const api = getDataApi();
   const [status, setStatus] = useState<WeixinBotStatus>(EMPTY_STATUS);
   const [settings, setSettings] = useState<WeixinBotSettings>(DEFAULT_SETTINGS);
@@ -214,6 +229,7 @@ export function WeixinBotPage() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [feedback, setFeedback] = useState("");
   const [loading, setLoading] = useState(true);
+  const [settingsTab, setSettingsTab] = useState<"push" | "commands" | "ai">("push");
 
   useEffect(() => {
     if (!api) return;
@@ -239,9 +255,15 @@ export function WeixinBotPage() {
     });
     const removeMessage = api.onWeixinBotMessage(() => {
       if (!active) return;
-      // 入站消息会写入对接列表，刷新 contacts
+      // 入站消息只刷新对接列表，避免整表回写把未保存的勾选/输入顶回去
       void api.getWeixinBotSettings().then((result) => {
-        if (active && result.success) setSettings(normalizeSettings(result.data));
+        if (!active || !result.success) return;
+        const next = normalizeSettings(result.data);
+        setSettings((current) => ({
+          ...current,
+          accountId: next.accountId ?? current.accountId,
+          contacts: next.contacts,
+        }));
       });
     });
 
@@ -347,31 +369,12 @@ export function WeixinBotPage() {
 
   async function handleSaveDailyPush() {
     await saveSettingsPatch("save-push", {
-      dailyReportPush: settings.dailyReportPush,
-    });
-  }
-
-  async function handleToggleDailyAdmin(userId: string, enabled: boolean) {
-    const push = settings.dailyReportPush || DEFAULT_DAILY_PUSH;
-    const adminUserIds = enabled
-      ? [...new Set([...push.adminUserIds, userId])]
-      : push.adminUserIds.filter((id) => id !== userId);
-    const dailyReportPush = { ...push, adminUserIds };
-    setSettings((current) => ({
-      ...current,
       dailyReportPush: {
-        ...(current.dailyReportPush || DEFAULT_DAILY_PUSH),
-        adminUserIds,
+        ...settings.dailyReportPush,
+        // 产品：始终推全部有会话联系人，不再配置对象名单
+        recipientUserIds: [],
+        recipientGroupIds: [],
       },
-    }));
-    await saveSettingsPatch("save-push", { dailyReportPush });
-  }
-
-  async function handleSaveAccess() {
-    await saveSettingsPatch("save-access", {
-      accessMode: settings.accessMode,
-      allowUserIds: settings.allowUserIds,
-      allowGroupIds: settings.allowGroupIds,
     });
   }
 
@@ -439,8 +442,9 @@ export function WeixinBotPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[640px] items-center justify-center">
-        <Loader2 className="size-6 animate-spin text-primary" aria-label="正在读取微信机器人状态" />
+      <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        加载微信机器人…
       </div>
     );
   }
@@ -450,62 +454,107 @@ export function WeixinBotPage() {
 
   return (
     <TooltipProvider>
-      <div className="space-y-4">
-        <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 border-b border-border/70 pb-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#07c160] text-white shadow-sm">
-              <Bot className="size-5" />
-            </div>
-            <div className="min-w-0">
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0">
+            {embedded ? (
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-xl font-semibold">微信机器人</h2>
                 <PhaseBadge phase={status.phase} />
-                {accounts.length > 0 && (
-                  <Badge variant="outline" className="text-[10px]">
-                    {accounts.length} 个账号
+                {status.connected ? (
+                  <Badge variant="secondary" className="gap-1">
+                    <CheckCircle2 className="size-3" />
+                    在线
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="gap-1 text-muted-foreground">
+                    离线
                   </Badge>
                 )}
+                {accounts.length > 0 ? (
+                  <Badge variant="outline" className="text-[10px]">
+                    {accounts.length} 账号
+                  </Badge>
+                ) : null}
+                {status.statusText ? (
+                  <span className="text-xs text-muted-foreground">{status.statusText}</span>
+                ) : null}
               </div>
-              <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                {status.statusText}
-                {" · 支持多账号并行 · 一点生成二维码"}
-              </p>
-            </div>
+            ) : (
+              <>
+                <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold tracking-tight">
+                  <span className="flex size-8 items-center justify-center rounded-lg bg-[#07c160] text-white shadow-sm">
+                    <Bot className="size-4" />
+                  </span>
+                  微信机器人
+                  <PhaseBadge phase={status.phase} />
+                  {status.connected ? (
+                    <Badge variant="secondary" className="gap-1">
+                      <CheckCircle2 className="size-3" />
+                      在线
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="gap-1 text-muted-foreground">
+                      离线
+                    </Badge>
+                  )}
+                  {accounts.length > 0 ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {accounts.length} 账号
+                    </Badge>
+                  ) : null}
+                </h1>
+                <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+                  官方 iLink 通道 · 任意用户扫码即可用 · 业务与 QQ 共用 Agent / 技能 / 日报。
+                  {status.statusText ? ` ${status.statusText}` : ""}
+                </p>
+              </>
+            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {loginActive ? (
               <Button size="sm" variant="outline" onClick={handleCancelLogin} disabled={busyAction !== null}>
-                {busyAction === "cancel" ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {busyAction === "cancel" ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : null}
                 取消扫码
               </Button>
             ) : (
-              <Button size="sm" onClick={handleLogin} disabled={!status.available || busyAction !== null}>
-                {busyAction === "login" ? <Loader2 className="size-3.5 animate-spin" /> : <QrCode className="size-3.5" />}
+              <Button
+                size="sm"
+                className="bg-[#07c160] text-white hover:bg-[#06ad56]"
+                onClick={handleLogin}
+                disabled={!status.available || busyAction !== null}
+              >
+                {busyAction === "login" ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : (
+                  <QrCode className="mr-1 size-3.5" />
+                )}
                 扫码连接
               </Button>
             )}
             {status.monitoring ? (
-              <IconAction
-                label="暂停全部"
-                icon={busyAction === "stop" ? Loader2 : CirclePause}
-                loading={busyAction === "stop"}
-                onClick={() => handleStop()}
-                disabled={busyAction !== null}
-              />
+              <Button size="sm" variant="outline" disabled={busyAction !== null} onClick={() => handleStop()}>
+                {busyAction === "stop" ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : (
+                  <CirclePause className="mr-1 size-3.5" />
+                )}
+                暂停全部
+              </Button>
             ) : status.connected ? (
-              <IconAction
-                label="启动全部"
-                icon={busyAction === "start" ? Loader2 : CirclePlay}
-                loading={busyAction === "start"}
-                onClick={() => handleStart()}
-                disabled={busyAction !== null}
-              />
+              <Button size="sm" variant="outline" disabled={busyAction !== null} onClick={() => handleStart()}>
+                {busyAction === "start" ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : (
+                  <CirclePlay className="mr-1 size-3.5" />
+                )}
+                启动全部
+              </Button>
             ) : null}
-            {status.connected && (
+            {status.connected ? (
               confirmAction?.kind === "disconnect" ? (
-                <div className="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/8 px-2 py-1">
-                  <span className="text-xs text-red-700 dark:text-red-300">确认断开当前/全部凭据？</span>
+                <div className="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 dark:border-rose-900 dark:bg-rose-950/40">
+                  <span className="text-xs text-rose-700 dark:text-rose-200">确认断开？</span>
                   <Button
                     size="sm"
                     variant="destructive"
@@ -519,25 +568,27 @@ export function WeixinBotPage() {
                   </Button>
                 </div>
               ) : (
-                <IconAction
-                  label="断开当前账号"
-                  icon={LogOut}
+                <Button
+                  size="sm"
                   variant="outline"
-                  onClick={() => handleDisconnect(status.accountId || undefined)}
                   disabled={busyAction !== null}
-                />
+                  onClick={() => handleDisconnect(status.accountId || undefined)}
+                >
+                  <LogOut className="mr-1 size-3.5" />
+                  断开
+                </Button>
               )
-            )}
+            ) : null}
           </div>
-        </header>
+        </div>
 
         {(feedback || status.error) && (
-          <div className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+          <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
             <span className="min-w-0 flex-1 break-words">{feedback || status.error}</span>
             <button
               type="button"
-              className="shrink-0 rounded p-0.5 hover:bg-red-500/10"
+              className="shrink-0 rounded p-0.5 hover:bg-rose-500/10"
               onClick={() => {
                 setFeedback("");
                 setStatus((current) => ({ ...current, error: null }));
@@ -559,59 +610,95 @@ export function WeixinBotPage() {
         )}
 
         <StatusStrip status={status} />
-        <div className="grid gap-4 lg:grid-cols-[minmax(320px,1fr)_minmax(300px,0.9fr)]">
+
+        {/* 左：账号会话；右：推送 / 命令 / AI 用 Tab 切换，避免三组叠高 */}
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <UserListPanel
             accounts={accounts}
             contacts={contacts}
             activeAccountId={status.accountId}
-            adminUserIds={settings.dailyReportPush?.adminUserIds || []}
             busy={busyAction !== null}
             onSelectAccount={handleSelectAccount}
             onStartAccount={(id) => handleStart(id)}
             onStopAccount={(id) => handleStop(id)}
             onDisconnectAccount={(id) => handleDisconnect(id)}
-            onToggleDailyAdmin={handleToggleDailyAdmin}
           />
 
-          <div className="flex min-h-[560px] flex-col gap-3">
-            <CommandGuide />
-            <AccessControlPanel
-              accountId={status.accountId}
-              settings={settings}
-              busy={busyAction === "save-access"}
-              onChange={setSettings}
-              onSave={handleSaveAccess}
-            />
-            <DailyReportPushPanel
-              settings={settings}
-              busy={busyAction === "save-push"}
-              onChange={setSettings}
-              onSave={handleSaveDailyPush}
-            />
-            <CustomCommandsPanel
-              commands={settings.customCommands}
-              busy={busyAction === "save-commands"}
-              onAdd={addCustomCommand}
-              onChange={updateCustomCommand}
-              onRemove={removeCustomCommand}
-              onSave={handleSaveCommands}
-            />
-            <AiSettingsPanel
-              settings={settings}
-              apiKeyDraft={apiKeyDraft}
-              busy={busyAction === "save-ai"}
-              onSettingsChange={setSettings}
-              onApiKeyChange={setApiKeyDraft}
-              onSave={handleSaveAi}
-              onClearKey={handleClearApiKey}
-            />
-            <AutoReplySettings
-              settings={settings}
-              busy={busyAction === "save-reply"}
-              onChange={setSettings}
-              onSave={handleSaveAutoReply}
-            />
-          </div>
+          <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+            <div className="flex flex-wrap gap-1 border-b p-1.5">
+              {(
+                [
+                  { id: "push" as const, label: "推送提醒", icon: MessageCircle },
+                  { id: "commands" as const, label: "命令能力", icon: HelpCircle },
+                  { id: "ai" as const, label: "智能兜底", icon: Sparkles },
+                ] as const
+              ).map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSettingsTab(id)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    settingsTab === id
+                      ? "bg-[#07c160]/15 text-[#078b43] dark:text-[#48df8a]"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  <Icon className="size-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="max-h-[min(70vh,720px)] space-y-3 overflow-y-auto p-3">
+              {settingsTab === "push" ? (
+                <DailyReportPushPanel
+                  settings={settings}
+                  busy={busyAction === "save-push"}
+                  onChange={setSettings}
+                  onSave={handleSaveDailyPush}
+                  bare
+                />
+              ) : null}
+
+              {settingsTab === "commands" ? (
+                <>
+                  <CommandGuide />
+                  <CustomCommandsPanel
+                    commands={settings.customCommands}
+                    busy={busyAction === "save-commands"}
+                    onAdd={addCustomCommand}
+                    onChange={updateCustomCommand}
+                    onRemove={removeCustomCommand}
+                    onSave={handleSaveCommands}
+                    bare
+                  />
+                </>
+              ) : null}
+
+              {settingsTab === "ai" ? (
+                <>
+                  <AiSettingsPanel
+                    settings={settings}
+                    apiKeyDraft={apiKeyDraft}
+                    busy={busyAction === "save-ai"}
+                    onSettingsChange={setSettings}
+                    onApiKeyChange={setApiKeyDraft}
+                    onSave={handleSaveAi}
+                    onClearKey={handleClearApiKey}
+                    bare
+                  />
+                  <AutoReplySettings
+                    settings={settings}
+                    busy={busyAction === "save-reply"}
+                    onChange={setSettings}
+                    onSave={handleSaveAutoReply}
+                    bare
+                  />
+                </>
+              ) : null}
+            </div>
+          </section>
         </div>
       </div>
     </TooltipProvider>
@@ -622,83 +709,38 @@ function UserListPanel({
   accounts,
   contacts,
   activeAccountId,
-  adminUserIds,
   busy,
   onSelectAccount,
   onStartAccount,
   onStopAccount,
   onDisconnectAccount,
-  onToggleDailyAdmin,
 }: {
   accounts: WeixinBotAccountSummary[];
   contacts: WeixinBotContact[];
   activeAccountId: string | null;
-  adminUserIds: string[];
   busy: boolean;
   onSelectAccount: (id: string) => void;
   onStartAccount: (id: string) => void;
   onStopAccount: (id: string) => void;
   onDisconnectAccount: (id: string) => void;
-  onToggleDailyAdmin: (userId: string, enabled: boolean) => void | Promise<void>;
 }) {
-  const menuRef = useRef<HTMLDivElement>(null);
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    contact: WeixinBotContact;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!contextMenu) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setContextMenu(null);
-    };
-    const onScroll = () => setContextMenu(null);
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", onScroll, true);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", onScroll, true);
-    };
-  }, [contextMenu]);
-
-  const openContactMenu = (event: ReactMouseEvent, contact: WeixinBotContact) => {
-    if (contact.kind !== "user") return;
-    event.preventDefault();
-    setContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      contact,
-    });
-  };
-
-  const isAdmin = (id: string) => adminUserIds.includes(id);
-
   return (
-    <section className="relative flex min-h-[560px] flex-col overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border/70 px-3 text-sm font-semibold">
-        <UsersRound className="size-4 text-[#07c160]" />
-        用户列表
-        <span className="text-xs font-normal text-muted-foreground">
+    <section className="relative flex max-h-[min(70vh,720px)] flex-col overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-4 text-[11px] text-muted-foreground">
+        <UsersRound className="size-3.5 text-[#07c160]" />
+        <span className="font-medium text-foreground">账号与会话</span>
+        <span className="text-muted-foreground/80">
           {accounts.length} 账号 · {contacts.length} 对接
         </span>
+        <span className="ml-auto hidden sm:inline">点账号切换视图</span>
       </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
-        <div className="space-y-1">
-          <div className="px-1 text-[10px] font-semibold tracking-wide text-muted-foreground">
-            微信账号
-          </div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        <div className="space-y-1.5">
+          <div className="px-1 text-[11px] font-medium text-muted-foreground">微信账号</div>
           {accounts.length === 0 ? (
-            <p className="px-1 py-3 text-[11px] text-muted-foreground">
-              点右上角「扫码连接」添加，可并行多个。
-            </p>
+            <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-6 text-center text-xs text-muted-foreground">
+              点右上「扫码连接」添加账号，可多账号并行
+            </div>
           ) : (
             accounts.map((account) => {
               const active = activeAccountId === account.accountId;
@@ -706,15 +748,23 @@ function UserListPanel({
                 <div
                   key={account.accountId}
                   className={cn(
-                    "rounded-lg border px-2.5 py-2",
-                    active ? "border-[#07c160]/35 bg-[#07c160]/10" : "border-border/50"
+                    "rounded-lg border px-3 py-2.5 transition-colors",
+                    active
+                      ? "border-[#07c160]/40 bg-[#07c160]/10"
+                      : "border-border/60 bg-background/40 hover:border-border"
                   )}
                 >
                   <button type="button" className="w-full text-left" onClick={() => onSelectAccount(account.accountId)}>
                     <div className="flex items-center gap-1.5 text-sm font-medium">
                       <Bot className="size-3.5 shrink-0 text-[#07c160]" />
                       <span className="truncate">{compactId(account.accountId)}</span>
-                      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "h-5 px-1.5 text-[10px]",
+                          account.monitoring && "border-[#07c160]/30 bg-[#07c160]/10 text-[#078b43]"
+                        )}
+                      >
                         {PHASE_LABEL[account.phase] || account.phase}
                       </Badge>
                     </div>
@@ -723,17 +773,17 @@ function UserListPanel({
                       {account.lastPollAt ? ` · ${formatRelative(account.lastPollAt)}` : ""}
                     </div>
                   </button>
-                  <div className="mt-1.5 flex items-center gap-1">
+                  <div className="mt-2 flex items-center gap-1">
                     {account.monitoring ? (
-                      <Button size="sm" variant="ghost" disabled={busy} onClick={() => onStopAccount(account.accountId)}>
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => onStopAccount(account.accountId)}>
                         暂停
                       </Button>
                     ) : (
-                      <Button size="sm" variant="ghost" disabled={busy} onClick={() => onStartAccount(account.accountId)}>
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => onStartAccount(account.accountId)}>
                         启动
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDisconnectAccount(account.accountId)}>
+                    <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" disabled={busy} onClick={() => onDisconnectAccount(account.accountId)}>
                       断开
                     </Button>
                   </div>
@@ -743,106 +793,55 @@ function UserListPanel({
           )}
         </div>
 
-        <div className="space-y-1 border-t border-border/60 pt-2">
-          <div className="px-1 text-[10px] font-semibold tracking-wide text-muted-foreground">
-            对接会话
-            <span className="ml-1 font-normal">右键用户可设管理员</span>
-          </div>
+        <div className="space-y-1.5 border-t pt-3">
+          <div className="px-1 text-[11px] font-medium text-muted-foreground">对接会话</div>
           {contacts.length === 0 ? (
-            <p className="px-1 py-3 text-[11px] text-muted-foreground">
-              有人给机器人发消息后会出现在此；重启仍保留。
-            </p>
+            <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-6 text-center text-xs text-muted-foreground">
+              有人给机器人发消息后会出现在此；重启仍保留
+            </div>
           ) : (
-            contacts.map((contact) => {
-              const admin = contact.kind === "user" && isAdmin(contact.id);
-              return (
+            contacts.map((contact) => (
+              <div
+                key={`${contact.accountId}:${contact.id}`}
+                className="flex items-start gap-2.5 rounded-lg border border-transparent px-2.5 py-2 transition-colors hover:border-border/70 hover:bg-muted/30"
+              >
                 <div
-                  key={`${contact.accountId}:${contact.id}`}
                   className={cn(
-                    "flex items-start gap-2 rounded-lg border px-2.5 py-2",
-                    admin
-                      ? "border-[#07c160]/30 bg-[#07c160]/8"
-                      : "border-transparent hover:border-border/70 hover:bg-muted/40",
-                    contact.kind === "user" ? "cursor-context-menu" : ""
+                    "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md",
+                    contact.kind === "group" ? "bg-sky-500/10 text-sky-600" : "bg-[#07c160]/10 text-[#07c160]"
                   )}
-                  onContextMenu={(event) => openContactMenu(event, contact)}
-                  title={contact.kind === "user" ? "右键设置日报管理员" : undefined}
                 >
-                  <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-muted/60">
-                    {contact.kind === "group" ? (
-                      <UsersRound className="size-3.5 text-muted-foreground" />
-                    ) : (
-                      <UserRound className="size-3.5 text-muted-foreground" />
-                    )}
+                  {contact.kind === "group" ? (
+                    <UsersRound className="size-3.5" />
+                  ) : (
+                    <UserRound className="size-3.5" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-medium">{contactTitle(contact)}</span>
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                      {contact.kind === "group" ? "群" : "用户"}
+                    </Badge>
+                    {contact.hasContext ? (
+                      <span className="text-[10px] text-emerald-600">可推</span>
+                    ) : null}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium">{contactTitle(contact)}</span>
-                      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-                        {contact.kind === "group" ? "群" : "用户"}
-                      </Badge>
-                      {admin ? (
-                        <Badge className="h-5 border-transparent bg-[#07c160]/15 px-1.5 text-[10px] text-[#07c160]">
-                          管理员
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                      {contact.lastContent || "暂无预览"}
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">
-                      {formatRelative(contact.lastSeenAt || null)}
-                    </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {contact.lastContent || "暂无预览"}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    {formatRelative(contact.lastSeenAt || null)}
                   </div>
                 </div>
-              );
-            })
+              </div>
+            ))
           )}
         </div>
       </div>
-      <div className="border-t border-border/70 px-3 py-2 text-[10px] leading-4 text-muted-foreground">
-        账号、对接与权限按当前微信账号统一管理。用户右键可设/取消日报管理员。
+      <div className="border-t px-4 py-2 text-[11px] leading-5 text-muted-foreground">
+        开放访问 · 任意用户/群可用 · 会话列表跟当前选中账号走
       </div>
-
-      {contextMenu ? (
-        <div
-          ref={menuRef}
-          className="fixed z-50 min-w-40 overflow-hidden rounded-md border border-border/70 bg-popover p-1 text-popover-foreground shadow-md"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          role="menu"
-        >
-          <div className="px-2 py-1.5 text-[10px] text-muted-foreground">
-            {compactId(contextMenu.contact.id)}
-          </div>
-          {isAdmin(contextMenu.contact.id) ? (
-            <button
-              type="button"
-              role="menuitem"
-              className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-              disabled={busy}
-              onClick={() => {
-                void onToggleDailyAdmin(contextMenu.contact.id, false);
-                setContextMenu(null);
-              }}
-            >
-              取消日报管理员
-            </button>
-          ) : (
-            <button
-              type="button"
-              role="menuitem"
-              className="flex w-full items-center rounded-sm px-2 py-1.5 text-left text-xs hover:bg-muted"
-              disabled={busy}
-              onClick={() => {
-                void onToggleDailyAdmin(contextMenu.contact.id, true);
-                setContextMenu(null);
-              }}
-            >
-              设为日报管理员
-            </button>
-          )}
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -860,27 +859,27 @@ function QrLoginBanner({
 }) {
   const loginActive = ["connecting", "awaiting_scan", "scanned"].includes(status.phase);
   return (
-    <section className="flex flex-wrap items-center gap-4 rounded-lg border border-[#07c160]/25 bg-[#07c160]/6 p-3">
+    <section className="flex flex-wrap items-center gap-4 rounded-xl border border-[#07c160]/25 bg-[#07c160]/8 p-4 shadow-sm">
       {status.qrDataUrl ? (
-        <div className="overflow-hidden rounded-lg border border-border/70 bg-white p-2">
+        <div className="overflow-hidden rounded-xl border bg-white p-2 shadow-sm">
           <Image
             src={status.qrDataUrl}
             alt="微信登录二维码"
-            width={120}
-            height={120}
+            width={128}
+            height={128}
             unoptimized
-            className="size-30"
+            className="size-32"
           />
         </div>
       ) : (
-        <div className="flex size-30 items-center justify-center rounded-lg border border-dashed border-border/70">
+        <div className="flex size-32 items-center justify-center rounded-xl border border-dashed bg-background/60">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       )}
       <div className="min-w-0 flex-1 space-y-2">
         <div className="text-sm font-semibold">{status.statusText || "扫码连接微信"}</div>
-        <p className="text-xs text-muted-foreground">
-          一点生成二维码；已有账号继续运行。
+        <p className="text-xs leading-5 text-muted-foreground">
+          用微信扫码登录 iLink。已有账号继续运行，可并行多个。
           {status.qrExpiresAt ? ` 有效至 ${formatClock(status.qrExpiresAt)}` : ""}
         </p>
         <div className="flex flex-wrap gap-2">
@@ -889,7 +888,7 @@ function QrLoginBanner({
               取消扫码
             </Button>
           ) : (
-            <Button size="sm" onClick={onLogin} disabled={busyAction !== null}>
+            <Button size="sm" className="bg-[#07c160] text-white hover:bg-[#06ad56]" onClick={onLogin} disabled={busyAction !== null}>
               刷新二维码
             </Button>
           )}
@@ -901,123 +900,22 @@ function QrLoginBanner({
 
 function CommandGuide() {
   return (
-    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-9 items-center gap-2 border-b border-border/70 px-3">
-        <HelpCircle className="size-3.5 text-[#07c160]" />
-        <span className="text-sm font-semibold">命令菜单</span>
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-xs font-semibold">内置指令速查</span>
+        <span className="ml-auto text-[10px] text-muted-foreground">任意用户 · 与 QQ 共用</span>
       </div>
-      <div className="grid grid-cols-2 gap-1 p-2">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
         {COMMAND_HINTS.map((item) => (
           <div
             key={item.example}
-            className="rounded-md border border-border/50 bg-background/40 px-2 py-1.5"
+            className="rounded-lg border bg-muted/20 px-2.5 py-1.5"
           >
             <div className="truncate text-[11px] font-medium">{item.example}</div>
             <div className="truncate text-[10px] text-muted-foreground">{item.desc}</div>
           </div>
         ))}
       </div>
-    </aside>
-  );
-}
-
-
-function parseManualIds(raw: string): string[] {
-  return [
-    ...new Set(
-      String(raw || "")
-        .split(/[\s,，;；|、]+/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    ),
-  ];
-}
-
-function ManualIdChips({
-  ids,
-  knownIds,
-  emptyText,
-  onRemove,
-}: {
-  ids: string[];
-  knownIds?: Set<string>;
-  emptyText: string;
-  onRemove: (id: string) => void;
-}) {
-  if (ids.length === 0) {
-    return <p className="px-1 py-1 text-[11px] text-muted-foreground">{emptyText}</p>;
-  }
-  return (
-    <div className="flex flex-wrap gap-1">
-      {ids.map((id) => {
-        const known = knownIds ? knownIds.has(id) : true;
-        return (
-          <span
-            key={id}
-            className={cn(
-              "inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px]",
-              known
-                ? "border-border/60 bg-background/70 text-foreground"
-                : "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
-            )}
-            title={known ? id : `${id}（未出现在联系人，仍可保存）`}
-          >
-            <span className="truncate">{compactId(id)}</span>
-            {!known ? <span className="shrink-0 text-[9px] opacity-80">手录</span> : null}
-            <button
-              type="button"
-              className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              onClick={() => onRemove(id)}
-              aria-label={`移除 ${id}`}
-            >
-              <X className="size-3" />
-            </button>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function ManualIdEntry({
-  draft,
-  onDraftChange,
-  onAdd,
-  placeholder,
-  disabled,
-}: {
-  draft: string;
-  onDraftChange: (value: string) => void;
-  onAdd: () => void;
-  placeholder: string;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <input
-        value={draft}
-        onChange={(event) => onDraftChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            onAdd();
-          }
-        }}
-        placeholder={placeholder}
-        disabled={disabled}
-        className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-[11px] outline-none focus:border-ring disabled:opacity-60"
-      />
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="h-8 shrink-0 px-2 text-[11px]"
-        onClick={onAdd}
-        disabled={disabled || !draft.trim()}
-      >
-        <Plus className="mr-1 size-3" />
-        添加
-      </Button>
     </div>
   );
 }
@@ -1027,16 +925,15 @@ function DailyReportPushPanel({
   busy,
   onChange,
   onSave,
+  bare = false,
 }: {
   settings: WeixinBotSettings;
   busy: boolean;
   onChange: (settings: WeixinBotSettings) => void;
   onSave: () => void;
+  bare?: boolean;
 }) {
   const push = settings.dailyReportPush || DEFAULT_DAILY_PUSH;
-  const [adminDraft, setAdminDraft] = useState("");
-  const [recipientUserDraft, setRecipientUserDraft] = useState("");
-  const [recipientGroupDraft, setRecipientGroupDraft] = useState("");
 
   const updatePush = (patch: Partial<WeixinBotDailyReportPushSettings>) => {
     onChange({
@@ -1045,62 +942,29 @@ function DailyReportPushPanel({
     });
   };
 
-  const mergeIds = (list: string[], extra: string[]) => [...new Set([...list, ...extra])];
-  const toggleId = (
-    list: string[],
-    id: string,
-    enabled: boolean
-  ) => (enabled ? [...new Set([...list, id])] : list.filter((item) => item !== id));
-
-  const users = settings.contacts.filter((c) => c.kind === "user");
-  const groups = settings.contacts.filter((c) => c.kind === "group");
-  const knownUserIds = new Set(users.map((c) => c.id));
-  const knownGroupIds = new Set(groups.map((c) => c.id));
-
-  const addAdminIds = () => {
-    const ids = parseManualIds(adminDraft);
-    if (!ids.length) return;
-    updatePush({ adminUserIds: mergeIds(push.adminUserIds, ids) });
-    setAdminDraft("");
-  };
-
-  const addRecipientUserIds = () => {
-    const ids = parseManualIds(recipientUserDraft);
-    if (!ids.length) return;
-    updatePush({ recipientUserIds: mergeIds(push.recipientUserIds, ids) });
-    setRecipientUserDraft("");
-  };
-
-  const addRecipientGroupIds = () => {
-    const ids = parseManualIds(recipientGroupDraft);
-    if (!ids.length) return;
-    updatePush({ recipientGroupIds: mergeIds(push.recipientGroupIds, ids) });
-    setRecipientGroupDraft("");
-  };
-
   return (
-    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <MessageCircle className="size-3.5 text-[#07c160]" />
-          <span>日报自动推送</span>
+    <div className={cn(!bare && "overflow-hidden rounded-xl border bg-card shadow-sm")}>
+      <div className={cn("flex h-9 items-center justify-between", bare ? "px-0.5" : "border-b px-3")}>
+        <div className="text-xs font-semibold">日报自动推送</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-muted-foreground">改完点保存</span>
+          <IconAction
+            label="保存日报推送"
+            icon={busy ? Loader2 : Save}
+            loading={busy}
+            variant="ghost"
+            size="icon-sm"
+            onClick={onSave}
+            disabled={busy}
+          />
         </div>
-        <IconAction
-          label="保存日报推送"
-          icon={busy ? Loader2 : Save}
-          loading={busy}
-          variant="ghost"
-          size="icon-sm"
-          onClick={onSave}
-          disabled={busy}
-        />
       </div>
-      <div className="space-y-3 p-2.5 text-xs">
-        <label className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2.5 py-2">
+      <div className={cn("space-y-3 text-xs", bare ? "pt-1" : "p-3")}>
+        <label className="flex items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2.5">
           <div>
             <div className="font-medium text-foreground">音浪更新后自动发送</div>
             <div className="text-[10px] text-muted-foreground">
-              推送前三文案 + 男女报告图；指令：开启/关闭日报推送
+              推送给全部有会话联系人（前三文案 + 男女报告图）
             </div>
           </div>
           <input
@@ -1111,243 +975,33 @@ function DailyReportPushPanel({
           />
         </label>
 
-        <div className="space-y-1.5">
-          <div className="font-medium text-foreground">管理员（可指令开关）</div>
-          <ManualIdEntry
-            draft={adminDraft}
-            onDraftChange={setAdminDraft}
-            onAdd={addAdminIds}
-            placeholder="手动录入用户 ID，支持逗号/空格批量"
-            disabled={busy}
+        <label className="flex items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2.5">
+          <div>
+            <div className="font-medium text-foreground">午夜提醒</div>
+            <div className="text-[10px] text-muted-foreground">
+              每天过 0 点后给所有对接用户发「请发送音浪文件即可」
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            className="size-4 accent-[#07c160]"
+            checked={Boolean(push.reminderEnabled)}
+            onChange={(event) => updatePush({ reminderEnabled: event.target.checked })}
           />
-          <div className="rounded-md border border-border/50 p-1.5">
-            <ManualIdChips
-              ids={push.adminUserIds}
-              knownIds={knownUserIds}
-              emptyText="尚未设置管理员，可勾选联系人或手动录入 ID"
-              onRemove={(id) =>
-                updatePush({ adminUserIds: push.adminUserIds.filter((item) => item !== id) })
-              }
-            />
-          </div>
-          <div className="max-h-28 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
-            {users.length === 0 ? (
-              <p className="px-1 py-1 text-[11px] text-muted-foreground">
-                暂无联系人。可先手动录入用户 ID，或让对方给机器人发一条消息。
-              </p>
-            ) : (
-              users.map((contact) => {
-                const checked = push.adminUserIds.includes(contact.id);
-                return (
-                  <label key={`admin-${contact.id}`} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted/40">
-                    <input
-                      type="checkbox"
-                      className="size-3.5 accent-[#07c160]"
-                      checked={checked}
-                      onChange={(event) =>
-                        updatePush({
-                          adminUserIds: toggleId(push.adminUserIds, contact.id, event.target.checked),
-                        })
-                      }
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{compactId(contact.id)}</span>
-                    {contact.hasContext ? (
-                      <span className="text-[10px] text-emerald-600">可推</span>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">无会话</span>
-                    )}
-                  </label>
-                );
-              })
-            )}
-          </div>
-        </div>
+        </label>
 
-        <div className="space-y-1.5">
-          <div className="font-medium text-foreground">推送对象（空=名单内有会话的用户/群）</div>
-          <ManualIdEntry
-            draft={recipientUserDraft}
-            onDraftChange={setRecipientUserDraft}
-            onAdd={addRecipientUserIds}
-            placeholder="手动录入推送用户 ID"
-            disabled={busy}
-          />
-          <ManualIdEntry
-            draft={recipientGroupDraft}
-            onDraftChange={setRecipientGroupDraft}
-            onAdd={addRecipientGroupIds}
-            placeholder="手动录入推送群 ID"
-            disabled={busy}
-          />
-          <div className="rounded-md border border-border/50 p-1.5">
-            <div className="mb-1 text-[10px] text-muted-foreground">已选用户</div>
-            <ManualIdChips
-              ids={push.recipientUserIds}
-              knownIds={knownUserIds}
-              emptyText="未指定用户"
-              onRemove={(id) =>
-                updatePush({
-                  recipientUserIds: push.recipientUserIds.filter((item) => item !== id),
-                })
-              }
-            />
-            <div className="mb-1 mt-2 text-[10px] text-muted-foreground">已选群</div>
-            <ManualIdChips
-              ids={push.recipientGroupIds}
-              knownIds={knownGroupIds}
-              emptyText="未指定群"
-              onRemove={(id) =>
-                updatePush({
-                  recipientGroupIds: push.recipientGroupIds.filter((item) => item !== id),
-                })
-              }
-            />
-          </div>
-          <div className="max-h-36 space-y-1 overflow-y-auto rounded-md border border-border/50 p-1.5">
-            {settings.contacts.length === 0 ? (
-              <p className="px-1 py-1 text-[11px] text-muted-foreground">
-                暂无对接联系人，仍可手动录入上方用户/群 ID。
-              </p>
-            ) : (
-              settings.contacts.map((contact) => {
-                const listKey = contact.kind === "group" ? "recipientGroupIds" : "recipientUserIds";
-                const list = contact.kind === "group" ? push.recipientGroupIds : push.recipientUserIds;
-                const checked = list.includes(contact.id);
-                return (
-                  <label key={`recv-${contact.kind}-${contact.id}`} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted/40">
-                    <input
-                      type="checkbox"
-                      className="size-3.5 accent-[#07c160]"
-                      checked={checked}
-                      onChange={(event) =>
-                        updatePush({
-                          [listKey]: toggleId(list, contact.id, event.target.checked),
-                        })
-                      }
-                    />
-                    <span className="text-[10px] text-muted-foreground">{contact.kind === "group" ? "群" : "人"}</span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{compactId(contact.id)}</span>
-                    {contact.hasContext ? (
-                      <span className="text-[10px] text-emerald-600">可推</span>
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">无会话</span>
-                    )}
-                  </label>
-                );
-              })
-            )}
-          </div>
-          <p className="text-[10px] text-muted-foreground">
-            支持手动录入尚未出现在联系人里的 ID；未指定推送对象时，默认推送给允许名单内且近期有对话的联系人。
-          </p>
-        </div>
+        <p className="text-[10px] leading-5 text-muted-foreground">
+          任意用户可在聊天里发送「开启/关闭日报推送」切换开关。
+        </p>
 
         {push.lastPush?.at ? (
-          <div className="rounded-md border border-border/50 bg-muted/20 px-2 py-1.5 text-[10px] text-muted-foreground">
+          <div className="rounded-lg border bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
             上次：{push.lastPush.date || "—"} · 成功 {push.lastPush.ok || 0} / 失败 {push.lastPush.fail || 0}
             {push.lastPush.skipped ? `（${push.lastPush.skipped}）` : ""} · {formatClock(push.lastPush.at)}
           </div>
         ) : null}
       </div>
-    </aside>
-  );
-}
-
-function AccessControlPanel({
-  accountId,
-  settings,
-  busy,
-  onChange,
-  onSave,
-}: {
-  accountId: string | null;
-  settings: WeixinBotSettings;
-  busy: boolean;
-  onChange: (settings: WeixinBotSettings) => void;
-  onSave: () => void;
-}) {
-  const setContactAllowed = (contact: WeixinBotContact, allowed: boolean) => {
-    const key = contact.kind === "group" ? "allowGroupIds" : "allowUserIds";
-    const current = settings[key];
-    const next = allowed
-      ? [...new Set([...current, contact.id])]
-      : current.filter((id) => id !== contact.id);
-    onChange({ ...settings, [key]: next });
-  };
-
-  return (
-    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-          <Settings2 className="size-3.5 text-[#07c160]" />
-          <span>账号权限</span>
-          <span className="truncate text-[10px] font-normal text-muted-foreground">
-            {accountId ? compactId(accountId) : "未选择"}
-          </span>
-        </div>
-        <IconAction
-          label="保存账号权限"
-          icon={busy ? Loader2 : Save}
-          loading={busy}
-          variant="ghost"
-          size="icon-sm"
-          onClick={onSave}
-          disabled={busy || !accountId}
-        />
-      </div>
-      <div className="space-y-2.5 p-2.5">
-        <div className="grid grid-cols-2 rounded-md border border-border/70 bg-muted/30 p-0.5">
-          {(["allowlist", "open"] as const).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={cn(
-                "h-7 rounded px-2 text-xs transition",
-                settings.accessMode === mode
-                  ? "bg-background font-medium text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-              onClick={() => onChange({ ...settings, accessMode: mode })}
-            >
-              {mode === "allowlist" ? "名单模式" : "开放读取"}
-            </button>
-          ))}
-        </div>
-        <div className="max-h-40 space-y-1 overflow-y-auto">
-          {settings.contacts.length === 0 ? (
-            <p className="px-1 py-2 text-[11px] text-muted-foreground">暂无对接用户或群聊</p>
-          ) : (
-            settings.contacts.map((contact) => {
-              const allowed = contact.kind === "group"
-                ? settings.allowGroupIds.includes(contact.id)
-                : settings.allowUserIds.includes(contact.id);
-              return (
-                <label
-                  key={`${contact.accountId}:${contact.id}`}
-                  className="flex cursor-pointer items-center gap-2 rounded-md border border-border/50 px-2 py-1.5 text-xs hover:bg-muted/40"
-                >
-                  <input
-                    type="checkbox"
-                    checked={allowed}
-                    onChange={(event) => setContactAllowed(contact, event.target.checked)}
-                    className="size-3.5 accent-[#07c160]"
-                  />
-                  {contact.kind === "group" ? (
-                    <UsersRound className="size-3.5 text-muted-foreground" />
-                  ) : (
-                    <UserRound className="size-3.5 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 flex-1 truncate">{contactTitle(contact)}</span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {contact.kind === "group" ? "读取" : "读取/导入"}
-                  </span>
-                </label>
-              );
-            })
-          )}
-        </div>
-      </div>
-    </aside>
+    </div>
   );
 }
 
@@ -1358,6 +1012,7 @@ function CustomCommandsPanel({
   onChange,
   onRemove,
   onSave,
+  bare = false,
 }: {
   commands: WeixinBotCustomCommand[];
   busy: boolean;
@@ -1365,13 +1020,14 @@ function CustomCommandsPanel({
   onChange: (id: string, patch: Partial<WeixinBotCustomCommand>) => void;
   onRemove: (id: string) => void;
   onSave: () => void;
+  bare?: boolean;
 }) {
   return (
-    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <Settings2 className="size-3.5 text-[#07c160]" />
-          自定义命令
+    <div className={cn(!bare && "overflow-hidden rounded-xl border bg-card shadow-sm")}>
+      <div className={cn("flex h-9 items-center justify-between", bare ? "px-0.5" : "border-b px-3")}>
+        <div className="flex items-center gap-2">
+          <Settings2 className="size-3.5 text-muted-foreground" />
+          <span className="text-xs font-semibold">自定义触发词</span>
         </div>
         <div className="flex items-center gap-1">
           <IconAction label="新增命令" icon={Plus} variant="ghost" size="icon-sm" onClick={onAdd} disabled={busy} />
@@ -1386,14 +1042,14 @@ function CustomCommandsPanel({
           />
         </div>
       </div>
-      <div className="max-h-56 space-y-2 overflow-y-auto p-2.5">
+      <div className={cn("max-h-48 space-y-2 overflow-y-auto", bare ? "pt-1" : "p-3")}>
         {commands.length === 0 ? (
-          <p className="px-1 py-3 text-center text-[11px] text-muted-foreground">
+          <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-5 text-center text-[11px] text-muted-foreground">
             还没有自定义命令。点 + 添加触发词。
-          </p>
+          </div>
         ) : (
           commands.map((command) => (
-            <div key={command.id} className="space-y-1.5 rounded-lg border border-border/60 p-2">
+            <div key={command.id} className="space-y-1.5 rounded-lg border bg-muted/10 p-2.5">
               <div className="flex items-center gap-2">
                 <input
                   value={command.trigger}
@@ -1444,7 +1100,7 @@ function CustomCommandsPanel({
           ))
         )}
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -1456,6 +1112,7 @@ function AiSettingsPanel({
   onApiKeyChange,
   onSave,
   onClearKey,
+  bare = false,
 }: {
   settings: WeixinBotSettings;
   apiKeyDraft: string;
@@ -1464,14 +1121,16 @@ function AiSettingsPanel({
   onApiKeyChange: (value: string) => void;
   onSave: () => void;
   onClearKey: () => void;
+  bare?: boolean;
 }) {
   const ai = settings.ai;
   return (
-    <aside className="overflow-hidden rounded-lg border border-border/70 bg-card/70">
-      <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <Sparkles className="size-3.5 text-[#07c160]" />
-          AI 设置
+    <div className={cn(!bare && "overflow-hidden rounded-xl border bg-card shadow-sm")}>
+      <div className={cn("flex h-9 items-center justify-between", bare ? "px-0.5" : "border-b px-3")}>
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-3.5 text-muted-foreground" />
+          <span className="text-xs font-semibold">AI 接口</span>
+          <span className="text-[10px] text-muted-foreground">微信 / QQ 共用</span>
         </div>
         <IconAction
           label="保存 AI 设置"
@@ -1483,35 +1142,37 @@ function AiSettingsPanel({
           disabled={busy}
         />
       </div>
-      <div className="space-y-2 p-2.5">
-        <label className="flex items-center gap-2 text-xs font-semibold">
-          <input
-            type="checkbox"
-            checked={ai.enabled}
-            onChange={(event) =>
-              onSettingsChange({
-                ...settings,
-                ai: { ...ai, enabled: event.target.checked },
-              })
-            }
-            className="size-4 accent-[#07c160]"
-          />
-          启用智能对话（默认）
-        </label>
-        <label className="flex items-center gap-2 text-xs font-semibold">
-          <input
-            type="checkbox"
-            checked={ai.progressEnabled !== false}
-            onChange={(event) =>
-              onSettingsChange({
-                ...settings,
-                ai: { ...ai, progressEnabled: event.target.checked },
-              })
-            }
-            className="size-4 accent-[#07c160]"
-          />
-          处理时发送进度回执（默认开）
-        </label>
+      <div className={cn("space-y-2.5", bare ? "pt-1" : "p-3")}>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex items-center gap-2 rounded-lg border bg-muted/20 px-2.5 py-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              checked={ai.enabled}
+              onChange={(event) =>
+                onSettingsChange({
+                  ...settings,
+                  ai: { ...ai, enabled: event.target.checked },
+                })
+              }
+              className="size-4 accent-[#07c160]"
+            />
+            启用智能对话
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border bg-muted/20 px-2.5 py-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              checked={ai.progressEnabled !== false}
+              onChange={(event) =>
+                onSettingsChange({
+                  ...settings,
+                  ai: { ...ai, progressEnabled: event.target.checked },
+                })
+              }
+              className="size-4 accent-[#07c160]"
+            />
+            发送进度回执
+          </label>
+        </div>
         <Field
           label="接口地址"
           value={ai.baseUrl}
@@ -1520,26 +1181,28 @@ function AiSettingsPanel({
           }
           placeholder="http://162.243.93.40:8317/v1"
         />
-        <Field
-          label="模型"
-          value={ai.model}
-          onChange={(value) =>
-            onSettingsChange({ ...settings, ai: { ...ai, model: value } })
-          }
-          placeholder="grok-4.5"
-        />
-        <Field
-          label="单次请求超时（秒）"
-          value={String(Math.round((Number(ai.timeoutMs) || 90_000) / 1000))}
-          onChange={(value) => {
-            const seconds = Number(value);
-            const timeoutMs = Number.isFinite(seconds) && seconds > 0
-              ? Math.min(120, Math.max(5, Math.round(seconds))) * 1000
-              : 90_000;
-            onSettingsChange({ ...settings, ai: { ...ai, timeoutMs } });
-          }}
-          placeholder="90"
-        />
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Field
+            label="模型"
+            value={ai.model}
+            onChange={(value) =>
+              onSettingsChange({ ...settings, ai: { ...ai, model: value } })
+            }
+            placeholder="grok-4.5"
+          />
+          <Field
+            label="单次请求超时（秒）"
+            value={String(Math.round((Number(ai.timeoutMs) || 90_000) / 1000))}
+            onChange={(value) => {
+              const seconds = Number(value);
+              const timeoutMs = Number.isFinite(seconds) && seconds > 0
+                ? Math.min(120, Math.max(5, Math.round(seconds))) * 1000
+                : 90_000;
+              onSettingsChange({ ...settings, ai: { ...ai, timeoutMs } });
+            }}
+            placeholder="90"
+          />
+        </div>
         <div className="space-y-1">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
             <span className="inline-flex items-center gap-1">
@@ -1567,14 +1230,12 @@ function AiSettingsPanel({
             </button>
           )}
         </div>
-        <p className="text-[10px] leading-4 text-muted-foreground">
-          默认直接对话：业务文本全部由 AI 选技能处理（查数/日报图/导出）。CSV 文件导入仍走确定性路径。
-          超时按单次模型请求计（含 tool 多轮中的每一轮），范围 5–120 秒；环境变量 AI_TIMEOUT_MS 可覆盖。
-          进度回执会先回「收到，正在处理…」，调用技能前再回简短中文进度；可用 AI_PROGRESS=0 关闭。
+        <p className="text-[10px] leading-5 text-muted-foreground">
+          业务文本由 AI 选技能处理（查数/日报图/导出）；CSV 导入走确定性路径。
           Key 加密保存在本机，界面不回显明文。
         </p>
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -1607,14 +1268,16 @@ function AutoReplySettings({
   busy,
   onChange,
   onSave,
+  bare = false,
 }: {
   settings: WeixinBotSettings;
   busy: boolean;
   onChange: (settings: WeixinBotSettings) => void;
   onSave: () => void;
+  bare?: boolean;
 }) {
   return (
-    <div className="space-y-2 overflow-hidden rounded-lg border border-border/70 bg-card/70 p-3">
+    <div className={cn("space-y-2", !bare && "overflow-hidden rounded-xl border bg-card p-3 shadow-sm")}>
       <div className="flex items-center justify-between gap-2">
         <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold">
           <input
@@ -1623,7 +1286,8 @@ function AutoReplySettings({
             onChange={(event) => onChange({ ...settings, autoReplyEnabled: event.target.checked })}
             className="size-4 accent-[#07c160]"
           />
-          自动回复
+          兜底自动回复
+          <span className="font-normal text-muted-foreground">（命令 / AI / 导入均未命中时）</span>
         </label>
         <IconAction
           label="保存自动回复"
@@ -1641,11 +1305,12 @@ function AutoReplySettings({
         value={settings.autoReplyText}
         onChange={(event) => onChange({ ...settings, autoReplyText: event.target.value })}
         placeholder="未命中命令时的固定回复"
+        disabled={!settings.autoReplyEnabled}
         className="min-h-14 w-full resize-none rounded-lg border border-input bg-background px-2.5 py-2 text-xs outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:opacity-50"
         aria-label="自动回复内容"
       />
       <p className="text-[10px] leading-4 text-muted-foreground">
-        仅在未识别为命令/AI/导入时触发。
+        仅在未识别为命令 / AI / 导入时触发。
       </p>
     </div>
   );
@@ -1663,15 +1328,20 @@ function StatusStrip({ status }: { status: WeixinBotStatus }) {
     },
   ];
   return (
-    <section className="grid overflow-hidden rounded-lg border border-border/70 bg-card/60 sm:grid-cols-2 lg:grid-cols-4">
+    <section className="grid overflow-hidden rounded-xl border bg-card shadow-sm sm:grid-cols-2 lg:grid-cols-4">
       {items.map((item) => {
         const Icon = item.icon;
         return (
-          <div key={item.label} className="flex items-center gap-3 border-b border-border/50 px-4 py-3 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0 lg:border-b-0">
-            <Icon className="size-4 text-[#07c160]" />
-            <div>
-              <div className="text-[11px] text-muted-foreground">{item.label}</div>
-              <div className="text-sm font-medium">{item.value}</div>
+          <div
+            key={item.label}
+            className="flex items-center gap-2.5 border-b border-border/50 px-3 py-2.5 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0"
+          >
+            <div className="flex size-7 items-center justify-center rounded-md bg-[#07c160]/10">
+              <Icon className="size-3.5 text-[#07c160]" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] text-muted-foreground">{item.label}</div>
+              <div className="truncate text-xs font-medium">{item.value}</div>
             </div>
           </div>
         );

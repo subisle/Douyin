@@ -272,8 +272,17 @@ export interface WeixinBotContact {
 
 export interface WeixinBotDailyReportPushSettings {
   enabled: boolean;
+  /** 午夜提醒（每天 0 点后提醒对接用户发送音浪文件）；默认开启 */
+  reminderEnabled: boolean;
+  /** 已发送午夜提醒的本地日期 YYYY-MM-DD，用于防重 */
+  lastReminderDate: string | null;
+  /** @deprecated 开放访问后不再使用；保留兼容旧存储 */
   adminUserIds: string[];
+  /** @deprecated 开放访问后不再使用；保留兼容旧存储 */
+  adminRemarks: Record<string, string>;
+  /** @deprecated 始终推全部有会话联系人；normalize 时清空 */
   recipientUserIds: string[];
+  /** @deprecated 始终推全部有会话联系人；normalize 时清空 */
   recipientGroupIds: string[];
   lastPush?: {
     date: string | null;
@@ -368,6 +377,16 @@ export interface QqBotSettings {
   accessMode: QqBotAccessMode;
   allowUserIds: string[];
   allowGroupIds: string[];
+  /** 已对接（C2C 会话过）的用户 openid */
+  boundUserIds: string[];
+  /** @deprecated 开放访问后不再使用；保留兼容旧存储 */
+  adminUserIds: string[];
+  /** @deprecated 开放访问后不再使用；保留兼容旧存储 */
+  adminRemarks: Record<string, string>;
+  /** 午夜提醒开关；默认开启 */
+  reminderEnabled: boolean;
+  /** 已发送午夜提醒的本地日期 YYYY-MM-DD，用于防重 */
+  lastReminderDate: string | null;
 }
 
 export interface QqBotSettingsSavePayload {
@@ -381,6 +400,11 @@ export interface QqBotSettingsSavePayload {
   accessMode?: QqBotAccessMode;
   allowUserIds?: string[];
   allowGroupIds?: string[];
+  boundUserIds?: string[];
+  adminUserIds?: string[];
+  adminRemarks?: Record<string, string>;
+  reminderEnabled?: boolean;
+  lastReminderDate?: string | null;
 }
 
 

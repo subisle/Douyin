@@ -83,6 +83,21 @@ function localYesterdayIso() {
   return shiftDate(localTodayIso(), -1);
 }
 
+/** 2026-08-10 -> 10号（当年当月）；跨月补月；跨年补年 */
+function dayToFriendly(dateStr) {
+  const match = String(dateStr || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return String(dateStr || "");
+  const [, year, month, day] = match;
+  const now = new Date();
+  const thisYear = String(now.getFullYear());
+  const thisMonth = String(now.getMonth() + 1).padStart(2, "0");
+  const dayNum = Number(day);
+  const monthNum = Number(month);
+  if (year === thisYear && month === thisMonth) return `${dayNum}号`;
+  if (year === thisYear) return `${monthNum}月${dayNum}号`;
+  return `${year}年${monthNum}月${dayNum}号`;
+}
+
 function isValidDateParts(year, month, day) {
   const date = new Date(year, month - 1, day);
   return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
@@ -755,7 +770,7 @@ async function handleInboundFile(args, db, pendingDates, dailyPush = null) {
     : resolved.source === "pending"
       ? "（按你预告的日期）"
       : "（按消息指定日期）";
-  await args.replyText(`已导入 ${date} ${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
+  await args.replyText(`已导入 ${dayToFriendly(date)} 的${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
   if (kind === "wave" && dailyPush && typeof dailyPush.notifyAfterImport === "function") {
     try {
       void dailyPush.notifyAfterImport(date, { delayMs: 1500 });
@@ -868,10 +883,6 @@ function createWeixinCommandHandler({ db, renderReportPng, agent = null, analyti
               ? dailyPush.getStatusText()
               : "无法读取推送状态";
             await args.replyText(text);
-            return { handled: true };
-          }
-          if (typeof dailyPush.isAdmin === "function" && !dailyPush.isAdmin(actorUserId, accountId)) {
-            await args.replyText("仅管理员可开关日报推送。请在桌面端「微信机器人 → 日报推送」设置管理员。");
             return { handled: true };
           }
           if (pushCommand.type === "enable") {

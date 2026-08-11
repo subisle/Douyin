@@ -42,13 +42,158 @@ test("AI runtime stays off without API key even if settings default on", (t) => 
 
   const service = createService(t);
   const settings = service.getSettings().ai;
-  assert.equal(service.getSettings().accessMode, "allowlist");
+  assert.equal(service.getSettings().accessMode, "open");
   const runtime = service.getAiRuntimeConfig();
 
   // 产品默认开启位，但无 Key 时 runtime 不可用
   assert.equal(settings.hasApiKey, false);
   assert.equal(runtime.apiKey, "");
   assert.equal(runtime.enabled, false);
+});
+
+test("unrelated save keeps AI preference on without key (no silent uncheck)", (t) => {
+  const previousAiKey = process.env.AI_API_KEY;
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => {
+    if (previousAiKey === undefined) delete process.env.AI_API_KEY;
+    else process.env.AI_API_KEY = previousAiKey;
+    if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousOpenAiKey;
+  });
+
+  const service = createService(t);
+  assert.equal(service.getSettings().ai.enabled, true);
+  assert.equal(service.getAiRuntimeConfig().enabled, false);
+
+  // 保存日报/自动回复等无关项时，不得把「启用智能对话」静默关掉
+  const saved = service.saveSettings({
+    autoReplyEnabled: false,
+    autoReplyText: "消息已收到。",
+    dailyReportPush: { enabled: true, reminderEnabled: false },
+  });
+  assert.equal(saved.ai.enabled, true);
+  assert.equal(service.getSettings().ai.enabled, true);
+  assert.equal(service.getSettings().ai.progressEnabled, true);
+  assert.equal(service.getSettings().dailyReportPush.enabled, true);
+  assert.equal(service.getSettings().dailyReportPush.reminderEnabled, false);
+  // runtime 仍因无 Key 不可用
+  assert.equal(service.getAiRuntimeConfig().enabled, false);
+});
+
+test("explicitly enabling AI without key is rejected", (t) => {
+  const previousAiKey = process.env.AI_API_KEY;
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  delete process.env.AI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => {
+    if (previousAiKey === undefined) delete process.env.AI_API_KEY;
+    else process.env.AI_API_KEY = previousAiKey;
+    if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousOpenAiKey;
+  });
+
+  const service = createService(t);
+  service.saveSettings({ ai: { enabled: false } });
+  assert.throws(
+    () => service.saveSettings({
+      ai: {
+        enabled: true,
+        baseUrl: "https://example.test/v1",
+        model: "test-model",
+      },
+    }),
+    /启用 AI 前请先填写 API Key/
+  );
+  assert.equal(service.getSettings().ai.enabled, false);
+});
+
+test("AI UI preference stays off after save even when AI_ENABLED=1 and key present", (t) => {
+  const previous = {
+    AI_API_KEY: process.env.AI_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    AI_ENABLED: process.env.AI_ENABLED,
+    AI_BASE_URL: process.env.AI_BASE_URL,
+    AI_MODEL: process.env.AI_MODEL,
+  };
+  process.env.AI_ENABLED = "1";
+  process.env.AI_API_KEY = "test-key-from-env";
+  process.env.AI_BASE_URL = "http://127.0.0.1:8080/v1";
+  process.env.AI_MODEL = "test-model";
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const service = createService(t);
+  // 用户关掉智能对话并保存配置
+  const saved = service.saveSettings({
+    ai: {
+      enabled: false,
+      baseUrl: "http://127.0.0.1:8080/v1",
+      model: "test-model",
+      timeoutMs: 60_000,
+    },
+  });
+  // getSettings 必须回显用户勾选，不能被 env/runtime 顶回 true
+  assert.equal(saved.ai.enabled, false);
+  assert.equal(service.getSettings().ai.enabled, false);
+  // runtime 也必须尊重 UI 关闭（AI_ENABLED=1 只表示允许，不强制开）
+  assert.equal(service.getAiRuntimeConfig().enabled, false);
+
+  // 再显式打开应恢复
+  const reenabled = service.saveSettings({
+    ai: {
+      enabled: true,
+      baseUrl: "http://127.0.0.1:8080/v1",
+      model: "test-model",
+    },
+  });
+  assert.equal(reenabled.ai.enabled, true);
+  assert.equal(service.getAiRuntimeConfig().enabled, true);
+});
+
+test("hasApiKey reflects stored key only, not env key", (t) => {
+  const previous = {
+    AI_API_KEY: process.env.AI_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  };
+  process.env.AI_API_KEY = "env-only-key";
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const service = createService(t);
+  assert.equal(service.getSettings().ai.hasApiKey, false);
+  assert.equal(Boolean(service.getAiRuntimeConfig().apiKey), true);
+
+  service.saveSettings({
+    ai: {
+      enabled: true,
+      baseUrl: "http://127.0.0.1:8080/v1",
+      model: "test-model",
+      apiKey: "stored-key",
+    },
+  });
+  assert.equal(service.getSettings().ai.hasApiKey, true);
+
+  service.saveSettings({
+    ai: {
+      enabled: false,
+      apiKey: "",
+      clearApiKey: true,
+    },
+  });
+  assert.equal(service.getSettings().ai.hasApiKey, false);
+  // env key 仍可供 runtime 使用
+  assert.equal(service.getAiRuntimeConfig().apiKey, "env-only-key");
 });
 
 test("AI timeout defaults to 90s and AI_TIMEOUT_MS overrides stored settings", (t) => {
@@ -106,9 +251,12 @@ test("AI progressEnabled defaults on and AI_PROGRESS overrides settings", (t) =>
 
   process.env.AI_PROGRESS = "1";
   assert.equal(service.getAiRuntimeConfig().progressEnabled, true);
+  // UI 必须继续回显用户关闭偏好，不能被 env 顶回勾选
+  assert.equal(service.getSettings().ai.progressEnabled, false);
 
   process.env.AI_PROGRESS = "0";
   assert.equal(service.getAiRuntimeConfig().progressEnabled, false);
+  assert.equal(service.getSettings().ai.progressEnabled, false);
 });
 
 test("AI store migrates legacy 45s timeout to 90s", (t) => {
