@@ -20,11 +20,11 @@
     "test:ilink-adapter": "node --test shared/ilink-adapter.test.js",
     "test:ilink-db": "node --test scripts/ilink-crypto.test.js scripts/ilink-db-lease.test.js scripts/ilink-inbox-cursor.test.js scripts/ilink-outbox.test.js scripts/ilink-account-credentials.test.js scripts/ilink-login-control.test.js scripts/ilink-login-poller.test.js scripts/ilink-artifact-store.test.js scripts/ilink-media-policy.test.js",
     "test:bot-worker": "node --test scripts/bot-worker.test.js scripts/ilink-text-transport.test.js scripts/ilink-crypto.test.js scripts/ilink-db-lease.test.js scripts/ilink-inbox-cursor.test.js scripts/ilink-outbox.test.js scripts/ilink-account-credentials.test.js scripts/ilink-login-control.test.js scripts/ilink-login-poller.test.js scripts/ilink-artifact-store.test.js scripts/ilink-media-policy.test.js",
-    "test:weixin-bot": "node --test electron/weixin-bot*.test.js",
+    "test:weixin-bot": "node --test electron/weixin-bot*.test.js electron/project-bots.test.js shared/business-date.test.js src/server/bots/store-crypto.test.js",
     "db:migrate": "node scripts/migrate.js up",
     "db:migrate:status": "node scripts/migrate.js status",
     "electron": "electron .",
-    "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"next dev\" \"wait-on tcp:3000 && electron .\"",
+    "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"cross-env PROJECT_BOTS=0 next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "node scripts/electron-next-build.mjs",
     "dist": "npm run electron:build && electron-builder --mac --win --x64",
     "dist:mac": "npm run electron:build && electron-builder --mac",
@@ -35,7 +35,9 @@
     "bot:seed-credential": "node scripts/ilink-seed-credential.js",
     "storage:bench": "node scripts/bench-local-storage.mjs",
     "storage:doctor": "node scripts/storage-doctor.mjs",
-    "test:qq-bot": "node --test shared/qqbot-adapter.test.js electron/qq-bot.test.js"
+    "test:qq-bot": "node --test shared/qqbot-adapter.test.js electron/qq-bot.test.js",
+    "backup:init": "node scripts/init-backup-db.js",
+    "backup:sync": "node scripts/sync-backup.js"
   },
   "build": {
     "appId": "com.subisle.douyin",
@@ -124,6 +126,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "better-sqlite3": "^13.0.3",
     "concurrently": "^10.0.3",
     "cross-env": "^10.1.0",
     "electron": "^42.4.1",

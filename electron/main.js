@@ -37,9 +37,8 @@ if (runtimeEnvPath) console.log(`[config] loaded ${runtimeEnvPath}`);
 const db = require("./db");
 const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
-const { WeixinBotService } = require("./weixin-bot");
-const { createWeixinCommandHandler } = require("./weixin-bot-commands");
 const { renderDailyReportPng } = require("./weixin-bot-report");
+const { createProjectBots } = require("./project-bots");
 
 /**
  * Bot 日报图片渲染器：通过渲染进程 Canvas 绘制，与桌面端"导出图片"完全一致。
@@ -65,11 +64,6 @@ const rendererReportPng = Object.assign(
     },
   }
 );
-const { createWeixinBotSkills } = require("./weixin-bot-skills");
-const { WeixinBotAgent } = require("./weixin-bot-agent");
-const { createWeixinUserMemory } = require("./weixin-bot-user-memory");
-const { QqBotService } = require("./qq-bot");
-const { resolveUserMemoryPath } = require("./local-paths");
 const {
   captureSignedUserProfile,
   captureLivePkSnapshot,
@@ -258,8 +252,9 @@ livePkMultiMonitor.on("status", (status) => {
   sendToMainWindow("live-pk:multi-status", status);
 });
 
-const weixinBot = new WeixinBotService({
-  storagePath: () => path.join(app.getPath("userData"), "weixin-bot.v1.json"),
+const projectBots = createProjectBots({
+  weixinStoragePath: () => path.join(app.getPath("userData"), "weixin-bot.v1.json"),
+  qqStoragePath: () => path.join(app.getPath("userData"), "qq-bot.v1.json"),
   encryptToken: (token) => {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error("当前系统不可用安全存储，未保存微信令牌");
@@ -272,79 +267,13 @@ const weixinBot = new WeixinBotService({
     }
     return safeStorage.decryptString(Buffer.from(String(encrypted), "base64"));
   },
-});
-const weixinBotSkills = createWeixinBotSkills({ db, renderReportPng: rendererReportPng });
-const weixinUserMemory = createWeixinUserMemory({
-  storagePath: () => resolveUserMemoryPath(),
-});
-const weixinBotAgent = new WeixinBotAgent({
-  skills: weixinBotSkills,
-  getConfig: () => weixinBot.getAiRuntimeConfig(),
-  userMemory: weixinUserMemory,
-});
-const weixinCommandHandler = createWeixinCommandHandler({
   db,
   renderReportPng: rendererReportPng,
-  agent: weixinBotAgent,
-  analytics: weixinBotSkills.analytics,
-  dailyPush: {
-    isAdmin: (userId, accountId) => weixinBot.isDailyPushAdmin(userId, accountId),
-    getStatusText: () => weixinBot.getDailyReportPushStatusText(),
-    setEnabled: (enabled, meta) => weixinBot.setDailyReportPushEnabled(enabled, meta),
-    notifyAfterImport: (date, options) => weixinBot.notifyDailyReportDataUpdated(date, options),
-  },
+  runner: "desktop",
 });
-weixinBotAgent.modeStore = weixinCommandHandler.modeStore;
-weixinBot.setDailyPushDependencies({ db, renderReportPng: rendererReportPng });
-weixinBot.setCommandHandler(weixinCommandHandler);
-if (weixinCommandHandler.modeStore) {
-  weixinBot.setModeStore(weixinCommandHandler.modeStore);
-}
-const qqBot = new QqBotService({
-  storagePath: () => path.join(app.getPath("userData"), "qq-bot.v1.json"),
-  getSharedAiSettings: () => weixinBot.getSettings()?.ai || null,
-});
-qqBot.setCommandHandler(weixinCommandHandler);
-if (weixinCommandHandler.modeStore) {
-  qqBot.setModeStore(weixinCommandHandler.modeStore);
-}
-qqBot.on("status", (status) => {
-  sendToMainWindow("qq-bot:status-changed", status);
-});
-qqBot.on("message", (message) => {
-  sendToMainWindow("qq-bot:message", message);
-});
-qqBot.on("messages-cleared", () => {
-  sendToMainWindow("qq-bot:messages-cleared");
-});
+const weixinBot = projectBots.weixinBot;
+const qqBot = projectBots.qqBot;
 
-// 午夜提醒：每天跨 0 点后给微信/QQ 管理员发「请发送音浪文件即可」。
-// 通知开关分别存于 weixin dailyReportPush.reminderEnabled 与 qq settings.reminderEnabled（默认开）。
-let midnightReminderTimer = null;
-let lastMidnightCheckDay = "";
-function localDayKey(date = new Date()) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-function setupMidnightReminder() {
-  lastMidnightCheckDay = localDayKey();
-  const tick = () => {
-    const day = localDayKey();
-    if (day === lastMidnightCheckDay) return;
-    lastMidnightCheckDay = day;
-    const now = new Date();
-    // 跨天后至少 1 分钟（00:01 之后）再触发，避开 0 点边界抖动
-    if (now.getHours() === 0 && now.getMinutes() < 1) return;
-    const remind = (label, promise) => {
-      Promise.resolve(promise)
-        .then((result) => console.log(`[midnight-reminder] ${label}`, JSON.stringify(result)))
-        .catch((error) => console.warn(`[midnight-reminder] ${label} failed`, error?.message || String(error)));
-    };
-    remind("weixin", weixinBot.sendMidnightReminder());
-    remind("qq", qqBot.sendMidnightReminder());
-  };
-  midnightReminderTimer = setInterval(tick, 60_000);
-  if (typeof midnightReminderTimer.unref === "function") midnightReminderTimer.unref();
-}
 /** @type {WebContentsView | null} */
 let embeddedLiveView = null;
 let embeddedLiveUrl = "";
@@ -376,6 +305,15 @@ weixinBot.on("message", (message) => {
 });
 weixinBot.on("messages-cleared", () => {
   sendToMainWindow("weixin-bot:messages-cleared");
+});
+qqBot.on("status", (status) => {
+  sendToMainWindow("qq-bot:status-changed", status);
+});
+qqBot.on("message", (message) => {
+  sendToMainWindow("qq-bot:message", message);
+});
+qqBot.on("messages-cleared", () => {
+  sendToMainWindow("qq-bot:messages-cleared");
 });
 
 livePkWatcher.on("status", (status) => {
@@ -989,14 +927,9 @@ app.whenReady().then(() => {
 
   // 初始化自动更新（生产环境）
   updater.init();
-  void weixinBot.initialize().catch((error) => {
-    console.error("[weixin-bot] 初始化失败", error?.message || String(error));
+  void projectBots.initialize().catch((error) => {
+    console.error("[project-bots] 初始化失败", error?.message || String(error));
   });
-  void qqBot.initialize().catch((error) => {
-    console.error("[qq-bot] 初始化失败", error?.message || String(error));
-  });
-
-  setupMidnightReminder();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1014,9 +947,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  if (midnightReminderTimer) clearInterval(midnightReminderTimer);
-  void weixinBot.shutdown();
-  void qqBot.shutdown();
+  void projectBots.shutdown();
 });
 
 // 窗口控制 IPC

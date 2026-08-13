@@ -1,6 +1,7 @@
 import { callLegacyDb } from "@/server/db/legacy-db";
 import { requireApiAccess } from "@/server/api/auth";
 import { apiFail, apiOk, errorMessage } from "@/server/api/response";
+import { handleBotsRequest } from "@/server/bots/http.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,19 @@ export async function GET(request: Request, context: RouteContext) {
     if (auth) return auth;
 
     if (one === "startup-health") return apiOk(await call("getStartupHealth"));
+
+    if (one === "bots") {
+      const result = await handleBotsRequest({
+        method: "GET",
+        path,
+        searchParams: sp,
+      });
+      if (result.status >= 400) {
+        const payload = result.body as { error?: string; code?: string };
+        return apiFail(payload?.error || "机器人接口失败", result.status, payload?.code || "BOTS_ERROR");
+      }
+      return apiOk(result.body);
+    }
 
     if (one === "anchors" && path.length === 1) return apiOk(await call("getAnchors"));
     if (one === "anchors" && two === "duplicates") return apiOk(await call("findDuplicateAnchors"));
@@ -143,6 +157,20 @@ export async function POST(request: Request, context: RouteContext) {
     if (one === "pk" && two === "groups") return apiOk(await call("buildPkGroups", body));
 
     if (one === "rewards" && two === "report") return apiOk(await call("getRewardReport", body.period, body.config));
+
+    if (one === "bots") {
+      const result = await handleBotsRequest({
+        method: "POST",
+        path,
+        body,
+        searchParams: searchParams(request),
+      });
+      if (result.status >= 400) {
+        const payload = result.body as { error?: string; code?: string };
+        return apiFail(payload?.error || "机器人接口失败", result.status, payload?.code || "BOTS_ERROR");
+      }
+      return apiOk(result.body);
+    }
 
     return apiFail(`接口不存在：POST /api/v1/${path.join("/")}`, 404, "NOT_FOUND");
   } catch (error) {

@@ -67,83 +67,32 @@ async function request<T>(
   }
 }
 
+function pollResource<T>(
+  loader: () => Promise<IpcResult<T>>,
+  onData: (data: T) => void,
+  intervalMs = 1500
+) {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const result = await loader();
+      if (!stopped && result.success) onData(result.data);
+    } catch {
+      // ignore transient poll errors
+    }
+    if (!stopped) timer = setTimeout(() => void tick(), intervalMs);
+  };
+  void tick();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
+
 const noopAsync = async () => undefined;
-
-const WEB_QQ_STATUS = {
-  channel: "qqbot" as const,
-  phase: "idle" as const,
-  connected: false,
-  error: "Web 模式不支持 QQ 机器人，请使用桌面端",
-  hasCredentials: false,
-  messageCount: 0,
-};
-
-const WEB_QQ_SETTINGS = {
-  appId: "",
-  clientSecret: "",
-  apiBase: "https://api.sgroup.qq.com",
-  intents: 1 << 25,
-  autoConnect: true,
-  autoReplyEnabled: false,
-  autoReplyText: "消息已收到。",
-  accessMode: "open" as const,
-  allowUserIds: [] as string[],
-  allowGroupIds: [] as string[],
-  boundUserIds: [] as string[],
-  adminUserIds: [] as string[],
-  adminRemarks: {} as Record<string, string>,
-  reminderEnabled: true,
-  lastReminderDate: null,
-};
-const WEB_WEIXIN_STATUS = {
-  available: false,
-  phase: "disconnected" as const,
-  connected: false,
-  monitoring: false,
-  accountId: null,
-  userId: null,
-  baseUrl: "",
-  savedAt: null,
-  qrDataUrl: null,
-  qrExpiresAt: null,
-  statusText: "微信机器人仅支持桌面端",
-  lastPollAt: null,
-  lastMessageAt: null,
-  error: null,
-  receivedCount: 0,
-  sentCount: 0,
-  accounts: [] as [],
-};
-
-const WEB_WEIXIN_SETTINGS = {
-  accountId: null,
-  autoReplyEnabled: false,
-  autoReplyText: "消息已收到。",
-  accessMode: "open" as const,
-  allowUserIds: [] as string[],
-  allowGroupIds: [] as string[],
-  customCommands: [] as [],
-  ai: {
-    enabled: false,
-    baseUrl: "http://162.243.93.40:8317/v1",
-    model: "grok-4.5",
-    timeoutMs: 90_000,
-    maxToolRounds: 4,
-    progressEnabled: true,
-    hasApiKey: false,
-  },
-  contacts: [] as [],
-  dailyReportPush: {
-    enabled: false,
-    reminderEnabled: true,
-    lastReminderDate: null,
-    adminUserIds: [] as string[],
-    adminRemarks: {} as Record<string, string>,
-    recipientUserIds: [] as string[],
-    recipientGroupIds: [] as string[],
-    lastPush: null,
-  },
-};
 
 export function createHttpElectronApi(): ElectronAPI {
   return {
@@ -273,85 +222,74 @@ export function createHttpElectronApi(): ElectronAPI {
     onLivePkError: () => () => undefined,
     onLivePkCaptureStatus: () => () => undefined,
 
-    getWeixinBotStatus: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
-    getWeixinBotMessages: () => Promise.resolve({ success: true, data: [] }),
-    getWeixinBotSettings: () => Promise.resolve({ success: true, data: WEB_WEIXIN_SETTINGS }),
-    startWeixinBotLogin: () =>
-      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
-    cancelWeixinBotLogin: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
-    startWeixinBot: () =>
-      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
-    stopWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
-    disconnectWeixinBot: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
-    setActiveWeixinBotAccount: () => Promise.resolve({ success: true, data: WEB_WEIXIN_STATUS }),
-    sendWeixinBotMessage: () =>
-      Promise.resolve({ success: false, error: "浏览器预览模式不支持微信机器人" }),
-    saveWeixinBotSettings: (payload) =>
-      Promise.resolve({
-        success: true,
-        data: {
-          ...WEB_WEIXIN_SETTINGS,
-          ...payload,
-          customCommands: payload.customCommands ?? WEB_WEIXIN_SETTINGS.customCommands,
-          allowUserIds: payload.allowUserIds ?? WEB_WEIXIN_SETTINGS.allowUserIds,
-          allowGroupIds: payload.allowGroupIds ?? WEB_WEIXIN_SETTINGS.allowGroupIds,
-          ai: {
-            ...WEB_WEIXIN_SETTINGS.ai,
-            ...(payload.ai || {}),
-            hasApiKey: Boolean(
-              (payload.ai && "apiKey" in payload.ai && payload.ai.apiKey)
-                || (payload.ai?.clearApiKey ? false : WEB_WEIXIN_SETTINGS.ai.hasApiKey)
-            ),
-            apiKey: undefined,
-            clearApiKey: undefined,
-          },
-          contacts: WEB_WEIXIN_SETTINGS.contacts,
-          dailyReportPush: {
-            ...WEB_WEIXIN_SETTINGS.dailyReportPush,
-            ...(payload.dailyReportPush || {}),
-            reminderEnabled:
-              payload.dailyReportPush && "reminderEnabled" in payload.dailyReportPush
-                ? Boolean(payload.dailyReportPush.reminderEnabled)
-                : WEB_WEIXIN_SETTINGS.dailyReportPush.reminderEnabled,
-            lastReminderDate:
-              payload.dailyReportPush && "lastReminderDate" in payload.dailyReportPush
-                ? payload.dailyReportPush.lastReminderDate ?? null
-                : WEB_WEIXIN_SETTINGS.dailyReportPush.lastReminderDate,
-            adminRemarks:
-              payload.dailyReportPush?.adminRemarks
-              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.adminRemarks,
-            adminUserIds:
-              payload.dailyReportPush?.adminUserIds
-              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.adminUserIds,
-            recipientUserIds:
-              payload.dailyReportPush?.recipientUserIds
-              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.recipientUserIds,
-            recipientGroupIds:
-              payload.dailyReportPush?.recipientGroupIds
-              ?? WEB_WEIXIN_SETTINGS.dailyReportPush.recipientGroupIds,
-            lastPush:
-              payload.dailyReportPush && "lastPush" in payload.dailyReportPush
-                ? payload.dailyReportPush.lastPush ?? null
-                : WEB_WEIXIN_SETTINGS.dailyReportPush.lastPush,
-          },
-        },
-      }),
-    clearWeixinBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),
-    onWeixinBotStatus: () => () => undefined,
-    onWeixinBotMessage: () => () => undefined,
-    onWeixinBotMessagesCleared: () => () => undefined,
-    getQqBotStatus: () => Promise.resolve({ success: true, data: WEB_QQ_STATUS }),
-    getQqBotMessages: () => Promise.resolve({ success: true, data: [] }),
-    getQqBotSettings: () => Promise.resolve({ success: true, data: WEB_QQ_SETTINGS }),
-    saveQqBotSettings: () =>
-      Promise.resolve({ success: false, error: "Web 模式不支持 QQ 机器人" }),
-    connectQqBot: () =>
-      Promise.resolve({ success: false, error: "Web 模式不支持 QQ 机器人，请使用桌面端" }),
-    disconnectQqBot: () => Promise.resolve({ success: true, data: WEB_QQ_STATUS }),
-    clearQqBotMessages: () => Promise.resolve({ success: true, data: { cleared: true } }),
-    onQqBotStatus: () => () => undefined,
-    onQqBotMessage: () => () => undefined,
-    onQqBotMessagesCleared: () => () => undefined,
+    getWeixinBotStatus: () => request("/bots/weixin"),
+    getWeixinBotMessages: () => request("/bots/weixin/messages"),
+    getWeixinBotSettings: (accountId) => request(`/bots/weixin/settings${qs({ accountId })}`),
+    startWeixinBotLogin: () => request("/bots/weixin/login", { method: "POST" }),
+    cancelWeixinBotLogin: () => request("/bots/weixin/login/cancel", { method: "POST" }),
+    startWeixinBot: (accountId) => request("/bots/weixin/start", { method: "POST", body: { accountId } }),
+    stopWeixinBot: (accountId) => request("/bots/weixin/stop", { method: "POST", body: { accountId } }),
+    disconnectWeixinBot: (accountId) => request("/bots/weixin/disconnect", { method: "POST", body: { accountId } }),
+    setActiveWeixinBotAccount: (accountId) =>
+      request("/bots/weixin/active-account", { method: "POST", body: { accountId } }),
+    sendWeixinBotMessage: (payload) => request("/bots/weixin/send", { method: "POST", body: payload }),
+    saveWeixinBotSettings: (payload) => request("/bots/weixin/settings", { method: "POST", body: payload }),
+    clearWeixinBotMessages: () => request("/bots/weixin/messages/clear", { method: "POST" }),
+    onWeixinBotStatus: (listener) => pollResource(() => request("/bots/weixin"), listener),
+    onWeixinBotMessage: (listener) => {
+      let lastCount = -1;
+      return pollResource(async () => {
+        const result = await request<unknown[]>("/bots/weixin/messages");
+        if (result.success && result.data.length !== lastCount) {
+          lastCount = result.data.length;
+          const last = result.data[result.data.length - 1];
+          if (last) listener(last as never);
+        }
+        return result;
+      }, () => undefined, 2000);
+    },
+    onWeixinBotMessagesCleared: (listener) => {
+      let lastCount: number | null = null;
+      return pollResource(async () => {
+        const result = await request<unknown[]>("/bots/weixin/messages");
+        if (result.success) {
+          if (lastCount !== null && result.data.length === 0 && lastCount > 0) listener();
+          lastCount = result.data.length;
+        }
+        return result;
+      }, () => undefined, 2500);
+    },
+    getQqBotStatus: () => request("/bots/qq"),
+    getQqBotMessages: () => request("/bots/qq/messages"),
+    getQqBotSettings: () => request("/bots/qq/settings"),
+    saveQqBotSettings: (payload) => request("/bots/qq/settings", { method: "POST", body: payload }),
+    connectQqBot: () => request("/bots/qq/connect", { method: "POST" }),
+    disconnectQqBot: () => request("/bots/qq/disconnect", { method: "POST" }),
+    clearQqBotMessages: () => request("/bots/qq/messages/clear", { method: "POST" }),
+    onQqBotStatus: (listener) => pollResource(() => request("/bots/qq"), listener),
+    onQqBotMessage: (listener) => {
+      let lastCount = -1;
+      return pollResource(async () => {
+        const result = await request<unknown[]>("/bots/qq/messages");
+        if (result.success && result.data.length !== lastCount) {
+          lastCount = result.data.length;
+          const last = result.data[result.data.length - 1];
+          if (last) listener(last as never);
+        }
+        return result;
+      }, () => undefined, 2000);
+    },
+    onQqBotMessagesCleared: (listener) => {
+      let lastCount: number | null = null;
+      return pollResource(async () => {
+        const result = await request<unknown[]>("/bots/qq/messages");
+        if (result.success) {
+          if (lastCount !== null && result.data.length === 0 && lastCount > 0) listener();
+          lastCount = result.data.length;
+        }
+        return result;
+      }, () => undefined, 2500);
+    },
 
     getAnchors: () => request("/anchors"),
     getFamilyTree: () => request("/family-tree"),
