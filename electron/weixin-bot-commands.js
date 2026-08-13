@@ -999,12 +999,19 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
         return { handled: true };
       }
 
-      // AI 模式：短指令可走确定性路径；其余交 Agent
-      if (agentMode) {
-        if (aiReady) {
-          return { handled: false, via: "ai" };
+      // AI 模式：高置信短指令走确定性路径；其余交 Agent
+      if (agentMode && aiReady) {
+        const custom = matchCustomCommand(args.text, args.settings?.customCommands);
+        if (custom) {
+          await handleCustomCommand(args, custom, db, renderReportPng, { renderDailyStarPng: renderDailyStarPngOpt });
+          return { handled: true, via: "fast-route" };
         }
-        // AI 未就绪：降级为固定指令兜底（不再只回一句“未就绪”）
+        const fast = matchFastRoute(args.text, { parseBotCommand });
+        if (fast) {
+          const ok = await dispatchBusinessCommand(args, fast, deps);
+          return { handled: ok, via: "fast-route" };
+        }
+        return { handled: false, via: "ai" };
       }
 
       // 纯指令模式（或 AI 未就绪兜底）：确定性命令

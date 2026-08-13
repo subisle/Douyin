@@ -865,7 +865,7 @@ test("mode, AI thread, and pending import keys isolate bot accounts", () => {
   assert.notEqual(pendingImportKey(accountA), pendingImportKey(accountB));
 });
 
-test("agent mode: AI-ready business text falls through to agent, not FastRoute", async () => {
+test("agent mode: AI-ready 每日报告 uses FastRoute", async () => {
   const replies = [];
   const mockAgent = {
     enableSession() {},
@@ -878,9 +878,12 @@ test("agent mode: AI-ready business text falls through to agent, not FastRoute",
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
       exportWaveSnapshots: async () => [{ 音浪: 100 }],
-      getDailyWaveReport: async () => {
-        throw new Error("AI 就绪时不应再走固定日报命令");
-      },
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
+        rows: [{ name: "甲", isLive: true, dailyWave: 1, totalWave: 1, dailyDuration: 1 }],
+      }),
     },
     renderReportPng: async () => Buffer.from("PNG"),
     renderDailyStarPng: mockDailyStarPng,
@@ -897,8 +900,9 @@ test("agent mode: AI-ready business text falls through to agent, not FastRoute",
     replyText: async (text) => { replies.push(text); },
     replyImage: async () => {},
   });
-  assert.equal(report.handled, false);
-  assert.equal(report.via, "ai");
+  assert.equal(report.handled, true);
+  assert.equal(report.via, "fast-route");
+  assert.match(replies[0], /每日报告/);
 
   const enable = await handler({
     ...ctx,

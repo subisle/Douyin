@@ -73,6 +73,8 @@ function createProjectBots(options = {}) {
   weixinBotAgent.modeStore = weixinCommandHandler.modeStore;
   weixinBot.setDailyPushDependencies({ db, renderReportPng });
   weixinBot.setCommandHandler(weixinCommandHandler);
+  const agentHandler = (args) => weixinBotAgent.handleMessage(args);
+  weixinBot.setAgentHandler(agentHandler);
   if (weixinCommandHandler.modeStore) {
     weixinBot.setModeStore(weixinCommandHandler.modeStore);
   }
@@ -82,6 +84,7 @@ function createProjectBots(options = {}) {
     getSharedAiSettings: () => weixinBot.getSettings()?.ai || null,
   });
   qqBot.setCommandHandler(weixinCommandHandler);
+  qqBot.setAgentHandler(agentHandler);
   if (weixinCommandHandler.modeStore) {
     qqBot.setModeStore(weixinCommandHandler.modeStore);
   }

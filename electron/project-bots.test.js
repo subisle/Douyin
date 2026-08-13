@@ -38,3 +38,23 @@ test("shouldSkipProjectBots honors PROJECT_BOTS=0", () => {
   assert.equal(shouldSkipProjectBots({ ELECTRON: "true" }), true);
   assert.equal(shouldSkipProjectBots({}), false);
 });
+
+test("createProjectBots wires the same agent onto weixin and qq", async () => {
+  const dir = makeDir();
+  const bots = createProjectBots({
+    weixinStoragePath: () => path.join(dir, "weixin-bot.v1.json"),
+    qqStoragePath: () => path.join(dir, "qq-bot.v1.json"),
+    encryptToken: (value) => Buffer.from(String(value)).toString("base64"),
+    decryptToken: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+    db: {},
+    renderReportPng: async () => Buffer.from("png"),
+    logger: { log() {}, warn() {}, error() {} },
+    runner: "test",
+    runnerLockFile: path.join(dir, "runner.lock"),
+  });
+  assert.equal(typeof bots.weixinBot.agentHandler, "function");
+  assert.equal(typeof bots.qqBot.agentHandler, "function");
+  assert.equal(typeof bots.weixinBot.commandHandler, "function");
+  assert.equal(bots.weixinBot.agentHandler, bots.qqBot.agentHandler);
+  await bots.shutdown();
+});
