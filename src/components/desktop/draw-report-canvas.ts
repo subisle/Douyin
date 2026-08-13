@@ -141,7 +141,8 @@ export const ALL_COLUMNS: { key: ColumnKey; label: string; defaultVisible: boole
   { key: "totalWave", label: "累计总音浪", defaultVisible: true },
   { key: "duration",  label: "有效时长",  defaultVisible: false },
   { key: "master",    label: "师傅",      defaultVisible: false },
-  { key: "tier",      label: "等级",      defaultVisible: true },
+  // 等级不在发送日报默认字段里；桌面可手动勾选
+  { key: "tier",      label: "等级",      defaultVisible: false },
 ];
 
 export const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = ALL_COLUMNS
@@ -383,7 +384,9 @@ export function drawReportToCanvas(
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
   const genderText = gender === "male" ? "男" : "女";
-  const titleBase = customTitle.trim() || "星嗨艺创主播数据统计";
+  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑（与软件配置一致）
+  const titleBase = customTitle.trim()
+    || (gender === "female" ? "薇笑传媒主播数据统计" : "星嗨艺创主播数据统计");
   const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
   const titleText = hideDateInTitle
     ? `${titleBase}${pageSuffix ? ` ${pageSuffix}` : ""}`
@@ -790,7 +793,9 @@ export function drawAppleReportToCanvas(
   } = opts;
   const font = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif';
   const mono = '"SF Mono", "Menlo", "Consolas", monospace';
-  const titleBaseRaw = customTitle.trim() || "薇笑传媒主播数据统计"; // classic / 女队默认
+  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑（不按样式反推）
+  const titleBaseRaw = customTitle.trim()
+    || (gender === "female" ? "薇笑传媒主播数据统计" : "星嗨艺创主播数据统计");
   const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
   const titleBase = pageSuffix ? `${titleBaseRaw} ${pageSuffix}` : titleBaseRaw;
   const genderText = gender === "male" ? "男团" : "女队";

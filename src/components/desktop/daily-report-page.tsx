@@ -32,12 +32,38 @@ import {
   type ColumnWidths,
   type ReportCanvasStyle,
 } from "./draw-report-canvas";
+import {
+  COLUMN_WIDTHS_STORAGE_KEY,
+  COLUMNS_STORAGE_KEY,
+  COLUMNS_STORAGE_VERSION,
+  COLUMNS_STORAGE_VERSION_KEY,
+  DEFAULT_REPORT_STYLES,
+  DEFAULT_REPORT_TITLE,
+  DEFAULT_REPORT_TITLE_FEMALE,
+  DEFAULT_REPORT_TITLE_MALE,
+  EXPORT_SPLIT_STORAGE_KEY,
+  loadColumnWidths,
+  loadReportStyles,
+  loadReportTitles,
+  loadVisibleColumns,
+  REPORT_SORT_STORAGE_KEY,
+  REPORT_STYLES_STORAGE_KEY,
+  REPORT_STYLES_STORAGE_VERSION,
+  REPORT_STYLES_STORAGE_VERSION_KEY,
+  REPORT_TITLES_STORAGE_KEY,
+  type ReportGender,
+} from "./daily-report-prefs";
 import { downloadCsv } from "./csv";
 import { downloadCanvasAsPng } from "./export-image";
 import type { TierRule, DailyReportData, MonthlyReportData } from "@/types/electron";
 import { LoadingState, ErrorState, EmptyState } from "./states";
+import {
+  businessDateStr,
+  resolveDailyReportDefaultDate,
+  resolveMonthlyReportMonth,
+} from "../../../shared/business-date.js";
 
-type GenderView = "male" | "female";
+type GenderView = ReportGender;
 type ExportKind = "image" | "report" | "duration" | "durationImage";
 type ReportViewMode = "daily" | "monthly";
 type ReportSortBy = "wave" | "duration";
@@ -45,110 +71,10 @@ type ReportSortBy = "wave" | "duration";
 // 时长精简图固定四列：序号 / 姓名 / 未播天数 / 当月时长
 const DURATION_IMAGE_COLUMNS: ColumnKey[] = ["rank", "name", "notLiveDays", "duration"];
 
-const DEFAULT_REPORT_TITLE_MALE = "星嗨艺创主播数据统计";
-const DEFAULT_REPORT_TITLE_FEMALE = "薇笑传媒主播数据统计";
-const DEFAULT_REPORT_TITLE = DEFAULT_REPORT_TITLE_MALE;
-const COLUMNS_STORAGE_KEY = "daily-report-visible-columns";
-const COLUMNS_STORAGE_VERSION_KEY = "daily-report-visible-columns-version";
-const COLUMNS_STORAGE_VERSION = "3";
-const COLUMN_WIDTHS_STORAGE_KEY = "daily-report-column-widths";
-const REPORT_STYLES_STORAGE_KEY = "daily-report-canvas-styles";
-const REPORT_STYLES_STORAGE_VERSION_KEY = "daily-report-canvas-styles-version";
-const REPORT_STYLES_STORAGE_VERSION = "2";
-const REPORT_TITLES_STORAGE_KEY = "daily-report-custom-titles";
-const EXPORT_SPLIT_STORAGE_KEY = "daily-report-export-split";
-const REPORT_SORT_STORAGE_KEY = "daily-report-sort-by";
-const DEFAULT_REPORT_STYLES: Record<GenderView, ReportCanvasStyle> = {
-  male: "apple",
-  female: "classic",
-};
-
-// 业务日默认「昨天」：今天 22 号则默认看 21 号数据
-function businessDateStr(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function loadVisibleColumns(): ColumnKey[] {
-  if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
-  try {
-    const raw = localStorage.getItem(COLUMNS_STORAGE_KEY);
-    if (!raw) return DEFAULT_VISIBLE_COLUMNS;
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const valid = parsed.filter((k): k is ColumnKey => ALL_COLUMNS.some((c) => c.key === k));
-      if (localStorage.getItem(COLUMNS_STORAGE_VERSION_KEY) !== COLUMNS_STORAGE_VERSION) {
-        const migrated = new Set<ColumnKey>(valid.filter((k) => k !== "duration" && k !== "master"));
-        for (const key of DEFAULT_VISIBLE_COLUMNS) migrated.add(key);
-        return ALL_COLUMNS.map((c) => c.key).filter((key) => migrated.has(key));
-      }
-      // 至少保留一个
-      if (valid.length > 0) return valid;
-    }
-  } catch {
-    // ignore
-  }
-  return DEFAULT_VISIBLE_COLUMNS;
-}
-
 function sanitizeColumnWidth(value: unknown): number | null {
   const width = Number(value);
   if (!Number.isFinite(width) || width <= 0) return null;
   return Math.min(800, Math.max(20, Math.round(width)));
-}
-
-function loadColumnWidths(): ColumnWidths {
-  if (typeof window === "undefined") return {};
-  try {
-    const parsed = JSON.parse(localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY) || "{}");
-    if (!parsed || typeof parsed !== "object") return {};
-    const widths: ColumnWidths = {};
-    for (const col of ALL_COLUMNS) {
-      const width = sanitizeColumnWidth((parsed as Record<string, unknown>)[col.key]);
-      if (width !== null) widths[col.key] = width;
-    }
-    return widths;
-  } catch {
-    return {};
-  }
-}
-
-function isReportCanvasStyle(value: unknown): value is ReportCanvasStyle {
-  return value === "classic" || value === "apple";
-}
-
-function loadReportStyles(): Record<GenderView, ReportCanvasStyle> {
-  if (typeof window === "undefined") return DEFAULT_REPORT_STYLES;
-  try {
-    if (localStorage.getItem(REPORT_STYLES_STORAGE_VERSION_KEY) !== REPORT_STYLES_STORAGE_VERSION) {
-      return DEFAULT_REPORT_STYLES;
-    }
-    const parsed = JSON.parse(localStorage.getItem(REPORT_STYLES_STORAGE_KEY) || "{}");
-    return {
-      male: isReportCanvasStyle(parsed.male) ? parsed.male : DEFAULT_REPORT_STYLES.male,
-      female: isReportCanvasStyle(parsed.female) ? parsed.female : DEFAULT_REPORT_STYLES.female,
-    };
-  } catch {
-    return DEFAULT_REPORT_STYLES;
-  }
-}
-
-function loadReportTitles(): Record<GenderView, string> {
-  const defaults = {
-    male: DEFAULT_REPORT_TITLE_MALE,
-    female: DEFAULT_REPORT_TITLE_FEMALE,
-  };
-  if (typeof window === "undefined") return defaults;
-  try {
-    const parsed = JSON.parse(localStorage.getItem(REPORT_TITLES_STORAGE_KEY) || "{}");
-    return {
-      male: typeof parsed.male === "string" && parsed.male.trim() ? parsed.male.trim() : defaults.male,
-      female: typeof parsed.female === "string" && parsed.female.trim() ? parsed.female.trim() : defaults.female,
-    };
-  } catch {
-    return defaults;
-  }
 }
 
 function formatRankDelta(delta: number | null | undefined): string {
@@ -188,7 +114,10 @@ export function DailyReportPage() {
   const [showTierSettings, setShowTierSettings] = useState(false);
 
   // 字段设置
-  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(DEFAULT_VISIBLE_COLUMNS);
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() => {
+    if (typeof window === "undefined") return DEFAULT_VISIBLE_COLUMNS;
+    return loadVisibleColumns();
+  });
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>({});
   const [reportStyles, setReportStyles] = useState<Record<GenderView, ReportCanvasStyle>>(DEFAULT_REPORT_STYLES);
   const [reportTitles, setReportTitles] = useState<Record<GenderView, string>>({
@@ -517,14 +446,9 @@ export function DailyReportPage() {
       try {
         const res = await api.getDashboardSummary();
         if (cancelled) return;
-        const latest =
-          (res.success &&
-            (res.data.latestDurationDate ||
-              res.data.latestWaveDate ||
-              res.data.latestDataDate)) ||
-          null;
-        setDate(latest || businessDateStr());
-        setMonth(latest ? latest.slice(0, 7) : businessDateStr().slice(0, 7));
+        const summary = res.success ? res.data : {};
+        setDate(resolveDailyReportDefaultDate(summary));
+        setMonth(resolveMonthlyReportMonth(summary));
       } catch {
         if (!cancelled) {
           const fallback = businessDateStr();

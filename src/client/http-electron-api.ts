@@ -1,4 +1,10 @@
-import type { IpcResult } from "@/types/electron";
+import type {
+  IpcResult,
+  QqBotMessage,
+  QqBotStatus,
+  WeixinBotMessage,
+  WeixinBotStatus,
+} from "@/types/electron";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -222,8 +228,8 @@ export function createHttpElectronApi(): ElectronAPI {
     onLivePkError: () => () => undefined,
     onLivePkCaptureStatus: () => () => undefined,
 
-    getWeixinBotStatus: () => request("/bots/weixin"),
-    getWeixinBotMessages: () => request("/bots/weixin/messages"),
+    getWeixinBotStatus: () => request<WeixinBotStatus>("/bots/weixin"),
+    getWeixinBotMessages: () => request<WeixinBotMessage[]>("/bots/weixin/messages"),
     getWeixinBotSettings: (accountId) => request(`/bots/weixin/settings${qs({ accountId })}`),
     startWeixinBotLogin: () => request("/bots/weixin/login", { method: "POST" }),
     cancelWeixinBotLogin: () => request("/bots/weixin/login/cancel", { method: "POST" }),
@@ -235,15 +241,15 @@ export function createHttpElectronApi(): ElectronAPI {
     sendWeixinBotMessage: (payload) => request("/bots/weixin/send", { method: "POST", body: payload }),
     saveWeixinBotSettings: (payload) => request("/bots/weixin/settings", { method: "POST", body: payload }),
     clearWeixinBotMessages: () => request("/bots/weixin/messages/clear", { method: "POST" }),
-    onWeixinBotStatus: (listener) => pollResource(() => request("/bots/weixin"), listener),
+    onWeixinBotStatus: (listener) => pollResource(() => request<WeixinBotStatus>("/bots/weixin"), listener),
     onWeixinBotMessage: (listener) => {
       let lastCount = -1;
       return pollResource(async () => {
-        const result = await request<unknown[]>("/bots/weixin/messages");
+        const result = await request<WeixinBotMessage[]>("/bots/weixin/messages");
         if (result.success && result.data.length !== lastCount) {
           lastCount = result.data.length;
           const last = result.data[result.data.length - 1];
-          if (last) listener(last as never);
+          if (last) listener(last);
         }
         return result;
       }, () => undefined, 2000);
@@ -251,7 +257,7 @@ export function createHttpElectronApi(): ElectronAPI {
     onWeixinBotMessagesCleared: (listener) => {
       let lastCount: number | null = null;
       return pollResource(async () => {
-        const result = await request<unknown[]>("/bots/weixin/messages");
+        const result = await request<WeixinBotMessage[]>("/bots/weixin/messages");
         if (result.success) {
           if (lastCount !== null && result.data.length === 0 && lastCount > 0) listener();
           lastCount = result.data.length;
@@ -259,22 +265,22 @@ export function createHttpElectronApi(): ElectronAPI {
         return result;
       }, () => undefined, 2500);
     },
-    getQqBotStatus: () => request("/bots/qq"),
-    getQqBotMessages: () => request("/bots/qq/messages"),
+    getQqBotStatus: () => request<QqBotStatus>("/bots/qq"),
+    getQqBotMessages: () => request<QqBotMessage[]>("/bots/qq/messages"),
     getQqBotSettings: () => request("/bots/qq/settings"),
     saveQqBotSettings: (payload) => request("/bots/qq/settings", { method: "POST", body: payload }),
     connectQqBot: () => request("/bots/qq/connect", { method: "POST" }),
     disconnectQqBot: () => request("/bots/qq/disconnect", { method: "POST" }),
     clearQqBotMessages: () => request("/bots/qq/messages/clear", { method: "POST" }),
-    onQqBotStatus: (listener) => pollResource(() => request("/bots/qq"), listener),
+    onQqBotStatus: (listener) => pollResource(() => request<QqBotStatus>("/bots/qq"), listener),
     onQqBotMessage: (listener) => {
       let lastCount = -1;
       return pollResource(async () => {
-        const result = await request<unknown[]>("/bots/qq/messages");
+        const result = await request<QqBotMessage[]>("/bots/qq/messages");
         if (result.success && result.data.length !== lastCount) {
           lastCount = result.data.length;
           const last = result.data[result.data.length - 1];
-          if (last) listener(last as never);
+          if (last) listener(last);
         }
         return result;
       }, () => undefined, 2000);
@@ -282,7 +288,7 @@ export function createHttpElectronApi(): ElectronAPI {
     onQqBotMessagesCleared: (listener) => {
       let lastCount: number | null = null;
       return pollResource(async () => {
-        const result = await request<unknown[]>("/bots/qq/messages");
+        const result = await request<QqBotMessage[]>("/bots/qq/messages");
         if (result.success) {
           if (lastCount !== null && result.data.length === 0 && lastCount > 0) listener();
           lastCount = result.data.length;

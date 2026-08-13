@@ -12,6 +12,8 @@ export type ApiErrorCode =
   | "LOGIN_START_FAILED"
   | "LOGIN_STATUS_FAILED"
   | "LOGIN_CANCEL_FAILED"
+  | "BOTS_ERROR"
+  | "BOTS_SKIPPED"
   | "INTERNAL_ERROR";
 
 export function apiOk(data: unknown, status = 200) {

@@ -1,7 +1,13 @@
 import { callLegacyDb } from "@/server/db/legacy-db";
 import { requireApiAccess } from "@/server/api/auth";
-import { apiFail, apiOk, errorMessage } from "@/server/api/response";
+import { apiFail, apiOk, errorMessage, type ApiErrorCode } from "@/server/api/response";
 import { handleBotsRequest } from "@/server/bots/http.js";
+
+
+function botsApiFail(status: number, payload: { error?: string; code?: string }) {
+  const code: ApiErrorCode = payload?.code === "BOTS_SKIPPED" ? "BOTS_SKIPPED" : "BOTS_ERROR";
+  return apiFail(payload?.error || "机器人接口失败", status, code);
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +79,7 @@ export async function GET(request: Request, context: RouteContext) {
       });
       if (result.status >= 400) {
         const payload = result.body as { error?: string; code?: string };
-        return apiFail(payload?.error || "机器人接口失败", result.status, payload?.code || "BOTS_ERROR");
+        return botsApiFail(result.status, payload);
       }
       return apiOk(result.body);
     }
@@ -167,7 +173,7 @@ export async function POST(request: Request, context: RouteContext) {
       });
       if (result.status >= 400) {
         const payload = result.body as { error?: string; code?: string };
-        return apiFail(payload?.error || "机器人接口失败", result.status, payload?.code || "BOTS_ERROR");
+        return botsApiFail(result.status, payload);
       }
       return apiOk(result.body);
     }
