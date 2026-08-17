@@ -18,11 +18,12 @@ export default [
       "node_modules/**",
       "DouyinLang/**",
       "references/**",
+      "electron/vendor/**",
     ],
   },
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    files: ["electron/**/*.js", "shared/**/*.js"],
+    files: ["electron/**/*.js", "shared/**/*.js", "src/server/bots/**/*.js"],
     languageOptions: {
       globals: {
         __dirname: "readonly",

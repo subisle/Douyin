@@ -33,17 +33,14 @@ import { formatWave } from "./format";
 import { elementToPngDataUrl, downloadDataUrlAsFile } from "./export-image";
 import {
   BUILTIN_GROUP_PRESET_NAME,
-  BUILTIN_PROMO_PRESET_NAME,
   DEFAULT_PK_GROUP_SIZE,
   PRESET_BATTLE_FIRST_START,
+  PRESET_BATTLE_REVIVE_EXTRA_MINUTES,
   PRESET_BATTLE_STEP_MINUTES,
-  PRESET_PROMO_FIRST_START,
-  PRESET_PROMO_STEP_MINUTES,
   PRESET_ROSTER_TEXT,
   attachScheduleToGroups,
   buildBattleGroupsResultFromNameGroups,
   buildPresetBattleGroupsResult,
-  buildPresetPromoGroupsResult,
   clearSavedGroupsLayout,
   deleteSavedGroupPreset,
   getActiveGroupPreset,
@@ -53,6 +50,7 @@ import {
   loadSavedGroupsLayout,
   normalizeFirstStart,
   normalizeGroupSize,
+  normalizeReviveExtraMinutes,
   normalizeStepMinutes,
   resolveRosterNames,
   saveGroupsLayout,
@@ -60,9 +58,7 @@ import {
   saveRosterText,
   setActiveGroupPreset,
   suggestNextGroupPresetName,
-  syncAllBuiltInGroupsToPkStorage,
   syncBuiltInGroupsToPkStorage,
-  syncBuiltInPromoGroupsToPkStorage,
   downloadPkGroupsCsv,
   exportPkGroupsToCsv,
   formatPkGroupsCopyText,
@@ -79,7 +75,7 @@ type UiGroup = BuildPkGroupsGroup & { key: string };
 type DragPerson = { groupKey: string; personId: number | null; name: string };
 
 const MODE_OPTIONS: { key: PkGroupMode; label: string }[] = [
-  { key: "preset", label: "内置" },
+  { key: "preset", label: "815" },
   { key: "high_to_low", label: "顺序" },
   { key: "balanced", label: "均衡" },
   { key: "score_capable", label: "能出分" },
@@ -144,9 +140,10 @@ function toUiGroups(result: BuildPkGroupsResult): UiGroup[] {
 function attachScheduleTimes(
   groups: UiGroup[],
   firstStart: string,
-  stepMinutes: number
+  stepMinutes: number,
+  reviveExtraMinutes: number
 ): UiGroup[] {
-  return attachScheduleToGroups(groups, { firstStart, stepMinutes });
+  return attachScheduleToGroups(groups, { firstStart, stepMinutes, reviveExtraMinutes });
 }
 
 export function PkRosterPage() {
@@ -158,6 +155,11 @@ export function PkRosterPage() {
   );
   const [stepMinutes, setStepMinutes] = useState(() =>
     normalizeStepMinutes(loadSavedGroupsLayout()?.stepMinutes ?? PRESET_BATTLE_STEP_MINUTES)
+  );
+  const [reviveExtraMinutes, setReviveExtraMinutes] = useState(() =>
+    normalizeReviveExtraMinutes(
+      loadSavedGroupsLayout()?.reviveExtraMinutes ?? PRESET_BATTLE_REVIVE_EXTRA_MINUTES
+    )
   );
   const [groupSize, setGroupSize] = useState(() =>
     normalizeGroupSize(loadSavedGroupsLayout()?.groupSize ?? DEFAULT_PK_GROUP_SIZE)
@@ -237,9 +239,44 @@ export function PkRosterPage() {
         if (!opts?.silent) showToast("保存失败：分组为空");
         return false;
       }
-      // 拖拽静默保存：仅当已有激活存档时覆盖
-      if (opts?.silent && !opts?.asNew && !opts?.name && !activePresetId) {
+      // 拖拽静默保存：无激活存档且非内置时仅标脏，不保存
+      if (
+        opts?.silent &&
+        !opts?.asNew &&
+        !opts?.name &&
+        !activePresetId &&
+        activePresetName !== BUILTIN_GROUP_PRESET_NAME
+      ) {
         setDirty(true);
+        return false;
+      }
+      // 手动调整内置「815」→ 自动脱离内置，另存为自定义分组并激活。
+      // 否则存档名仍为 815，下次加载被 preferSaved 的内置表覆盖，改动即丢失。
+      if (opts?.silent && activePresetName === BUILTIN_GROUP_PRESET_NAME) {
+        const name = suggestNextGroupPresetName();
+        const saved = saveNamedGroupPreset({
+          id: undefined,
+          name,
+          note: "815 手动调整",
+          nameGroups,
+          period,
+          mode,
+          scoreDisplay,
+          firstStart,
+          stepMinutes,
+          reviveExtraMinutes,
+          groupSize,
+          makeActive: true,
+        });
+        if (saved) {
+          setSavedAt(saved.savedAt);
+          setActivePresetId(saved.id);
+          setActivePresetName(saved.name);
+          setActivePresetNote(saved.note || "");
+          setDirty(false);
+          refreshPresets();
+          return true;
+        }
         return false;
       }
       const namedSave = Boolean(opts?.asNew || opts?.name || opts?.note !== undefined);
@@ -257,6 +294,7 @@ export function PkRosterPage() {
             scoreDisplay,
             firstStart,
             stepMinutes,
+            reviveExtraMinutes,
             groupSize,
             makeActive: true,
           })
@@ -267,6 +305,7 @@ export function PkRosterPage() {
             scoreDisplay,
             firstStart,
             stepMinutes,
+            reviveExtraMinutes,
             groupSize,
             id: activePresetId || undefined,
             name: activePresetName || undefined,
@@ -294,6 +333,7 @@ export function PkRosterPage() {
       mode,
       period,
       refreshPresets,
+      reviveExtraMinutes,
       scoreDisplay,
       showToast,
       stepMinutes,
@@ -353,7 +393,7 @@ export function PkRosterPage() {
 
   const applyBuiltResult = useCallback(
     (built: BuildPkGroupsResult) => {
-      const stamped = attachScheduleTimes(toUiGroups(built), firstStart, stepMinutes);
+      const stamped = attachScheduleTimes(toUiGroups(built), firstStart, stepMinutes, reviveExtraMinutes);
       setGroups(relabelGroups(stamped, scoreDisplay));
       undoStack.current = [];
       let warn = built.warning || "";
@@ -365,7 +405,7 @@ export function PkRosterPage() {
       }
       setWarning(warn || null);
     },
-    [firstStart, resolution.unmatchedNames, scoreDisplay, stepMinutes]
+    [firstStart, resolution.unmatchedNames, reviveExtraMinutes, scoreDisplay, stepMinutes]
   );
 
   const rebuildGroups = useCallback(
@@ -406,13 +446,12 @@ export function PkRosterPage() {
         refreshPresets();
       }
 
-      // 显式加载某套存档（「小组赛」「晋级赛」始终跟代码内置表，避免旧 localStorage 盖住）
+      // 显式加载某套存档（「815」始终跟代码内置表，避免旧 localStorage 盖住）
       if (opts?.preset?.nameGroups?.length) {
         const saved = opts.preset;
         const savedName = String(saved.name || "").trim();
-        const isGroupBuiltin = savedName === BUILTIN_GROUP_PRESET_NAME;
-        const isPromoBuiltin = savedName === BUILTIN_PROMO_PRESET_NAME;
-        if (isGroupBuiltin) {
+        const isBuiltin = savedName === BUILTIN_GROUP_PRESET_NAME;
+        if (isBuiltin) {
           const synced = syncBuiltInGroupsToPkStorage({
             makeActive: true,
             period,
@@ -421,34 +460,12 @@ export function PkRosterPage() {
             scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
             firstStart: PRESET_BATTLE_FIRST_START,
             stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+            reviveExtraMinutes: PRESET_BATTLE_REVIVE_EXTRA_MINUTES,
           });
           setMode("preset");
           setFirstStart(PRESET_BATTLE_FIRST_START);
           setStepMinutes(PRESET_BATTLE_STEP_MINUTES);
-          applyBuiltResult(built);
-          if (synced) {
-            setActivePresetId(synced.id);
-            setActivePresetName(synced.name);
-            setActivePresetNote(synced.note || "");
-            setSavedAt(synced.savedAt || null);
-          }
-          setDirty(false);
-          refreshPresets();
-          return;
-        }
-        if (isPromoBuiltin) {
-          const synced = syncBuiltInPromoGroupsToPkStorage({
-            makeActive: true,
-            period,
-          });
-          const built = buildPresetPromoGroupsResult(memberPool, {
-            scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
-            firstStart: PRESET_PROMO_FIRST_START,
-            stepMinutes: PRESET_PROMO_STEP_MINUTES,
-          });
-          setMode("preset");
-          setFirstStart(PRESET_PROMO_FIRST_START);
-          setStepMinutes(PRESET_PROMO_STEP_MINUTES);
+          setReviveExtraMinutes(PRESET_BATTLE_REVIVE_EXTRA_MINUTES);
           applyBuiltResult(built);
           if (synced) {
             setActivePresetId(synced.id);
@@ -467,6 +484,10 @@ export function PkRosterPage() {
           source: saved.note ? `${saved.name} · ${saved.note}` : saved.name || "已保存分组",
           firstStart: saved.firstStart || firstStart,
           stepMinutes: saved.stepMinutes ?? stepMinutes,
+          reviveExtraMinutes:
+            saved.reviveExtraMinutes != null
+              ? saved.reviveExtraMinutes
+              : reviveExtraMinutes,
           notes: [
             saved.name ? `存档：${saved.name}` : "已保存分组",
             saved.note || "",
@@ -475,6 +496,8 @@ export function PkRosterPage() {
         });
         if (saved.firstStart) setFirstStart(normalizeFirstStart(saved.firstStart));
         if (saved.stepMinutes != null) setStepMinutes(normalizeStepMinutes(saved.stepMinutes));
+        if (saved.reviveExtraMinutes != null)
+          setReviveExtraMinutes(normalizeReviveExtraMinutes(saved.reviveExtraMinutes));
         if (saved.groupSize != null) setGroupSize(normalizeGroupSize(saved.groupSize));
         if (saved.mode && ["preset", "high_to_low", "balanced", "score_capable"].includes(saved.mode)) {
           setMode(saved.mode as PkGroupMode);
@@ -495,36 +518,10 @@ export function PkRosterPage() {
         const saved = loadSavedGroupsLayout();
         if (saved?.nameGroups?.length) {
           const savedName = String(saved.name || "").trim();
-          const savedIsCodeBuiltin =
-            savedName === BUILTIN_GROUP_PRESET_NAME || savedName === BUILTIN_PROMO_PRESET_NAME;
-          // 存档是代码锁定内置 → 强制用代码最新表（防旧 localStorage 盖住）
+          const savedIsCodeBuiltin = savedName === BUILTIN_GROUP_PRESET_NAME;
+          // 存档是代码锁定内置（815） → 强制用代码最新表（防旧 localStorage 盖住）
           if (savedIsCodeBuiltin) {
-            // fall through to preset build below（按存档名分流）
-            if (savedName === BUILTIN_PROMO_PRESET_NAME) {
-              const synced = syncBuiltInPromoGroupsToPkStorage({
-                makeActive: true,
-                period,
-              });
-              const built = buildPresetPromoGroupsResult(memberPool, {
-                scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
-                firstStart: PRESET_PROMO_FIRST_START,
-                stepMinutes: PRESET_PROMO_STEP_MINUTES,
-              });
-              setMode("preset");
-              setFirstStart(PRESET_PROMO_FIRST_START);
-              setStepMinutes(PRESET_PROMO_STEP_MINUTES);
-              applyBuiltResult(built);
-              if (synced) {
-                setActivePresetId(synced.id);
-                setActivePresetName(synced.name);
-                setActivePresetNote(synced.note || "");
-                setSavedAt(synced.savedAt || null);
-              }
-              setDirty(false);
-              refreshPresets();
-              return;
-            }
-            // 小组赛：fall through 到下面 preset 分支
+            // fall through to preset build below（815）
           } else {
             const built = buildBattleGroupsResultFromNameGroups(saved.nameGroups, memberPool, {
               scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
@@ -533,6 +530,10 @@ export function PkRosterPage() {
               source: saved.note ? `${saved.name} · ${saved.note}` : saved.name || "已保存拖拽分组",
               firstStart: saved.firstStart || firstStart,
               stepMinutes: saved.stepMinutes ?? stepMinutes,
+              reviveExtraMinutes:
+                saved.reviveExtraMinutes != null
+                  ? saved.reviveExtraMinutes
+                  : reviveExtraMinutes,
               notes: [
                 saved.name ? `存档：${saved.name}` : "来自本地保存的拖拽分组",
                 saved.note || "",
@@ -542,6 +543,8 @@ export function PkRosterPage() {
             if (saved.mode && ["preset", "high_to_low", "balanced", "score_capable"].includes(saved.mode)) {
               setMode(saved.mode as PkGroupMode);
             }
+            if (saved.reviveExtraMinutes != null)
+              setReviveExtraMinutes(normalizeReviveExtraMinutes(saved.reviveExtraMinutes));
             applyBuiltResult(built);
             setActivePresetId(saved.id || null);
             setActivePresetName(saved.name || null);
@@ -558,19 +561,20 @@ export function PkRosterPage() {
       setWarning(null);
       try {
         if (effectiveMode === "preset") {
-          // 同步两套内置存档：小组赛（激活）+ 晋级赛（仅写入）
-          const { group: synced } = syncAllBuiltInGroupsToPkStorage({
-            makeActiveGroup: true,
-            makeActivePromo: false,
+          // 同步 815 唯一分组存档（激活）
+          const synced = syncBuiltInGroupsToPkStorage({
+            makeActive: true,
             period,
           });
           const built = buildPresetBattleGroupsResult(memberPool, {
             scoreField: scoreField === "latestWave" ? "latestWave" : "wave",
             firstStart: PRESET_BATTLE_FIRST_START,
             stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+            reviveExtraMinutes: PRESET_BATTLE_REVIVE_EXTRA_MINUTES,
           });
           setFirstStart(PRESET_BATTLE_FIRST_START);
           setStepMinutes(PRESET_BATTLE_STEP_MINUTES);
+          setReviveExtraMinutes(PRESET_BATTLE_REVIVE_EXTRA_MINUTES);
           applyBuiltResult(built);
           if (synced) {
             setActivePresetId(synced.id);
@@ -638,6 +642,7 @@ export function PkRosterPage() {
       refreshPresets,
       resolution.names.length,
       resolution.unmatchedNames,
+      reviveExtraMinutes,
       scoreField,
       stepMinutes,
     ]
@@ -662,35 +667,54 @@ export function PkRosterPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupSize]);
 
-  // 连麦开始/间隔变更：只重算各组时间，不打散人员
+  // 连麦开始/间隔/复活赛顺延变更：只重算各组时间，不打散人员
   useEffect(() => {
     setGroups((prev) => {
       if (!prev.length) return prev;
-      return relabelGroups(attachScheduleTimes(prev, firstStart, stepMinutes), scoreDisplay);
+      return relabelGroups(
+        attachScheduleTimes(prev, firstStart, stepMinutes, reviveExtraMinutes),
+        scoreDisplay
+      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstStart, stepMinutes]);
+  }, [firstStart, stepMinutes, reviveExtraMinutes]);
 
   const applyGroupsIfValid = useCallback(
     (next: UiGroup[], failMessagePrefix: string, opts?: { autosave?: boolean }) => {
-      const scheduled = attachScheduleTimes(next, firstStart, stepMinutes);
+      const scheduled = attachScheduleTimes(next, firstStart, stepMinutes, reviveExtraMinutes);
       const normalized = relabelGroups(scheduled, scoreDisplay);
       const check = validateGroupsGap(normalized);
-      if (!check.ok) {
-        showToast(`${failMessagePrefix}：${formatGapViolation(check.violations[0])}`);
-        return false;
-      }
+      // 手动调整（拖拽互换 / 移组 / 调序）不阻止间隔约束，按用户安排生效并提示
       pushUndo(cloneGroups(groups));
       setGroups(normalized);
       setDirty(true);
       if (opts?.autosave !== false) {
-        // 拖拽后自动保存
+        // 拖拽后自动保存；内置 815 调整会自动脱离内置，另存为自定义分组
         persistGroups(normalized, { silent: true });
-        showToast("已调整并保存");
+      }
+      if (check.ok) {
+        showToast(
+          activePresetName === BUILTIN_GROUP_PRESET_NAME
+            ? "已调整并保存为自定义分组"
+            : "已调整并保存"
+        );
+      } else {
+        showToast(
+          `${failMessagePrefix.replace("无法", "已")}，注意：${formatGapViolation(check.violations[0])}`
+        );
       }
       return true;
     },
-    [firstStart, groups, persistGroups, pushUndo, scoreDisplay, showToast, stepMinutes]
+    [
+      activePresetName,
+      firstStart,
+      groups,
+      persistGroups,
+      pushUndo,
+      scoreDisplay,
+      showToast,
+      stepMinutes,
+    ]
   );
 
   const swapPersons = useCallback(
@@ -769,10 +793,9 @@ export function PkRosterPage() {
       setMode(next);
       setDirty(false);
       if (next === "preset") {
-        // 内置：写入「小组赛」+「晋级赛」两套，激活小组赛
-        const { group: synced } = syncAllBuiltInGroupsToPkStorage({
-          makeActiveGroup: true,
-          makeActivePromo: false,
+        // 815 唯一分组：写入存档并激活
+        const synced = syncBuiltInGroupsToPkStorage({
+          makeActive: true,
           period,
         });
         if (synced) {
@@ -784,7 +807,7 @@ export function PkRosterPage() {
         setIncludeText(PRESET_ROSTER_TEXT);
         saveRosterText(PRESET_ROSTER_TEXT);
         void rebuildGroups({ preferSaved: false, modeOverride: "preset", clearSaved: false });
-        showToast("已载入内置分组（小组赛 · 晋级赛已写入存档）");
+        showToast("已载入 815 唯一分组（已写入存档）");
         refreshPresets();
         return;
       }
@@ -807,7 +830,8 @@ export function PkRosterPage() {
         showToast("没有可保存的分组");
         return;
       }
-      const createNew = asNew || !activePresetId;
+      // 内置 815 不可覆盖，默认另存为自定义分组
+      const createNew = asNew || !activePresetId || activePresetName === BUILTIN_GROUP_PRESET_NAME;
       setSaveAsNew(createNew);
       setSaveName(
         createNew
@@ -825,15 +849,22 @@ export function PkRosterPage() {
       showToast("没有可保存的分组");
       return;
     }
-    const name = saveName.trim() || suggestNextGroupPresetName();
+    const rawName = saveName.trim() || suggestNextGroupPresetName();
+    // 内置 815 强制另存，且不产生第二个「815」名字（避免与内置表混淆）
+    const name =
+      activePresetName === BUILTIN_GROUP_PRESET_NAME && rawName === BUILTIN_GROUP_PRESET_NAME
+        ? suggestNextGroupPresetName()
+        : rawName;
+    const asNew = saveAsNew || !activePresetId || activePresetName === BUILTIN_GROUP_PRESET_NAME;
     const ok = persistGroups(groups, {
       name,
       note: saveNote.trim(),
-      asNew: saveAsNew || !activePresetId,
+      asNew,
     });
     if (ok) setSaveOpen(false);
   }, [
     activePresetId,
+    activePresetName,
     groups,
     persistGroups,
     saveAsNew,
@@ -877,30 +908,10 @@ export function PkRosterPage() {
 
   const handleReset = () => {
     if (mode === "preset") {
-      // 当前激活是「晋级赛」→ 恢复第二套；否则恢复小组赛
-      const restorePromo = activePresetName === BUILTIN_PROMO_PRESET_NAME;
-      if (restorePromo) {
-        const synced = syncBuiltInPromoGroupsToPkStorage({ makeActive: true, period });
-        if (synced) {
-          setActivePresetId(synced.id);
-          setActivePresetName(synced.name);
-          setActivePresetNote(synced.note || "");
-          setSavedAt(synced.savedAt || null);
-        }
-        void rebuildGroups({
-          clearSaved: false,
-          preferSaved: false,
-          preset: synced || undefined,
-        });
-        refreshPresets();
-        showToast("已恢复内置晋级赛分组");
-        return;
-      }
       setIncludeText(PRESET_ROSTER_TEXT);
       saveRosterText(PRESET_ROSTER_TEXT);
-      const { group: synced } = syncAllBuiltInGroupsToPkStorage({
-        makeActiveGroup: true,
-        makeActivePromo: false,
+      const synced = syncBuiltInGroupsToPkStorage({
+        makeActive: true,
         period,
       });
       if (synced) {
@@ -911,7 +922,7 @@ export function PkRosterPage() {
       }
       void rebuildGroups({ clearSaved: false, preferSaved: false, modeOverride: "preset" });
       refreshPresets();
-      showToast("已恢复内置分组（小组赛 · 晋级赛已同步）");
+      showToast("已恢复 815 唯一分组");
       return;
     }
     void rebuildGroups({ clearSaved: true, preferSaved: false });
@@ -985,7 +996,7 @@ export function PkRosterPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">PK 分组</h1>
           <p className="text-xs text-muted-foreground">
-            拖人员互换 / 拖到组板块移动 · 拖组标题调序 · 调整后自动保存
+            拖人员互换 / 拖到组板块移动 · 拖组标题调序 · 调整后自动保存 · 内置 815 调整后存为自定义分组
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -1051,6 +1062,21 @@ export function PkRosterPage() {
               onChange={(e) => setStepMinutes(normalizeStepMinutes(e.target.value, stepMinutes))}
               className="h-6 w-14 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
               title="组间连麦间隔（分钟）"
+            />
+            <span className="shrink-0">分</span>
+          </label>
+          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
+            <span className="shrink-0">第4组后</span>
+            <Input
+              type="number"
+              min={0}
+              max={60}
+              value={reviveExtraMinutes}
+              onChange={(e) =>
+                setReviveExtraMinutes(normalizeReviveExtraMinutes(e.target.value, reviveExtraMinutes))
+              }
+              className="h-6 w-12 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
+              title="第4组后插复活赛：第5组起每组顺延（分钟）"
             />
             <span className="shrink-0">分</span>
           </label>
@@ -1125,6 +1151,7 @@ export function PkRosterPage() {
         <Badge variant="secondary">组数 {groups.length}</Badge>
         <Badge variant="secondary">
           连麦 {firstStart} · 间隔 {stepMinutes} 分
+          {reviveExtraMinutes > 0 ? ` · 第4组后+${reviveExtraMinutes}分` : ""}
           {mode !== "preset" ? ` · 每组 ${groupSize}` : ""}
         </Badge>
         {activePresetName ? (
@@ -1568,7 +1595,9 @@ export function PkRosterPage() {
             <div className="flex items-center justify-between border-b px-4 py-3">
               <div>
                 <div className="font-semibold">{saveAsNew || !activePresetId ? "保存新分组" : "更新分组存档"}</div>
-                <div className="text-xs text-muted-foreground">可命名为分组1 / 分组2，并填写备注</div>
+                <div className="text-xs text-muted-foreground">
+                  可命名为分组1 / 分组2，并填写备注（内置 815 保存时自动另存，不覆盖内置表）
+                </div>
               </div>
               <button
                 type="button"
@@ -1598,7 +1627,7 @@ export function PkRosterPage() {
                   className="h-9"
                 />
               </label>
-              {activePresetId ? (
+              {activePresetId && activePresetName !== BUILTIN_GROUP_PRESET_NAME ? (
                 <div className="flex rounded-md border p-0.5">
                   <button
                     type="button"
@@ -1634,6 +1663,7 @@ export function PkRosterPage() {
               ) : null}
               <div className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 将保存 {groups.length} 组 · {MODE_OPTIONS.find((m) => m.key === mode)?.label || mode} · 连麦 {firstStart} / 间隔 {stepMinutes} 分
+                {reviveExtraMinutes > 0 ? ` · 第4组后+${reviveExtraMinutes}分` : ""}
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t px-4 py-3">

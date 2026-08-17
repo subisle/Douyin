@@ -144,7 +144,7 @@ function createWeixinBotSkills({ db, renderReportPng }) {
       type: "function",
       function: {
         name: "export_daily_report_image",
-        description: "生成并发送男团/女队/双团每日报告图片。gender=both 时分别生成；人数超过 30 时每团最多拆成 2 张。",
+        description: "生成并发送男团/女队/双团每日报告图片。gender=both 时分别生成；导出选「两张」且超过 30 人时每团最多拆成 2 张，人数不够仍发一张。",
         parameters: {
           type: "object",
           properties: {

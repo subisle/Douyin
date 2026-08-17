@@ -314,7 +314,7 @@ export interface DrawReportOptions {
   hideDateInTitle?: boolean;
 }
 
-/** 超过该人数时，导出自动拆成上下两张，避免单图过高 */
+/** 超过该人数且允许拆页时，导出拆成上下两张 */
 export const DAILY_REPORT_EXPORT_SPLIT_THRESHOLD = 30;
 
 export type DailyReportExportPage = {
@@ -328,14 +328,19 @@ export type DailyReportExportPage = {
  * 将日报名单拆成导出页。超过阈值时固定拆成 2 页（约一半一半）。
  * 预览仍可用全量 rows；仅导出走分页。
  */
+function resolveSplitOption(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function splitDailyReportRowsForExport(
   rows: DailyReportRow[],
   options?: { threshold?: number; maxPages?: number }
 ): DailyReportExportPage[] {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return [];
-  const threshold = Math.max(1, Number(options?.threshold) || DAILY_REPORT_EXPORT_SPLIT_THRESHOLD);
-  const maxPages = Math.max(1, Math.min(2, Number(options?.maxPages) || 2));
+  const threshold = Math.max(1, resolveSplitOption(options?.threshold, DAILY_REPORT_EXPORT_SPLIT_THRESHOLD));
+  const maxPages = Math.max(1, Math.min(2, resolveSplitOption(options?.maxPages, 2)));
   if (list.length <= threshold || maxPages < 2) {
     return [{ rows: list, rankOffset: 0, pageIndex: 1, pageCount: 1 }];
   }

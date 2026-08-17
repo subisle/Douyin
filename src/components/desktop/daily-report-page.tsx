@@ -496,7 +496,6 @@ export function DailyReportPage() {
       const styleText = reportStyle === "apple" ? "样式二" : "样式一";
       // 分割：按开关「两张」强制拆成两张 /「一张」导出完整长图（预览始终完整一页）
       const pages = splitDailyReportRowsForExport(sortedRows, {
-        threshold: exportImageSplit ? 1 : 1,
         maxPages: exportImageSplit ? 2 : 1,
       });
       for (const page of pages) {
@@ -531,7 +530,6 @@ export function DailyReportPage() {
     try {
       const genderText = gender === "male" ? "男" : "女";
       const pages = splitDailyReportRowsForExport(sortedRows, {
-        threshold: exportImageSplit ? 1 : 1,
         maxPages: exportImageSplit ? 2 : 1,
       });
       for (const page of pages) {
@@ -997,7 +995,7 @@ export function DailyReportPage() {
                       </button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      两张：人数不少于 2 时拆成上下两张；一张：导出完整长图
+                      两张：超过 30 人拆成上下两张，人数不够仍导出一张；一张：完整长图
                     </p>
                   </div>
                   <div className="flex justify-end gap-2 pt-1">

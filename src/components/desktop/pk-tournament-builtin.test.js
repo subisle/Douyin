@@ -28,22 +28,23 @@ const {
 
 const root = path.join(__dirname);
 
-test("内置表：8 组 58 人，每组 7–8，与赛程 meta 对齐", () => {
+test("815 唯一分组：8 组 58 人，每组 7–9，与赛程 meta 对齐", () => {
   assert.equal(PRESET_BATTLE_GROUPS.length, 8);
   const flat = PRESET_BATTLE_GROUPS.flat();
   assert.equal(flat.length, 58);
   assert.equal(new Set(flat).size, 58);
-  assert.ok(PRESET_BATTLE_GROUPS.every((g) => g.length >= 7 && g.length <= 8));
+  assert.ok(PRESET_BATTLE_GROUPS.every((g) => g.length >= 7 && g.length <= 9));
   assert.deepEqual(
     PRESET_BATTLE_GROUPS.map((g) => g.length),
-    [7, 7, 7, 8, 7, 8, 7, 7]
+    [9, 7, 7, 7, 7, 7, 7, 7]
   );
-  assert.equal(PRESET_BATTLE_META.firstStart, "08:15");
+  assert.equal(PRESET_BATTLE_META.label, "815");
+  assert.equal(PRESET_BATTLE_META.firstStart, "12:15");
   assert.equal(PRESET_BATTLE_META.stepMinutes, 15);
   assert.equal(PRESET_BATTLE_META.periodHint, "2026-08");
 });
 
-test("新规则：8人前4后4 · 7人前4后3 → 直晋32 · 复活出16淘10 · 晋级48", () => {
+test("815 规则：前四组→复活①→后四组→复活② → 直晋32 · 复活出16 · 晋级48（8×6）", () => {
   const rules = DEFAULT_TOURNAMENT_RULES;
   const sevenMode = resolveSevenPersonSplit({
     groupSizes: PRESET_BATTLE_GROUPS.map((g) => g.length),
@@ -52,92 +53,83 @@ test("新规则：8人前4后4 · 7人前4后3 → 直晋32 · 复活出16淘10 
   });
   assert.equal(sevenMode, "4-3");
 
-  let direct = 0;
-  let revivePool = 0;
-  let eliminated = 0;
-  for (const names of PRESET_BATTLE_GROUPS) {
-    const ranked = names.map((name, i) => ({
-      key: name,
-      score: (names.length - i) * 1000,
-    }));
-    const { top, reviveTail } = resolveGroupTopRevive(names.length, {
-      sevenPersonSplit: sevenMode,
-    });
-    const split = splitGroupAdvanceRevive(ranked, top, reviveTail);
-    direct += split.advance.length;
-    revivePool += split.revive.length;
-    eliminated += split.eliminated.length;
-  }
+  const settlePhase = (groups) => {
+    let direct = 0;
+    let revivePool = 0;
+    for (const names of groups) {
+      const ranked = names.map((name, i) => ({
+        key: name,
+        score: (names.length - i) * 1000,
+      }));
+      const { top, reviveTail } = resolveGroupTopRevive(names.length, {
+        sevenPersonSplit: sevenMode,
+      });
+      const split = splitGroupAdvanceRevive(ranked, top, reviveTail);
+      direct += split.advance.length;
+      revivePool += split.revive.length;
+      assert.equal(split.eliminated.length, 0);
+    }
+    const reviveGroupCount = resolveReviveGroupCount(revivePool);
+    const reviveKeyGroups = splitIntoNGroups(
+      Array.from({ length: revivePool }, (_, i) => `r${i + 1}`),
+      reviveGroupCount
+    );
+    let reviveAdvance = 0;
+    let reviveElim = 0;
+    for (const chunk of reviveKeyGroups) {
+      const ranked = chunk.map((key, i) => ({
+        key,
+        score: (chunk.length - i) * 100,
+      }));
+      const top = resolveReviveGroupTop(chunk.length);
+      const split = splitReviveGroupAdvance(ranked, top);
+      reviveAdvance += split.advance.length;
+      reviveElim += split.eliminated.length;
+    }
+    return {
+      direct,
+      revivePool,
+      reviveGroupCount,
+      reviveKeySizes: reviveKeyGroups.map((g) => g.length),
+      reviveAdvance,
+      reviveElim,
+    };
+  };
 
-  // 6×7：各 4 直晋 + 3 复活；2×8：各 4 直晋 + 4 复活 → 直晋 32 · 复活 26 · 小组淘 0
-  assert.equal(direct, 32);
-  assert.equal(revivePool, 6 * 3 + 2 * 4); // 26
-  assert.equal(eliminated, 0);
+  // 前四组（9,7,7,7）：直晋 16 · 复活池 14 → 2 组(7,7) 组内前4 → 出8 淘6
+  const p1 = settlePhase(PRESET_BATTLE_GROUPS.slice(0, 4));
+  assert.equal(p1.direct, 16);
+  assert.equal(p1.revivePool, 14);
+  assert.equal(p1.reviveGroupCount, 2);
+  assert.deepEqual(p1.reviveKeySizes, [7, 7]);
+  assert.equal(p1.reviveAdvance, 8);
+  assert.equal(p1.reviveElim, 6);
 
-  // ideal=48 与组内前4 一致：复活 26 → 4 组均分，每组前4 → 出16淘10
-  const reviveOut = resolveReviveTarget({
-    directAdvanceCount: direct,
-    idealPromoPool: rules.idealPromoPool,
-    reviveTarget: rules.reviveTarget,
-    revivePoolSize: revivePool,
-  });
-  assert.equal(reviveOut, 16);
-  assert.equal(revivePool - reviveOut, 10);
+  // 后四组（7,7,7,7）：直晋 16 · 复活池 12 → 2 组(6,6) 组内前4 → 出8 淘4
+  const p2 = settlePhase(PRESET_BATTLE_GROUPS.slice(4));
+  assert.equal(p2.direct, 16);
+  assert.equal(p2.revivePool, 12);
+  assert.equal(p2.reviveGroupCount, 2);
+  assert.deepEqual(p2.reviveKeySizes, [6, 6]);
+  assert.equal(p2.reviveAdvance, 8);
+  assert.equal(p2.reviveElim, 4);
 
-  // 复活分组：26 人 → 4 组 · 组内前 4 晋
-  assert.equal(REVIVE_GROUP_TOP, 4);
-  const reviveGroupCount = resolveReviveGroupCount(revivePool);
-  assert.equal(reviveGroupCount, 4);
-  const reviveKeyGroups = splitIntoNGroups(
-    Array.from({ length: revivePool }, (_, i) => `r${i + 1}`),
-    reviveGroupCount
-  );
-  assert.deepEqual(
-    reviveKeyGroups.map((g) => g.length),
-    [7, 7, 6, 6]
-  );
-  let reviveAdvance = 0;
-  let reviveElim = 0;
-  for (const chunk of reviveKeyGroups) {
-    const ranked = chunk.map((key, i) => ({
-      key,
-      score: (chunk.length - i) * 100,
-    }));
-    const top = resolveReviveGroupTop(chunk.length);
-    const split = splitReviveGroupAdvance(ranked, top);
-    reviveAdvance += split.advance.length;
-    reviveElim += split.eliminated.length;
-  }
-  assert.equal(reviveAdvance, 16);
-  assert.equal(reviveElim, 10);
-
-  const promoTotal = direct + reviveAdvance;
-  assert.equal(promoTotal, 48);
-  assert.ok(promoTotal >= PROMO_POOL_MIN && promoTotal <= PROMO_POOL_MAX);
-
-  // 晋级：固定 8 组均分，每组 6
+  // 晋级池 = 两半程直晋 32 + 两轮复活出线 16 = 48 = ideal，恰好 8 组各 6
+  const promoPool = p1.direct + p2.direct + p1.reviveAdvance + p2.reviveAdvance;
+  assert.equal(promoPool, 48);
+  assert.equal(promoPool, rules.idealPromoPool);
   const promoGroups = splitIntoNGroups(
-    Array.from({ length: promoTotal }, (_, i) => `p${i + 1}`),
+    Array.from({ length: promoPool }, (_, i) => `p${i + 1}`),
     PROMO_GROUP_COUNT
   );
   assert.equal(promoGroups.length, 8);
-  assert.ok(promoGroups.every((g) => g.length === 6));
   assert.deepEqual(
     promoGroups.map((g) => g.length),
     [6, 6, 6, 6, 6, 6, 6, 6]
   );
-
-  assert.equal(
-    resolvePromoPoolTarget({
-      directAdvanceCount: direct,
-      revivePoolSize: revivePool,
-      idealPromoPool: rules.idealPromoPool,
-    }),
-    48
-  );
 });
 
-test("7 人可调前3后4：扩大复活池", () => {
+test("815 规则 3-4 可调：扩大复活池", () => {
   let direct = 0;
   let revivePool = 0;
   for (const names of PRESET_BATTLE_GROUPS) {
@@ -152,22 +144,23 @@ test("7 人可调前3后4：扩大复活池", () => {
     direct += split.advance.length;
     revivePool += split.revive.length;
   }
-  // 6×7：3+4；2×8：4+4 → 直晋 26 · 复活 32
-  assert.equal(direct, 6 * 3 + 2 * 4);
-  assert.equal(direct, 26);
-  assert.equal(revivePool, 6 * 4 + 2 * 4);
-  assert.equal(revivePool, 32);
+  // 1×9：前4复活5；7×7：3+4 → 直晋 25 · 复活 33
+  assert.equal(direct, 7 * 3 + 4);
+  assert.equal(direct, 25);
+  assert.equal(revivePool, 7 * 4 + 5);
+  assert.equal(revivePool, 33);
 });
 
-test("源码接线：store 导出内置导入 · 监控页按钮 · 按组人数切分", () => {
+test("源码接线：store 导出 815 导入 · 前后半程复活 · 监控页按钮 · 按组人数切分", () => {
   const store = fs.readFileSync(path.join(root, "pk-tournament-store.ts"), "utf8");
   const page = fs.readFileSync(path.join(root, "pk-monitor-page.tsx"), "utf8");
+  const stagePage = fs.readFileSync(path.join(root, "pk-group-stage-page.tsx"), "utf8");
   const roster = fs.readFileSync(path.join(root, "pk-roster-config.ts"), "utf8");
   const rulesSrc = fs.readFileSync(path.join(root, "pk-tournament-rules.ts"), "utf8");
 
   assert.match(store, /export function importGroupStageFromBuiltIn/);
   assert.match(store, /PRESET_BATTLE_GROUPS/);
-  assert.match(store, /BUILTIN_GROUP_STAGE_PRESET_NAME = "小组赛"/);
+  assert.match(store, /BUILTIN_GROUP_STAGE_PRESET_NAME = "815"/);
   assert.match(store, /resolveGroupTopRevive/);
   assert.match(store, /resolveSevenPersonSplit/);
   assert.match(store, /BUILTIN_BATTLE_META/);
@@ -175,14 +168,44 @@ test("源码接线：store 导出内置导入 · 监控页按钮 · 按组人数
   assert.match(store, /splitReviveGroupAdvance|resolveReviveGroupTop|resolveReviveGroupCount/);
   assert.doesNotMatch(store, /PRESET_BATTLE_META\.periodHint/);
 
+  // 前后半程流程：小组赛①→复活①→小组赛②→复活②→晋级赛
+  assert.match(store, /export function settleGroupStage/);
+  assert.match(store, /export function settleReviveStage/);
+  assert.match(store, /flow: TournamentFlow/);
+  assert.match(store, /groupPhase: 1 \| 2/);
+  assert.match(store, /revivePhase: 1 \| 2/);
+  assert.match(store, /promoPool: string\[\]/);
+  assert.match(store, /export function currentGroupPhase/);
+  assert.match(store, /export function groupPhaseBoundary/);
+  assert.match(store, /export function isGroupPhaseFullyScored/);
+  assert.match(store, /export function isStageFullyScoredForTournament/);
+  assert.match(store, /export function stageTabLabel/);
+  assert.match(store, /小组赛①|小组赛②|前四组|后四组/);
+
   assert.match(page, /importGroupStageFromBuiltIn/);
-  assert.match(page, /导入内置小组赛/);
+  assert.match(page, /导入 815 分组/);
   assert.match(page, /handleImportBuiltIn/);
+  assert.match(page, /isStageFullyScoredForTournament/);
+  assert.match(page, /stageTabLabel/);
+
+  assert.match(stagePage, /stageTabLabel/);
+  assert.match(stagePage, /currentGroupPhase/);
+  assert.match(stagePage, /groupPhaseBoundary/);
+  assert.match(stagePage, /前四组/);
+  assert.match(stagePage, /后四组/);
 
   assert.match(roster, /export const PRESET_BATTLE_META/);
+  assert.match(roster, /BUILTIN_GROUP_PRESET_NAME = "815"/);
+  // 晋级赛内置分组：store 导入 + roster 导出
+  assert.match(store, /export function importPromoFromBuiltIn/);
+  assert.match(store, /PRESET_PROMO_GROUPS/);
+  assert.match(store, /BUILTIN_PROMO_PRESET_NAME/);
   assert.match(roster, /export const PRESET_PROMO_GROUPS/);
-  assert.match(roster, /export const BUILTIN_PROMO_PRESET_NAME = "晋级赛"/);
-  assert.match(roster, /syncBuiltInPromoGroupsToPkStorage/);
+  assert.match(roster, /BUILTIN_PROMO_PRESET_NAME = "晋级赛-815"/);
+  assert.match(roster, /export function getBuiltInPromoNameGroups/);
+  assert.doesNotMatch(roster, /syncBuiltInPromoGroupsToPkStorage/);
+  assert.match(stagePage, /importPromoFromBuiltIn/);
+  assert.match(stagePage, /加载晋级赛分组/);
   assert.match(rulesSrc, /export function resolveGroupTopRevive/);
   assert.match(rulesSrc, /export function splitIntoNGroups/);
   assert.match(rulesSrc, /export function splitReviveGroupAdvance/);

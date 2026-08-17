@@ -490,7 +490,7 @@ function genderLabel(gender) {
 }
 
 /**
- * 发送单团日报：每日之星文案 → 每日之星图 → 报告图（可多页）。
+ * 发送单团日报：每日之星文案 → 报告图（可多页）。
  * @param {{ withDate?: boolean }} [options] withDate 时在文案前加日期标题
  */
 async function sendOneGenderReport(args, date, gender, db, renderReportPng, options = {}) {
@@ -507,25 +507,9 @@ async function sendOneGenderReport(args, date, gender, db, renderReportPng, opti
   });
   await args.replyText(top3Text);
 
-  // 每日之星海报（前三名）
-  const renderStar = typeof options.renderDailyStarPng === "function"
-    ? options.renderDailyStarPng
-    : renderDailyStarPng;
-  try {
-    const star = await renderStar(date, gender, report);
-    if (star?.buffer?.length) {
-      await args.replyImage({
-        buffer: star.buffer,
-        fileName: star.fileName || `${date}_${label}_每日之星.png`,
-      });
-    }
-  } catch (error) {
-    await args.replyText(`${label}每日之星图片生成失败：${error instanceof Error ? error.message : String(error)}`);
-  }
-
   try {
     // 标题交给渲染层按性别默认（男团星嗨艺创 / 女队薇笑传媒），与软件日报一致
-    // 人数过多时自动拆成最多两张（与桌面端导出一致）
+    // 超过默认阈值才拆最多两张；人数不够保持一张
     const pages = await toDailyReportImagePages(renderReportPng, report, {});
     for (const page of pages) {
       const suffix = page.fileNameSuffix || "";
@@ -549,7 +533,7 @@ async function sendReport(args, command, db, renderReportPng, extra = {}) {
     return;
   }
 
-  // 顺序：男团每日之星文案/图/报告 → 女队每日之星文案/图/报告；日期只出现在首条文案
+  // 顺序：男团每日之星文案/报告 → 女队每日之星文案/报告；日期只出现在首条文案
   const genders = command.gender === "both" ? ["male", "female"] : [command.gender === "female" ? "female" : "male"];
   let first = true;
   for (const gender of genders) {
@@ -908,7 +892,7 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
           }
           if (pushCommand.type === "enable") {
             dailyPush.setEnabled(true, { actorUserId, accountId });
-            await args.replyText("已开启日报自动推送。音浪数据更新后将发送每日之星（前三名）与报告图。发「关闭日报推送」可关闭。");
+            await args.replyText("已开启日报自动推送。音浪数据更新后将发送每日之星（前三名）文案与报告图。发「关闭日报推送」可关闭。");
             return { handled: true };
           }
           if (pushCommand.type === "disable") {

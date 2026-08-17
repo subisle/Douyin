@@ -21,7 +21,7 @@ const built = buildPkGroups({
 console.log(formatGroupsText(built));
 const outDir = path.join("data", "runtime", "artifacts");
 fs.mkdirSync(outDir, { recursive: true });
-const outFile = path.join(outDir, `星嗨艺创_内置分组_${period}.png`);
+const outFile = path.join(outDir, `星嗨艺创_${PRESET_BATTLE_META.label}_${period}.png`);
 const png = await renderPkGroupsPng(built, {
   period,
   title: "星嗨艺创",

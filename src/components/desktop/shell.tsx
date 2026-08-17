@@ -98,9 +98,9 @@ export function DesktopShell() {
       if (!rows?.length) throw new Error("没有可渲染的日报数据");
       const gender: "male" | "female" = report.gender === "female" ? "female" : "male";
       const prefs = resolveDailyReportExportPrefs(gender);
-      // 女队默认不拆页；男团沿用阈值拆最多 2 页（与 SVG 降级 / 软件默认一致）
-      const maxPages = gender === "female" ? 1 : 2;
-      const pages = splitDailyReportRowsForExport(rows, { maxPages });
+      const pages = splitDailyReportRowsForExport(rows, {
+        maxPages: prefs.exportImageSplit ? 2 : 1,
+      });
       const results: { dataUrl: string; pageIndex: number; pageCount: number; fileNameSuffix: string }[] = [];
       for (const page of pages) {
         const canvas = document.createElement("canvas");

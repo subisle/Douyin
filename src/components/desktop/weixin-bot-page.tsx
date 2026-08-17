@@ -964,7 +964,7 @@ function DailyReportPushPanel({
           <div>
             <div className="font-medium text-foreground">音浪更新后自动发送</div>
             <div className="text-[10px] text-muted-foreground">
-              推送给全部有会话联系人（每日之星前三 + 男女报告图（男团可拆2页，女团单页）（男团可拆2页，女团单页））
+              推送给全部有会话联系人（每日之星前三文案 + 男女报告图，男团可拆2页、女团单页）
             </div>
           </div>
           <input

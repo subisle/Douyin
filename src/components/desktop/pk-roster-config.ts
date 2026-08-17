@@ -8,10 +8,11 @@ const SHARED_PRESET_BATTLE_GROUPS: string[][] =
   [];
 
 const SHARED_PRESET_BATTLE_META = {
-  label: "内置分组",
-  source: "内置小组赛分组",
-  firstStart: "08:15",
+  label: "815",
+  source: "815 唯一分组",
+  firstStart: "12:15",
   stepMinutes: 15,
+  reviveExtraMinutes: 0,
   periodHint: "2026-08",
   notes: [] as string[],
   ...((SharedPresetBattle as { PRESET_BATTLE_META?: Record<string, unknown> }).PRESET_BATTLE_META ||
@@ -27,10 +28,8 @@ const SHARED_PRESET_PROMO_GROUPS: string[][] =
   [];
 
 const SHARED_PRESET_PROMO_META = {
-  label: "晋级赛",
-  source: "内置晋级赛分组",
-  firstStart: "08:15",
-  stepMinutes: 15,
+  label: "晋级815",
+  source: "815 晋级赛分组",
   periodHint: "2026-08",
   notes: [] as string[],
   ...((SharedPresetBattle as { PRESET_PROMO_META?: Record<string, unknown> }).PRESET_PROMO_META ||
@@ -41,12 +40,13 @@ const SHARED_PRESET_PROMO_META = {
 
 export const DEFAULT_PK_GROUP_SIZE = 8;
 
-/** 与 shared 同步的内置争霸赛元信息（时间表 / 来源 / periodHint） */
+/** 与 shared 同步的 815 唯一分组元信息（时间表 / 来源 / periodHint） */
 export const PRESET_BATTLE_META = {
-  label: String(SHARED_PRESET_BATTLE_META.label || "内置分组"),
-  source: String(SHARED_PRESET_BATTLE_META.source || "内置小组赛分组"),
-  firstStart: String(SHARED_PRESET_BATTLE_META.firstStart || "08:15"),
+  label: String(SHARED_PRESET_BATTLE_META.label || "815"),
+  source: String(SHARED_PRESET_BATTLE_META.source || "815 唯一分组"),
+  firstStart: String(SHARED_PRESET_BATTLE_META.firstStart || "12:15"),
   stepMinutes: Number(SHARED_PRESET_BATTLE_META.stepMinutes) || 15,
+  reviveExtraMinutes: Number(SHARED_PRESET_BATTLE_META.reviveExtraMinutes) || 0,
   periodHint: String(SHARED_PRESET_BATTLE_META.periodHint || "2026-08"),
   notes: Array.isArray(SHARED_PRESET_BATTLE_META.notes)
     ? (SHARED_PRESET_BATTLE_META.notes as string[]).map(String)
@@ -65,100 +65,103 @@ export const LEGACY_ROSTER_CONFIG_STORAGE_KEY = "pk-roster-list-config-v17";
 export const LEGACY_ROSTER_CONFIG_STORAGE_KEY_V16 = "pk-roster-list-config-v16";
 
 /**
- * 默认白名单（与内置分组顺序一致，按组展开）。
+ * 默认白名单（与 815 唯一分组顺序一致，按组展开）。
  * bot skill 用正则从本文件抽取 PRESET_ROSTER_TEXT，**勿改符号名 / 反引号形态**。
  */
-export const PRESET_ROSTER_TEXT = `狼明
-狼腾
-浩雨
-浩泽
-狼辰
-狼九
-玖依
-南方楠
-啸宇
-浩龙
-狼艺
-玖豆
-狼雨
-啸墨
-狼澈
-啸泽
-浩运
-玖雪
-狼征
-浩延
-浩沐
-浩鸣
-啸辰
-玖玉
-浩冬
-浩森
-狼旭
-狼俊
-狼凯
-玖玥
-狼兴
-玖柒
-啸森
-浩月
-浩艺
-啸阳
-鹏先生
-啸帆
-浩玟
-狼泽
-狼岳
-狼哲
-啸强
-狼途
-啸安
-狼赫
-玖妹
-狼辉
-浩哲
-浩杰
-狼安
-狼仔
+export const PRESET_ROSTER_TEXT = `狼澈
 狼轩
-狼影
-浩坤
-狼博
+狼兴
+啸宇
+啸泽
+浩杰
+浩沐
+浩龙
+啸墨
+狼明
+狼仔
+狼赫
+浩楠
+狼腾
+狼凯
+啸强
+玖玉
+玖豆
+浩月
+啸森
+狼岳
 狼佑
-狼裕
+浩延
+浩冬
+浩玟
+狼辉
+玖妹
+狼雨
+浩辰
+浩阳
+啸辰
+狼小宝
+浩鸣
+狼九
+啸安
+啸阳
+狼哲
+鹏先生
+南方楠
+狼艺
+玖雪
+浩艺
+玖依
+狼霆
+玖玥
+浩雨
+狼辰
+浩哲
+浩森
+浩启
+浩坤
+啸帆
+狼影
+狼泽
+浩运
+啸恒
+狼征
+狼途
 `;
 
 /**
- * 小组赛内置固定分组（锁定版）。
- * 与 shared PRESET_BATTLE_GROUPS 同步 · 58 人 8 组每组 7–8 · 08:15×15min
+ * 815 唯一固定分组（锁定版）。
+ * 与 shared PRESET_BATTLE_GROUPS 同步 · 58 人 8 组（第1组 9 人 · 其余 7 人）· 12:15×15min
  */
 export const PRESET_BATTLE_GROUPS: string[][] = SHARED_PRESET_BATTLE_GROUPS.map((row) => [...row]);
 
 export const PRESET_BATTLE_FIRST_START = PRESET_BATTLE_META.firstStart;
 export const PRESET_BATTLE_STEP_MINUTES = PRESET_BATTLE_META.stepMinutes;
+/** 第4组后插复活赛造成的额外顺延（第5组起每组 +N 分钟）；815 = 5 */
+export const PRESET_BATTLE_REVIVE_EXTRA_MINUTES = PRESET_BATTLE_META.reviveExtraMinutes;
 export const PRESET_BATTLE_NOTES = [...PRESET_BATTLE_META.notes];
 
-/** 与 shared 同步的第二套内置：晋级赛元信息 */
+/** 815 晋级赛分组元信息（44 人 · 8 组 · 规模 [5,5,5,5,6,6,6,6] · 无四人组） */
 export const PRESET_PROMO_META = {
-  label: String(SHARED_PRESET_PROMO_META.label || "晋级赛"),
-  source: String(SHARED_PRESET_PROMO_META.source || "内置晋级赛分组"),
-  firstStart: String(SHARED_PRESET_PROMO_META.firstStart || "08:15"),
-  stepMinutes: Number(SHARED_PRESET_PROMO_META.stepMinutes) || 15,
+  label: String(SHARED_PRESET_PROMO_META.label || "晋级815"),
+  source: String(SHARED_PRESET_PROMO_META.source || "815 晋级赛分组"),
   periodHint: String(SHARED_PRESET_PROMO_META.periodHint || "2026-08"),
   notes: Array.isArray(SHARED_PRESET_PROMO_META.notes)
     ? (SHARED_PRESET_PROMO_META.notes as string[]).map(String)
     : [],
 };
 
-/**
- * 晋级赛内置固定分组（第二套）。
- * 与 shared PRESET_PROMO_GROUPS 同步 · 47 人 8 组 · 每组一强核
- */
+/** 815 晋级赛固定分组（与 shared PRESET_PROMO_GROUPS 同步 · 44 人 8 组） */
 export const PRESET_PROMO_GROUPS: string[][] = SHARED_PRESET_PROMO_GROUPS.map((row) => [...row]);
 
-export const PRESET_PROMO_FIRST_START = PRESET_PROMO_META.firstStart;
-export const PRESET_PROMO_STEP_MINUTES = PRESET_PROMO_META.stepMinutes;
-export const PRESET_PROMO_NOTES = [...PRESET_PROMO_META.notes];
+/** 晋级赛存档名（PK 分组命名存档） */
+export const BUILTIN_PROMO_PRESET_NAME = "晋级赛-815";
+
+/** 当前代码锁定的 815 晋级赛名组（拷贝，避免外部 mutate） */
+export function getBuiltInPromoNameGroups(): string[][] {
+  return (PRESET_PROMO_GROUPS || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
 
 function flattenPresetRosterText() {
   const fn =
@@ -169,15 +172,6 @@ function flattenPresetRosterText() {
   return PRESET_BATTLE_GROUPS.flat().join("\n");
 }
 
-function flattenPromoRosterText() {
-  const fn =
-    (SharedPresetBattle as { flattenPromoRosterText?: () => string }).flattenPromoRosterText ||
-    (SharedPresetBattle as { default?: { flattenPromoRosterText?: () => string } }).default
-      ?.flattenPromoRosterText;
-  if (typeof fn === "function") return String(fn() || "");
-  return PRESET_PROMO_GROUPS.flat().join("\n");
-}
-
 const ROSTER_NAME_ALIASES: Record<string, string> = {
   辰辰: "浩辰",
   阿楠: "南方楠",
@@ -185,6 +179,8 @@ const ROSTER_NAME_ALIASES: Record<string, string> = {
   玖月: "玖玥",
   农村小胖孩: "狼轩",
   "农村小胖孩🎹（才艺）": "狼轩",
+  中鹏先生: "鹏先生",
+  鹏鹏: "鹏先生",
 };
 
 export function normalizeRosterName(value: string) {
@@ -270,12 +266,14 @@ function resolveNamedBattleGroups(
     labelPrefix?: string;
     firstStart?: string;
     stepMinutes?: number;
+    reviveExtraMinutes?: number;
     scoreField?: "wave" | "latestWave";
   }
 ) {
   const labelPrefix = options?.labelPrefix || "第";
   const firstStart = options?.firstStart || PRESET_BATTLE_FIRST_START;
   const stepMinutes = options?.stepMinutes ?? PRESET_BATTLE_STEP_MINUTES;
+  const reviveExtraMinutes = options?.reviveExtraMinutes ?? PRESET_BATTLE_REVIVE_EXTRA_MINUTES;
   const scoreField = options?.scoreField || "wave";
   const match = String(firstStart).match(/^(\d{1,2}):(\d{2})$/);
   const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
@@ -320,7 +318,8 @@ function resolveNamedBattleGroups(
       members.length > 0
         ? members.reduce((sum, item) => sum + memberStrength(item, scoreField), 0) / members.length
         : 0;
-    const startTime = formatHm(startMin + index * stepMinutes);
+    // 第4组后插复活赛：第5组起（index>=4）顺延 reviveExtraMinutes
+    const startTime = formatHm(startMin + index * stepMinutes + (index >= 4 ? reviveExtraMinutes : 0));
     return {
       key: `group-${index + 1}`,
       label: `${labelPrefix}${index + 1}组`,
@@ -370,6 +369,7 @@ export function resolvePresetBattleGroups(
     labelPrefix: "第",
     firstStart: PRESET_BATTLE_FIRST_START,
     stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+    reviveExtraMinutes: PRESET_BATTLE_REVIVE_EXTRA_MINUTES,
     scoreField: options?.scoreField,
   });
 }
@@ -386,6 +386,7 @@ export function buildBattleGroupsResultFromNameGroups(
     notes?: string[];
     firstStart?: string;
     stepMinutes?: number;
+    reviveExtraMinutes?: number;
   }
 ): BuildPkGroupsResult {
   const scoreField = options?.scoreField || "wave";
@@ -396,6 +397,7 @@ export function buildBattleGroupsResultFromNameGroups(
     labelPrefix: "第",
     firstStart,
     stepMinutes,
+    reviveExtraMinutes: options?.reviveExtraMinutes,
     scoreField,
   });
   const groups: BuildPkGroupsGroup[] = resolved.groups.map((g, gi) => ({
@@ -450,12 +452,14 @@ export function buildPresetBattleGroupsResult(
     scoreField?: "wave" | "latestWave";
     firstStart?: string;
     stepMinutes?: number;
+    reviveExtraMinutes?: number;
   }
 ): BuildPkGroupsResult {
   return buildBattleGroupsResultFromNameGroups(PRESET_BATTLE_GROUPS, allMembers, {
     scoreField: options?.scoreField,
     firstStart: options?.firstStart,
     stepMinutes: options?.stepMinutes,
+    reviveExtraMinutes: options?.reviveExtraMinutes,
     mode: "preset",
     modeLabel: PRESET_BATTLE_META.label,
     source: PRESET_BATTLE_META.source,
@@ -473,6 +477,8 @@ export type SavedGroupsLayout = {
   scoreDisplay?: string;
   firstStart?: string;
   stepMinutes?: number;
+  /** 第4组后插复活赛：第5组起每组顺延分钟数 */
+  reviveExtraMinutes?: number;
   groupSize?: number;
   nameGroups: string[][];
   savedAt: string;
@@ -487,6 +493,7 @@ export type SavedGroupPreset = {
   scoreDisplay?: string;
   firstStart?: string;
   stepMinutes?: number;
+  reviveExtraMinutes?: number;
   groupSize?: number;
   nameGroups: string[][];
   savedAt: string;
@@ -523,6 +530,10 @@ function normalizePreset(raw: Partial<SavedGroupPreset> | null | undefined): Sav
     scoreDisplay: raw.scoreDisplay,
     firstStart: raw.firstStart ? normalizeFirstStart(raw.firstStart) : undefined,
     stepMinutes: raw.stepMinutes != null ? normalizeStepMinutes(raw.stepMinutes) : undefined,
+    reviveExtraMinutes:
+      raw.reviveExtraMinutes != null
+        ? normalizeReviveExtraMinutes(raw.reviveExtraMinutes)
+        : undefined,
     groupSize: raw.groupSize != null ? normalizeGroupSize(raw.groupSize) : undefined,
     nameGroups,
     savedAt: raw.savedAt || new Date().toISOString(),
@@ -540,6 +551,7 @@ function presetToLayout(preset: SavedGroupPreset): SavedGroupsLayout {
     scoreDisplay: preset.scoreDisplay,
     firstStart: preset.firstStart,
     stepMinutes: preset.stepMinutes,
+    reviveExtraMinutes: preset.reviveExtraMinutes,
     groupSize: preset.groupSize,
     nameGroups: preset.nameGroups,
     savedAt: preset.savedAt,
@@ -556,6 +568,7 @@ function layoutToPreset(layout: SavedGroupsLayout, fallbackName = "分组1"): Sa
     scoreDisplay: layout.scoreDisplay,
     firstStart: layout.firstStart,
     stepMinutes: layout.stepMinutes,
+    reviveExtraMinutes: layout.reviveExtraMinutes,
     groupSize: layout.groupSize,
     nameGroups: layout.nameGroups,
     savedAt: layout.savedAt,
@@ -593,6 +606,7 @@ function readPresetsStoreRaw(): SavedGroupPresetsStore {
         scoreDisplay: legacy.scoreDisplay,
         firstStart: legacy.firstStart,
         stepMinutes: legacy.stepMinutes,
+        reviveExtraMinutes: legacy.reviveExtraMinutes,
         groupSize: legacy.groupSize,
         nameGroups: legacy.nameGroups,
         savedAt: legacy.savedAt || new Date().toISOString(),
@@ -657,27 +671,18 @@ export function suggestNextGroupPresetName(presets?: SavedGroupPreset[]): string
   return `分组${max + 1 || list.length + 1}`;
 }
 
-/** PK 分组页 / 赛程共用的内置存档名 · 小组赛（第一套） */
-export const BUILTIN_GROUP_PRESET_NAME = "小组赛";
-/** PK 分组页 / 赛程共用的内置存档名 · 晋级赛（第二套） */
-export const BUILTIN_PROMO_PRESET_NAME = "晋级赛";
+/** PK 分组页 / 赛程共用的 815 唯一分组存档名 */
+export const BUILTIN_GROUP_PRESET_NAME = "815";
 
-/** 当前代码锁定的小组赛内置名组（拷贝，避免外部 mutate） */
+/** 当前代码锁定的 815 名组（拷贝，避免外部 mutate） */
 export function getBuiltInNameGroups(): string[][] {
   return (PRESET_BATTLE_GROUPS || []).map((row) =>
     (row || []).map((n) => String(n || "").trim()).filter(Boolean)
   );
 }
 
-/** 当前代码锁定的晋级赛内置名组（拷贝，避免外部 mutate） */
-export function getBuiltInPromoNameGroups(): string[][] {
-  return (PRESET_PROMO_GROUPS || []).map((row) =>
-    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
-  );
-}
-
 /**
- * 把代码内置表写入 PK 分组命名存档「小组赛」，并同步白名单文本。
+ * 把代码内置 815 表写入 PK 分组命名存档「815」，并同步白名单文本。
  * 默认 makeActive=true，打开 PK 分组即见最新锁定表。
  */
 export function syncBuiltInGroupsToPkStorage(options?: {
@@ -705,9 +710,10 @@ export function syncBuiltInGroupsToPkStorage(options?: {
   const note =
     String(options?.note || "").trim() ||
     [
-      PRESET_BATTLE_META.source || "内置小组赛分组",
+      PRESET_BATTLE_META.source || "815 唯一分组",
       `${nameGroups.length} 组 · ${total} 人`,
-      `最强第4 · 啸泽3/啸帆6 · ${PRESET_BATTLE_FIRST_START}×${PRESET_BATTLE_STEP_MINUTES}min`,
+      `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+      `${PRESET_BATTLE_FIRST_START}×${PRESET_BATTLE_STEP_MINUTES}min`,
       `同步 ${new Date().toISOString()}`,
     ].join(" · ");
 
@@ -719,74 +725,11 @@ export function syncBuiltInGroupsToPkStorage(options?: {
     mode: "preset",
     firstStart: PRESET_BATTLE_FIRST_START,
     stepMinutes: PRESET_BATTLE_STEP_MINUTES,
+    reviveExtraMinutes: PRESET_BATTLE_REVIVE_EXTRA_MINUTES,
     groupSize: DEFAULT_PK_GROUP_SIZE,
     note,
     makeActive: options?.makeActive !== false,
   });
-}
-
-/**
- * 把第二套内置表写入 PK 分组命名存档「晋级赛」。
- * 默认 makeActive=false，不抢当前激活的「小组赛」。
- * 拖拽微调后可覆盖保存到同名存档。
- */
-export function syncBuiltInPromoGroupsToPkStorage(options?: {
-  makeActive?: boolean;
-  period?: string;
-  note?: string;
-}): SavedGroupPreset | null {
-  if (typeof window === "undefined") return null;
-  const nameGroups = getBuiltInPromoNameGroups();
-  if (!nameGroups.length) return null;
-
-  const existing = listSavedGroupPresets().find(
-    (p) => String(p.name || "").trim() === BUILTIN_PROMO_PRESET_NAME
-  );
-  const total = nameGroups.reduce((s, g) => s + g.length, 0);
-  const period =
-    String(options?.period || PRESET_PROMO_META.periodHint || "").trim() || undefined;
-  const note =
-    String(options?.note || "").trim() ||
-    [
-      PRESET_PROMO_META.source || "内置晋级赛分组",
-      `${nameGroups.length} 组 · ${total} 人`,
-      "每组一强核 · 浩杰G1 · 浩森G8",
-      `${PRESET_PROMO_FIRST_START}×${PRESET_PROMO_STEP_MINUTES}min`,
-      `同步 ${new Date().toISOString()}`,
-    ].join(" · ");
-
-  return saveNamedGroupPreset({
-    id: existing?.id,
-    name: BUILTIN_PROMO_PRESET_NAME,
-    nameGroups,
-    period,
-    mode: "preset",
-    firstStart: PRESET_PROMO_FIRST_START,
-    stepMinutes: PRESET_PROMO_STEP_MINUTES,
-    groupSize: 6,
-    note,
-    makeActive: options?.makeActive === true,
-  });
-}
-
-/**
- * 同步两套内置到 PK 分组存档：小组赛 + 晋级赛。
- * 默认激活小组赛；晋级赛仅确保存档存在，可点选加载后拖拽保存。
- */
-export function syncAllBuiltInGroupsToPkStorage(options?: {
-  makeActiveGroup?: boolean;
-  makeActivePromo?: boolean;
-  period?: string;
-}): { group: SavedGroupPreset | null; promo: SavedGroupPreset | null } {
-  const group = syncBuiltInGroupsToPkStorage({
-    makeActive: options?.makeActiveGroup !== false,
-    period: options?.period,
-  });
-  const promo = syncBuiltInPromoGroupsToPkStorage({
-    makeActive: options?.makeActivePromo === true,
-    period: options?.period,
-  });
-  return { group, promo };
 }
 
 function flattenPresetRosterTextLocal(): string {
@@ -796,35 +739,6 @@ function flattenPresetRosterTextLocal(): string {
     .filter(Boolean);
   if (fromGroups.length) return fromGroups.join("\n");
   return String(PRESET_ROSTER_TEXT || "").trim();
-}
-
-function flattenPromoRosterTextLocal(): string {
-  const fromGroups = getBuiltInPromoNameGroups()
-    .flat()
-    .map((n) => String(n).trim())
-    .filter(Boolean);
-  if (fromGroups.length) return fromGroups.join("\n");
-  return flattenPromoRosterText() || "";
-}
-
-/** 把晋级赛名组解析成 BuildPkGroupsResult */
-export function buildPresetPromoGroupsResult(
-  allMembers: PkMember[],
-  options?: {
-    scoreField?: "wave" | "latestWave";
-    firstStart?: string;
-    stepMinutes?: number;
-  }
-): BuildPkGroupsResult {
-  return buildBattleGroupsResultFromNameGroups(PRESET_PROMO_GROUPS, allMembers, {
-    scoreField: options?.scoreField,
-    firstStart: options?.firstStart || PRESET_PROMO_FIRST_START,
-    stepMinutes: options?.stepMinutes ?? PRESET_PROMO_STEP_MINUTES,
-    mode: "preset",
-    modeLabel: PRESET_PROMO_META.label,
-    source: PRESET_PROMO_META.source,
-    notes: [...PRESET_PROMO_NOTES],
-  });
 }
 
 export function saveNamedGroupPreset(input: {
@@ -837,6 +751,7 @@ export function saveNamedGroupPreset(input: {
   scoreDisplay?: string;
   firstStart?: string;
   stepMinutes?: number;
+  reviveExtraMinutes?: number;
   groupSize?: number;
   makeActive?: boolean;
 }): SavedGroupPreset | null {
@@ -855,6 +770,7 @@ export function saveNamedGroupPreset(input: {
     scoreDisplay: input.scoreDisplay,
     firstStart: input.firstStart,
     stepMinutes: input.stepMinutes,
+    reviveExtraMinutes: input.reviveExtraMinutes,
     groupSize: input.groupSize,
     nameGroups,
     savedAt: new Date().toISOString(),
@@ -897,6 +813,8 @@ export function deleteSavedGroupPreset(id: string): SavedGroupPresetsStore {
 export type ScheduleSettings = {
   firstStart: string;
   stepMinutes: number;
+  /** 第4组后插复活赛：第5组起每组顺延分钟数 */
+  reviveExtraMinutes: number;
   groupSize: number;
 };
 
@@ -915,6 +833,15 @@ export function normalizeStepMinutes(value: number | string | undefined | null, 
   return Math.min(180, Math.max(1, n));
 }
 
+export function normalizeReviveExtraMinutes(
+  value: number | string | undefined | null,
+  fallback = PRESET_BATTLE_REVIVE_EXTRA_MINUTES
+) {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n) || n < 0) return fallback || 0;
+  return Math.min(60, Math.max(0, n));
+}
+
 export function normalizeGroupSize(value: number | string | undefined | null, fallback = DEFAULT_PK_GROUP_SIZE) {
   const n = Math.round(Number(value));
   if (!Number.isFinite(n) || n <= 0) return fallback || 8;
@@ -924,14 +851,16 @@ export function normalizeGroupSize(value: number | string | undefined | null, fa
 /** 按开始时间 + 间隔给各组贴连麦时间（导出图 / 卡片共用） */
 export function attachScheduleToGroups<T extends { startTime?: string; scheduleLabel?: string }>(
   groups: T[],
-  options?: { firstStart?: string; stepMinutes?: number }
+  options?: { firstStart?: string; stepMinutes?: number; reviveExtraMinutes?: number }
 ): T[] {
   const firstStart = normalizeFirstStart(options?.firstStart);
   const stepMinutes = normalizeStepMinutes(options?.stepMinutes);
+  const reviveExtraMinutes = normalizeReviveExtraMinutes(options?.reviveExtraMinutes);
   const match = firstStart.match(/^(\d{1,2}):(\d{2})$/);
   const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
   return groups.map((g, i) => {
-    const startTime = formatHm(startMin + i * stepMinutes);
+    // 第4组后插复活赛：第5组起（index>=4）顺延 reviveExtraMinutes
+    const startTime = formatHm(startMin + i * stepMinutes + (i >= 4 ? reviveExtraMinutes : 0));
     return {
       ...g,
       startTime,
@@ -967,6 +896,10 @@ export function loadSavedGroupsLayout(): SavedGroupsLayout | null {
       firstStart: parsed.firstStart ? normalizeFirstStart(parsed.firstStart) : undefined,
       stepMinutes:
         parsed.stepMinutes != null ? normalizeStepMinutes(parsed.stepMinutes) : undefined,
+      reviveExtraMinutes:
+        parsed.reviveExtraMinutes != null
+          ? normalizeReviveExtraMinutes(parsed.reviveExtraMinutes)
+          : undefined,
       groupSize: parsed.groupSize != null ? normalizeGroupSize(parsed.groupSize) : undefined,
       nameGroups,
       savedAt: parsed.savedAt || "",
@@ -983,6 +916,7 @@ export function saveGroupsLayout(input: {
   scoreDisplay?: string;
   firstStart?: string;
   stepMinutes?: number;
+  reviveExtraMinutes?: number;
   groupSize?: number;
   id?: string;
   name?: string;
@@ -1009,6 +943,7 @@ export function saveGroupsLayout(input: {
     scoreDisplay: input.scoreDisplay,
     firstStart: input.firstStart,
     stepMinutes: input.stepMinutes,
+    reviveExtraMinutes: input.reviveExtraMinutes,
     groupSize: input.groupSize,
     makeActive: input.makeActive !== false,
   });
@@ -1084,7 +1019,7 @@ export function downloadPkGroupsCsv(filename: string, csvText: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 200);
 }
 
-/** 从 scheduleLabel 抽开场时间，如 "08:15 开始连麦" → "08:15" */
+/** 从 scheduleLabel 抽开场时间，如 "12:15 开始连麦" → "12:15" */
 export function extractPkGroupStartTime(value?: string | null): string {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1104,7 +1039,7 @@ type PkCopyGroup = {
 /**
  * 复制用纯文本：仅组名 + 时间 + 人名。
  * 例：
- * 第1组 · 08:15
+ * 第1组 · 12:15
  * 啸辰 · 狼凯 · 浩泽 · …
  */
 export function formatPkGroupsCopyText(

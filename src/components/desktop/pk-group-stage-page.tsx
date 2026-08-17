@@ -10,12 +10,16 @@ import { cn } from "@/lib/utils";
 import type { IpcResult, PkMember, PkRosterData } from "@/types/electron";
 import {
   STAGE_TABS,
+  currentGroupPhase,
+  groupPhaseBoundary,
   importGroupStageFromBuiltIn,
+  importPromoFromBuiltIn,
   loadTournamentState,
   saveTournamentState,
   setMemberScore,
   settleActiveStage,
   stageSummary,
+  stageTabLabel,
   type StageKey,
   type TournamentState,
 } from "./pk-tournament-store";
@@ -28,7 +32,7 @@ function groupStatusLabel(status: string) {
 }
 
 /**
- * 小组赛专页：内置 58 人 8 组为真源，四阶段记分 / 结算。
+ * 小组赛专页：815 唯一分组（58 人 8 组）为真源，四阶段记分 / 结算。
  * 与 PK 监控共用 `pk-monitor-tournament-v1`。
  */
 export function PkGroupStagePage({ active = true, onStageChange }: { active?: boolean; onStageChange?: (stage: 'group' | 'revive' | 'promo' | 'finals') => void }) {
@@ -41,6 +45,8 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
   const activeStage = tournament.activeStage || "group";
   const stageState = tournament.stages[activeStage];
   const summary = stageSummary(stageState);
+  const groupPhase = currentGroupPhase(tournament);
+  const groupBoundary = groupPhaseBoundary(stageState.groups.length);
   const selectedGroup =
     stageState.groups.find((g) => g.key === selectedGroupKey) || stageState.groups[0] || null;
 
@@ -85,6 +91,23 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
     }
     setTournament(result.state);
     setSelectedGroupKey(result.state.stages.group.groups[0]?.key || "");
+    setMessage(result.message);
+  }, [rosterMembers, tournament]);
+
+  const handleLoadPromo = useCallback(() => {
+    setBusy(true);
+    const result = importPromoFromBuiltIn({
+      membersMeta: rosterMembers,
+      state: tournament,
+      savePreset: true,
+    });
+    setBusy(false);
+    if (!result.state) {
+      setMessage(result.message);
+      return;
+    }
+    setTournament(result.state);
+    setSelectedGroupKey(result.state.stages.promo.groups[0]?.key || "");
     setMessage(result.message);
   }, [rosterMembers, tournament]);
 
@@ -140,8 +163,10 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
 
   const emptyHint =
     activeStage === "group"
-      ? "点「加载内置小组赛」载入 58 人 8 组锁定表（每组 7–8 人）"
-      : "完成本阶段前序结算后自动生成";
+      ? "点「加载 815 分组」载入 58 人 8 组锁定表；赛程：前四组→复活①→后四组→复活②→晋级→决赛"
+      : activeStage === "promo"
+        ? "点「加载晋级赛分组」载入 44 人 8 组锁定表；或完成前序结算后按晋级池自动生成"
+        : "完成本阶段前序结算后自动生成";
 
   return (
     <div className="space-y-4">
@@ -150,10 +175,14 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
           <div className="flex items-center gap-2">
             <Swords className="size-5 text-primary" />
             <h1 className="text-xl font-semibold tracking-tight">小组赛</h1>
-            <Badge variant="outline">内置 8 组 · 58 人 · 每组 ≥7</Badge>
+            <Badge variant="outline">
+              {activeStage === "promo"
+                ? "晋级815 · 8 组 · 44 人 · 每组 5–6"
+                : "815 · 8 组 · 58 人 · 每组 7–9"}
+            </Badge>
           </div>
           <p className="text-sm text-muted-foreground">
-            赛程真源：内置锁定分组 → 小组赛记分 → 复活赛 → 晋级赛 → 决赛。与 PK 监控共用同一赛程状态。
+            赛程真源：815 唯一分组 → 小组赛①(前四组) → 复活赛① → 小组赛②(后四组) → 复活赛② → 晋级赛 → 决赛。与 PK 监控共用同一赛程状态。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -162,10 +191,20 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
             className="h-10"
             disabled={busy}
             onClick={handleLoadBuiltIn}
-            title="导入 PRESET_BATTLE_GROUPS 并写入 PK 分组·小组赛"
+            title="导入 815 唯一分组并写入 PK 分组·815"
           >
             <Download className="size-4" />
-            加载内置小组赛
+            加载 815 分组
+          </Button>
+          <Button
+            variant="secondary"
+            className="h-10"
+            disabled={busy}
+            onClick={handleLoadPromo}
+            title="导入 815 晋级赛分组（44 人 8 组）并写入 PK 分组·晋级赛-815"
+          >
+            <Swords className="size-4" />
+            加载晋级赛分组
           </Button>
           <Button
             variant="outline"
@@ -200,6 +239,15 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
             {tournament.sourcePresetName ? ` · 来源 ${tournament.sourcePresetName}` : ""}
             {tournament.period ? ` · ${tournament.period}` : ""}
           </span>
+          {activeStage === "group" ? (
+            <Badge variant="outline" className="text-[10px]">
+              当前 小组赛{groupPhase === 1 ? "① 前四组" : "② 后四组"}
+            </Badge>
+          ) : activeStage === "revive" ? (
+            <Badge variant="outline" className="text-[10px]">
+              当前 复活赛{tournament.flow?.revivePhase === 2 ? "② 后四组" : "① 前四组"}
+            </Badge>
+          ) : null}
           <div className="ml-auto">
             <Button
               size="sm"
@@ -232,7 +280,7 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
                     : "border-border/60 text-muted-foreground hover:bg-muted/40"
                 )}
               >
-                {tab.label}
+                {stageTabLabel(tournament, tab.key)}
                 <span className="ml-1 tabular-nums opacity-70">
                   {s.groups ? `${s.groups}组` : "—"}
                   {s.settled ? "✓" : ""}
@@ -252,6 +300,13 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
               {stageState.groups.map((group) => {
                 const scored = group.members.filter((m) => m.score != null).length;
                 const on = selectedGroup?.key === group.key;
+                const groupIdx = stageState.groups.indexOf(group);
+                const inPhase =
+                  activeStage !== "group"
+                    ? true
+                    : groupPhase === 1
+                      ? groupIdx < groupBoundary
+                      : groupIdx >= groupBoundary;
                 return (
                   <button
                     key={group.key}
@@ -261,7 +316,8 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
                       "w-full rounded-lg border px-3 py-2 text-left transition-colors",
                       on
                         ? "border-primary bg-primary/5"
-                        : "border-border/50 hover:bg-muted/30"
+                        : "border-border/50 hover:bg-muted/30",
+                      activeStage === "group" && !inPhase && "opacity-40"
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -351,9 +407,9 @@ export function PkGroupStagePage({ active = true, onStageChange }: { active?: bo
               小组赛出线摘要
             </div>
             <div className="text-xs text-muted-foreground">
-              直晋 {tournament.stages.group.advanceKeys.length}
+              直晋（累计）{tournament.stages.group.advanceKeys.length}
               {tournament.stages.group.reviveKeys?.length
-                ? ` · 复活池 ${tournament.stages.group.reviveKeys.length}`
+                ? ` · 本半程复活池 ${tournament.stages.group.reviveKeys.length}`
                 : ""}
             </div>
           </div>

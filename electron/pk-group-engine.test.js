@@ -304,7 +304,7 @@ test("n<16 allows fewer than 4 groups with warning", () => {
   }
 });
 
-test("preset mode loads locked battle groups with 15-min schedule", () => {
+test("preset mode loads 815 locked groups with 15-min schedule", () => {
   const { PRESET_BATTLE_GROUPS } = require("../shared/pk-preset-battle-groups");
   const members = PRESET_BATTLE_GROUPS.flat().map((name, i) => ({
     name,
@@ -321,21 +321,23 @@ test("preset mode loads locked battle groups with 15-min schedule", () => {
   const result = buildPkGroups({ members, mode: "preset" });
   assert.equal(result.ok, true);
   assert.equal(result.mode, "preset");
-  assert.equal(result.modeLabel, "内置分组");
+  assert.equal(result.modeLabel, "815");
   assert.equal(result.groupCount, 8);
-  assert.deepEqual(result.sizes, [7, 7, 7, 8, 7, 8, 7, 7]);
-  assert.ok(result.groups.every((g) => g.members.length >= 7 && g.members.length <= 8));
-  assert.ok(result.groups[5].members.some((m) => m.name === "鹏先生"));
-  assert.ok(result.groups[7].members.some((m) => m.name === "狼佑"));
-  assert.ok(result.groups[7].members.some((m) => m.name === "狼博"));
+  assert.deepEqual(result.sizes, [9, 7, 7, 7, 7, 7, 7, 7]);
+  assert.ok(result.groups.every((g) => g.members.length >= 7 && g.members.length <= 9));
+  assert.ok(result.groups[5].members.some((m) => m.name === "玖依"));
   assert.ok(result.groups[7].members.some((m) => m.name === "狼影"));
-  assert.equal(result.groups[0].startTime, "08:15");
-  assert.equal(result.groups[1].startTime, "08:30");
-  assert.equal(result.groups[6].startTime, "09:45");
-  assert.equal(result.groups[7].startTime, "10:00");
-  assert.ok(result.groups[0].members.some((m) => m.name === "玖依"));
-  assert.ok(result.groups[0].members.some((m) => m.name === "狼九"));
-  assert.ok(result.groups[3].members.some((m) => m.name === "玖玉"));
+  assert.ok(result.groups[7].members.some((m) => m.name === "啸恒"));
+  assert.equal(result.groups[0].startTime, "12:15");
+  assert.equal(result.groups[1].startTime, "12:30");
+  assert.equal(result.groups[3].startTime, "13:00");
+  // 第4组后插两场 5 分钟复活赛 → 第5组起顺延 5 分钟（间隔 20）
+  assert.equal(result.groups[4].startTime, "13:20");
+  assert.equal(result.groups[6].startTime, "13:50");
+  assert.equal(result.groups[7].startTime, "14:05");
+  assert.ok(result.groups[2].members.some((m) => m.name === "浩月"));
+  assert.ok(result.groups[4].members.some((m) => m.name === "狼九"));
+  assert.ok(result.groups[4].members.some((m) => m.name === "浩鸣"));
   assert.equal(result.groups[0].members.map((m) => m.name).join(","), PRESET_BATTLE_GROUPS[0].join(","));
   // test bumps G5 wave so strongest becomes 5
   assert.equal(result.strongestGroup, 5);

@@ -21,7 +21,7 @@ import {
   importGroupStageFromActiveLayout,
   importGroupStageFromBuiltIn,
   isGroupFullyScored,
-  isStageFullyScored,
+  isStageFullyScoredForTournament,
   listPkGroupPresetsForMonitor,
   loadTournamentState,
   nextPkGroupKey,
@@ -31,6 +31,7 @@ import {
   setMemberScore,
   settleActiveStage,
   stageSummary,
+  stageTabLabel,
   type StageGroup,
   type StageKey,
   type TournamentState,
@@ -503,7 +504,7 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
 
         if (
           !autoSettleLockRef.current &&
-          isStageFullyScored(next.stages[stageKey])
+          isStageFullyScoredForTournament(next, stageKey)
         ) {
           autoSettleLockRef.current = true;
           const settled = settleActiveStage(next);
@@ -520,7 +521,7 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
         }
       } else if (
         !autoSettleLockRef.current &&
-        isStageFullyScored(next.stages[stageKey])
+        isStageFullyScoredForTournament(next, stageKey)
       ) {
         autoSettleLockRef.current = true;
         const settled = settleActiveStage(next);
@@ -703,7 +704,7 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
     setMessage("已停止");
   };
 
-  /** 默认：内置锁定 8 组 → 小组赛（赛程真源）；可选从 PK 分组多存档选择导入 */
+  /** 默认：815 唯一分组 8 组 → 小组赛（赛程真源）；可选从 PK 分组多存档选择导入 */
   const handleImportBuiltIn = () => {
     const result = importGroupStageFromBuiltIn({
       membersMeta: rosterMembers,
@@ -826,10 +827,10 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
             variant="secondary"
             className="h-10"
             onClick={handleImportBuiltIn}
-            title="导入内置锁定分组（58 人 8 组，每组 7–8）作为小组赛，并写入 PK 分组·小组赛"
+            title="导入 815 唯一分组（58 人 8 组，每组 7–9）作为小组赛，并写入 PK 分组·815"
           >
             <Download className="size-4" />
-            导入内置小组赛
+            导入 815 分组
           </Button>
           <select
             className="h-10 min-w-[10rem] rounded-md border border-border/70 bg-background px-2 text-sm"
@@ -921,7 +922,7 @@ export function PkMonitorPage({ active = true }: { active?: boolean }) {
                     : "border-border/60 text-muted-foreground hover:bg-muted/40"
                 )}
               >
-                {tab.label}
+                {stageTabLabel(tournament, tab.key)}
                 <span className="ml-1 tabular-nums opacity-70">
                   {s.groups ? `${s.groups}组` : "—"}
                   {s.settled ? "✓" : ""}
@@ -1172,6 +1173,7 @@ function createClientTournament(): TournamentState {
         reviveTarget: null,
         sevenPersonSplit: "4-3",
       },
+      flow: { groupPhase: 1, revivePhase: 1, promoPool: [] },
       stages: {
         group: { groups: [], settled: false, advanceKeys: [] },
         revive: { groups: [], settled: false, advanceKeys: [] },

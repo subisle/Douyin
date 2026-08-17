@@ -92,7 +92,7 @@ function formatClassicDate(date) {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-/** 超过该人数导出拆成两张（男团）；女团人数过多时保持单图，避免过长。 */
+/** 超过该人数且允许拆页时，导出拆成上下两张。 */
 const DAILY_REPORT_EXPORT_SPLIT_THRESHOLD = 30;
 
 function formatDailyReportPageSuffix(pageIndex, pageCount) {
@@ -102,11 +102,16 @@ function formatDailyReportPageSuffix(pageIndex, pageCount) {
   return `（${page}/${total}）`;
 }
 
+function resolveSplitOption(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function splitDailyReportRowsForExport(rows, options = {}) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return [];
-  const threshold = Math.max(1, Number(options.threshold) || DAILY_REPORT_EXPORT_SPLIT_THRESHOLD);
-  const maxPages = Math.max(1, Math.min(2, Number(options.maxPages) || 2));
+  const threshold = Math.max(1, resolveSplitOption(options.threshold, DAILY_REPORT_EXPORT_SPLIT_THRESHOLD));
+  const maxPages = Math.max(1, Math.min(2, resolveSplitOption(options.maxPages, 2)));
   if (list.length <= threshold || maxPages < 2) {
     return [{ rows: list, rankOffset: 0, pageIndex: 1, pageCount: 1 }];
   }
@@ -616,17 +621,16 @@ async function renderDailyReportPng(report, options = {}) {
 }
 
 /**
- * 人数过多时拆成最多两张 PNG（与桌面端每日报告导出一致）。
+ * 按 threshold / maxPages 拆成最多两张 PNG（与桌面端每日报告导出一致）。
  * @returns {Promise<Array<{ buffer: Buffer, pageIndex: number, pageCount: number, fileNameSuffix: string }>>}
  */
 async function renderDailyReportPngPages(report, options = {}) {
   const allRows = normalizeRows(report);
   if (!allRows.length) throw new Error("该日期没有可生成的报告数据");
   const gender = report.gender === "female" ? "female" : "male";
-  const maxPages = options.maxPages ?? (gender === "female" ? 1 : 2);
   const pages = splitDailyReportRowsForExport(allRows, {
     threshold: options.threshold,
-    maxPages: maxPages,
+    maxPages: options.maxPages,
   });
   const out = [];
   for (const page of pages) {

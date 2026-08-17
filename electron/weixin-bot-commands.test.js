@@ -343,6 +343,13 @@ test("splitDailyReportRowsForExport halves long rosters into two pages", () => {
   assert.equal(two[0].pageIndex, 1);
   assert.equal(two[1].pageIndex, 2);
   assert.equal(two[1].pageCount, 2);
+
+  const shortFemale = splitDailyReportRowsForExport(
+    Array.from({ length: 12 }, (_, i) => ({ name: `C${i}` })),
+    { maxPages: 2 }
+  );
+  assert.equal(shortFemale.length, 1);
+  assert.equal(shortFemale[0].pageCount, 1);
 });
 
 test("renderDailyReportPngPages returns two PNGs for long male roster", async () => {

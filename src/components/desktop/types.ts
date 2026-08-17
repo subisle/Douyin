@@ -144,7 +144,7 @@ export const NAV_ITEMS: NavItem[] = [
     id: "pk-group-stage",
     label: "小组赛",
     icon: Trophy,
-    description: "内置 8 组记分 · 四阶段出线",
+    description: "815 八组记分 · 四阶段出线",
     adminOnly: true,
   },
   ...MONITOR_NAV_ITEMS,
@@ -225,7 +225,7 @@ export const NAV_TREE: NavEntry[] = [
     id: "pk-group-stage",
     label: "小组赛",
     icon: Trophy,
-    description: "内置 8 组记分 · 四阶段出线",
+    description: "815 八组记分 · 四阶段出线",
     adminOnly: true,
   },
   {

@@ -2072,7 +2072,7 @@ class WeixinBotService extends EventEmitter {
   }
 
   /**
-   * 音浪数据更新后调用：防抖后向配置的微信用户/群推送每日之星（前三）+ 日报图。
+   * 音浪数据更新后调用：防抖后向配置的微信用户/群推送每日之星（前三）文案 + 日报图。
    */
   notifyDailyReportDataUpdated(date, options = {}) {
     const day = String(date || "").trim();
@@ -2175,29 +2175,12 @@ class WeixinBotService extends EventEmitter {
       femaleReport = { rows: [] };
     }
 
-    // 按团预渲染：每日之星文案 → 每日之星图 → 报告图
+    // 按团预渲染：每日之星文案 → 报告图
     const genderPayloads = [];
-    const renderStar = typeof options.renderDailyStarPng === "function"
-      ? options.renderDailyStarPng
-      : renderDailyStarPng;
     for (const [gender, report] of [["male", maleReport], ["female", femaleReport]]) {
       const images = [];
-      const starImages = [];
       const label = gender === "female" ? "女队" : "男团";
       if (report?.rows?.length) {
-        try {
-          const star = await renderStar(date, gender, report);
-          if (star?.buffer?.length) {
-            starImages.push({
-              gender,
-              buffer: star.buffer,
-              fileName: star.fileName || `${date}_${label}_每日之星.png`,
-              kind: "daily_star",
-            });
-          }
-        } catch (error) {
-          console.warn("[weixin-daily-push] daily-star render failed", gender, error);
-        }
         try {
           // 人数过多时自动拆成最多两张，与桌面端/指令日报一致
           const pages = await toDailyReportImagePages(renderReportPng, report, {});
@@ -2221,7 +2204,6 @@ class WeixinBotService extends EventEmitter {
       genderPayloads.push({
         gender,
         report,
-        starImages,
         images,
         top3Text: buildGenderTop3Text(date, gender, report, {
           // 首团带日期标题
@@ -2230,7 +2212,7 @@ class WeixinBotService extends EventEmitter {
         }),
       });
     }
-    const imageCount = genderPayloads.reduce((n, g) => n + g.images.length + (g.starImages?.length || 0), 0);
+    const imageCount = genderPayloads.reduce((n, g) => n + g.images.length, 0);
 
     if (!this.runnerLease) this._acquireRunnerLease();
     let ok = 0;
@@ -2254,14 +2236,6 @@ class WeixinBotService extends EventEmitter {
         try {
           for (const payload of genderPayloads) {
             await this._sendTextWithContext(target.conversationId, payload.top3Text, context, account);
-            for (const image of payload.starImages || []) {
-              await this._sendMediaWithContext(
-                target.conversationId,
-                { buffer: image.buffer, fileName: image.fileName, mediaKind: "image" },
-                context,
-                account
-              );
-            }
             for (const image of payload.images) {
               await this._sendMediaWithContext(
                 target.conversationId,

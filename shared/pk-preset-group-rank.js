@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * 内置小组赛：按组输出成员「总分」排名文案。
+ * 815 唯一分组：按组输出成员「总分」排名文案。
  * 数据由调用方注入（花名册/日报），本模块做匹配、全库名次、动态档位分差与格式化。
  * 档位：前10 / 前20 / 前30 / 前50 / 前100（按名次就近展示，避免全员都写前20）。
  */
@@ -83,12 +83,18 @@ function parsePresetGroupRankCommand(input) {
 
 function groupStartTime(groupNo) {
   const meta = PRESET_BATTLE_META || {};
-  const first = String(meta.firstStart || "08:15");
+  const first = String(meta.firstStart || "12:15");
   const step = Number(meta.stepMinutes) || 15;
+  const extra = Number(meta.reviveExtraMinutes) || 0;
   const parts = first.split(":").map((x) => Number(x));
   const h0 = Number.isFinite(parts[0]) ? parts[0] : 8;
   const m0 = Number.isFinite(parts[1]) ? parts[1] : 15;
-  const total = h0 * 60 + m0 + (Math.max(1, groupNo) - 1) * step;
+  // 第4组后插入复活赛：第5组及后续组顺延 extra 分钟
+  const total =
+    h0 * 60 +
+    m0 +
+    (Math.max(1, groupNo) - 1) * step +
+    (groupNo >= 5 ? extra : 0);
   const hh = Math.floor(total / 60) % 24;
   const mm = total % 60;
   return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;

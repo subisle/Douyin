@@ -2,10 +2,13 @@
 
 import type { PkMember } from "@/types/electron";
 import {
+  BUILTIN_PROMO_PRESET_NAME,
   PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_FIRST_START,
   PRESET_BATTLE_META,
   PRESET_BATTLE_STEP_MINUTES,
+  PRESET_PROMO_GROUPS,
+  PRESET_PROMO_META,
   canonicalRosterName,
   getActiveGroupPreset,
   listSavedGroupPresets,
@@ -30,12 +33,13 @@ import {
   type TournamentRules,
 } from "./pk-tournament-rules";
 
-/** 内置赛程元信息兜底（避免 CJS/HMR re-export 瞬时 undefined 崩导入） */
+/** 815 唯一分组元信息兜底（避免 CJS/HMR re-export 瞬时 undefined 崩导入） */
 const BUILTIN_BATTLE_META = {
-  label: "内置分组",
-  source: "内置小组赛分组",
-  firstStart: PRESET_BATTLE_FIRST_START || "08:15",
+  label: "815",
+  source: "815 唯一分组",
+  firstStart: PRESET_BATTLE_FIRST_START || "12:15",
   stepMinutes: PRESET_BATTLE_STEP_MINUTES || 15,
+  reviveExtraMinutes: 0,
   periodHint: "2026-08",
 };
 
@@ -80,12 +84,26 @@ export type StageState = {
   presetName?: string;
 };
 
+/**
+ * 前后半程流程状态：
+ * 小组赛①(前四组) → 复活赛① → 小组赛②(后四组) → 复活赛② → 晋级赛 → 决赛
+ */
+export type TournamentFlow = {
+  /** 小组赛当前结算半程：1=前四组 · 2=后四组 */
+  groupPhase: 1 | 2;
+  /** 当前复活赛对应的小组赛半程 */
+  revivePhase: 1 | 2;
+  /** 已累计晋级池（直晋 + 复活出线，保序去重） */
+  promoPool: string[];
+};
+
 export type TournamentState = {
   version: 1;
   period?: string;
   sourcePresetId?: string;
   sourcePresetName?: string;
   rules: TournamentRules;
+  flow: TournamentFlow;
   stages: Record<StageKey, StageState>;
   activeStage: StageKey;
   updatedAt: string;
@@ -104,6 +122,8 @@ export type SettleResult = {
   message: string;
 };
 
+const DEFAULT_FLOW: TournamentFlow = { groupPhase: 1, revivePhase: 1, promoPool: [] };
+
 function emptyStage(): StageState {
   return { groups: [], settled: false, advanceKeys: [] };
 }
@@ -117,6 +137,7 @@ export function createEmptyTournamentState(
     sourcePresetId: partial?.sourcePresetId,
     sourcePresetName: partial?.sourcePresetName,
     rules: { ...DEFAULT_TOURNAMENT_RULES, ...(partial?.rules || {}) },
+    flow: { ...DEFAULT_FLOW, ...(partial?.flow || {}) },
     stages: {
       group: emptyStage(),
       revive: emptyStage(),
@@ -333,6 +354,13 @@ export function loadTournamentState(): TournamentState {
     return createEmptyTournamentState({
       ...parsed,
       rules: { ...DEFAULT_TOURNAMENT_RULES, ...(parsed.rules || {}) },
+      flow: {
+        groupPhase: parsed.flow?.groupPhase === 2 ? 2 : 1,
+        revivePhase: parsed.flow?.revivePhase === 2 ? 2 : 1,
+        promoPool: Array.isArray(parsed.flow?.promoPool)
+          ? (parsed.flow.promoPool as string[])
+          : [],
+      },
       stages: {
         group: { ...emptyStage(), ...(parsed.stages.group || {}) },
         revive: { ...emptyStage(), ...(parsed.stages.revive || {}) },
@@ -388,6 +416,7 @@ export function importGroupStageFromPreset(
   base.stages.promo = emptyStage();
   base.stages.finals = emptyStage();
   base.activeStage = "group";
+  base.flow = { groupPhase: 1, revivePhase: 1, promoPool: [] };
   return saveTournamentState(base);
 }
 
@@ -462,17 +491,17 @@ export function listPkGroupPresetsForMonitor(): Array<{
   });
 }
 
-const BUILTIN_GROUP_STAGE_PRESET_NAME = "小组赛";
+const BUILTIN_GROUP_STAGE_PRESET_NAME = "815";
 
 /**
- * 从内置锁定分组（PRESET_BATTLE_GROUPS · 58 人 8 组）导入小组赛。
- * 默认同步写入 PK 分组命名存档「小组赛」并设为激活（makeActive 默认 true）。
+ * 从 815 唯一分组（PRESET_BATTLE_GROUPS · 58 人 8 组）导入小组赛。
+ * 默认同步写入 PK 分组命名存档「815」并设为激活（makeActive 默认 true）。
  * 赛程：小组赛 → 复活赛 → 晋级赛 → 决赛 均基于此表。
  */
 export function importGroupStageFromBuiltIn(options?: {
   membersMeta?: MemberMeta[] | PkMember[] | null;
   state?: TournamentState;
-  /** 是否写入命名存档「小组赛」，默认 true */
+  /** 是否写入命名存档「815」，默认 true */
   savePreset?: boolean;
   /** 写入存档时是否设为激活，默认 true（PK 分组页可见） */
   makeActive?: boolean;
@@ -484,7 +513,7 @@ export function importGroupStageFromBuiltIn(options?: {
     .map((row) => (row || []).map((n) => String(n || "").trim()).filter(Boolean))
     .filter((row) => row.length > 0);
   if (!nameGroups.length) {
-    return { state: null, preset: null, message: "内置分组表为空" };
+    return { state: null, preset: null, message: "815 分组表为空" };
   }
 
   const meta = {
@@ -513,7 +542,8 @@ export function importGroupStageFromBuiltIn(options?: {
       note: [
         sourceName,
         `${nameGroups.length} 组 · ${nameGroups.reduce((s, g) => s + g.length, 0)} 人`,
-        `最强第4 · 啸泽3/啸帆6 · ${firstStart}×${stepMinutes}min`,
+        `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+        `${firstStart}×${stepMinutes}min${Number(meta.reviveExtraMinutes) > 0 ? `·第4组后+${Number(meta.reviveExtraMinutes)}min` : ""}`,
         `导入 ${nowIso()}`,
       ].join(" · "),
       makeActive: options?.makeActive !== false,
@@ -530,7 +560,7 @@ export function importGroupStageFromBuiltIn(options?: {
       groupSize: DEFAULT_TOURNAMENT_RULES.groupSize,
       groupTop: DEFAULT_TOURNAMENT_RULES.groupTop,
       groupReviveTail: DEFAULT_TOURNAMENT_RULES.groupReviveTail,
-      // 8 人组前4后4 · 7 人组前4后3 → 直晋32 + 复活26；ideal=48 → 复活出16淘10 · 晋级 8×6
+      // 7 人组前4后3 · 6 人组前4后2 → 直晋32 + 复活23；ideal=48 → 复活出16淘7 · 晋级 8×6
       idealPromoPool: DEFAULT_TOURNAMENT_RULES.idealPromoPool,
       reviveTarget: null,
       sevenPersonSplit: DEFAULT_TOURNAMENT_RULES.sevenPersonSplit || "4-3",
@@ -546,8 +576,83 @@ export function importGroupStageFromBuiltIn(options?: {
     state,
     preset,
     message: [
-      `已导入内置小组赛 ${count} 组 / ${members} 人`,
+      `已导入 815 唯一分组 ${count} 组 / ${members} 人`,
       sourceName,
+      preset ? `已写入 PK 分组 · ${preset.name}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
+/**
+ * 从内置晋级赛分组（PRESET_PROMO_GROUPS · 44 人 8 组）导入晋级赛阶段。
+ * 只覆盖 promo + finals，保留小组赛 / 复活赛阶段与 flow；默认写入命名存档「晋级赛-815」。
+ */
+export function importPromoFromBuiltIn(options?: {
+  membersMeta?: MemberMeta[] | PkMember[] | null;
+  state?: TournamentState;
+  /** 是否写入命名存档「晋级赛-815」，默认 true */
+  savePreset?: boolean;
+  /** 写入存档时是否设为激活，默认 false（不顶掉小组赛激活布局） */
+  makeActive?: boolean;
+  period?: string;
+}):
+  | { state: TournamentState; preset: SavedGroupPreset | null; message: string }
+  | { state: null; preset: null; message: string } {
+  const nameGroups = (PRESET_PROMO_GROUPS || [])
+    .map((row) => (row || []).map((n) => String(n || "").trim()).filter(Boolean))
+    .filter((row) => row.length > 0);
+  if (!nameGroups.length) {
+    return { state: null, preset: null, message: "晋级赛分组表为空" };
+  }
+
+  const base = options?.state ? cloneState(options.state) : createEmptyTournamentState();
+  const metaByKey = buildMetaMap(options?.membersMeta);
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  base.period =
+    String(options?.period || base.period || PRESET_PROMO_META.periodHint || "").trim() ||
+    undefined;
+  base.sourcePresetName = BUILTIN_PROMO_PRESET_NAME;
+  base.stages.promo = {
+    groups: groupsFromNameGroups("promo", nameGroups, metaByKey),
+    settled: false,
+    advanceKeys: [],
+  };
+  base.stages.finals = emptyStage();
+  base.activeStage = "promo";
+
+  let preset: SavedGroupPreset | null = null;
+  if (options?.savePreset !== false) {
+    const existingId = findPresetIdByName(BUILTIN_PROMO_PRESET_NAME);
+    preset = saveNamedGroupPreset({
+      id: existingId,
+      name: BUILTIN_PROMO_PRESET_NAME,
+      nameGroups,
+      period: base.period,
+      mode: "preset",
+      groupSize: Math.max(...nameGroups.map((g) => g.length), DEFAULT_TOURNAMENT_RULES.groupSize),
+      note: [
+        PRESET_PROMO_META.source || "815 晋级赛分组",
+        `${nameGroups.length} 组 · ${total} 人`,
+        `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+        `导入 ${nowIso()}`,
+      ].join(" · "),
+      makeActive: options?.makeActive === true,
+    });
+    if (preset) {
+      base.stages.promo.presetId = preset.id;
+      base.stages.promo.presetName = preset.name;
+    }
+  }
+
+  const saved = saveTournamentState(base);
+  return {
+    state: saved,
+    preset,
+    message: [
+      `已导入 晋级赛分组 ${nameGroups.length} 组 / ${total} 人`,
+      PRESET_PROMO_META.source,
       preset ? `已写入 PK 分组 · ${preset.name}` : "",
     ]
       .filter(Boolean)
@@ -695,6 +800,146 @@ export function setGroupStatus(
   return saveTournamentState(next);
 }
 
+/** 保序去重合并名单 */
+function mergeOrderedUnique(list: string[]): string[] {
+  const seen = new Set<string>();
+  return (list || []).filter((k) => {
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
+ * 小组赛前后半程切界：前 boundary 组为第①程，其余为第②程。
+ */
+export function groupPhaseBoundary(groupCount: number): number {
+  const n = Math.max(0, Math.floor(Number(groupCount) || 0));
+  return Math.ceil(n / 2);
+}
+
+export function groupPhaseList(stage: StageState, phase: 1 | 2): StageGroup[] {
+  const groups = stage?.groups || [];
+  if (!groups.length) return [];
+  const boundary = groupPhaseBoundary(groups.length);
+  return phase === 1 ? groups.slice(0, boundary) : groups.slice(boundary);
+}
+
+export function isGroupPhaseSettled(stage: StageState, phase: 1 | 2): boolean {
+  const list = groupPhaseList(stage, phase);
+  return list.length > 0 && list.every((g) => g.status === "settled");
+}
+
+/** 当前半程组是否已全部记分（自动结算前置；已结算的组不算） */
+export function isGroupPhaseFullyScored(stage: StageState, phase: 1 | 2): boolean {
+  const list = groupPhaseList(stage, phase);
+  if (!list.length) return false;
+  if (list.some((g) => g.status === "settled")) return false;
+  return list.every(
+    (g) =>
+      g.members.length > 0 &&
+      g.members.every((m) => m.score != null && Number.isFinite(Number(m.score)))
+  );
+}
+
+/** 当前小组赛结算半程（由 flow 决定） */
+export function currentGroupPhase(state: TournamentState): 1 | 2 {
+  return state?.flow?.groupPhase === 2 ? 2 : 1;
+}
+
+/** 阶段是否已全部记分（group 按当前半程判定，其余阶段全量） */
+export function isStageFullyScoredForTournament(
+  state: TournamentState,
+  stageKey: StageKey
+): boolean {
+  if (stageKey === "group") {
+    return isGroupPhaseFullyScored(state.stages.group, currentGroupPhase(state));
+  }
+  return isStageFullyScored(state.stages[stageKey]);
+}
+
+/** 阶段页签名：小组赛/复活赛随前后半程显示 ①/② */
+export function stageTabLabel(state: TournamentState, tabKey: StageKey): string {
+  if (tabKey === "group") {
+    return currentGroupPhase(state) === 1 ? "小组赛①" : "小组赛②";
+  }
+  if (tabKey === "revive") {
+    return state.flow?.revivePhase === 2 ? "复活赛②" : "复活赛①";
+  }
+  if (tabKey === "promo") return "晋级赛";
+  return "决赛";
+}
+
+/** 累计晋级池 → 晋级赛 8 组均分（只有后半程复活结束后调用） */
+function buildPromoFromPoolSettle(
+  next: TournamentState,
+  opts?: { extraNote?: string }
+): SettleResult {
+  const promoPool = next.flow?.promoPool || [];
+  const lookup = collectMemberLookup(next);
+  const promoNameGroups = nameGroupsSplitN(promoPool, lookup, PROMO_GROUP_COUNT);
+  const meta = buildMetaMap(
+    Array.from(lookup.values()).map((m) => ({
+      personId: m.personId,
+      name: m.name,
+      anchorId: m.anchorId,
+      douyinNos: m.douyinNos,
+    }))
+  );
+  next.stages.promo = {
+    groups: groupsFromNameGroups("promo", promoNameGroups, meta),
+    settled: false,
+    advanceKeys: [],
+  };
+  next.stages.finals = emptyStage();
+  next.activeStage = "promo";
+
+  const sizes = promoNameGroups.map((g) => g.length);
+  const sizeHint = sizes.length
+    ? sizes.every((n) => n === sizes[0])
+      ? `${sizes[0]} 人/组`
+      : `${Math.min(...sizes)}–${Math.max(...sizes)} 人/组`
+    : "";
+  const note = [
+    opts?.extraNote || "",
+    `晋级池 ${promoPool.length} · 晋级 ${promoNameGroups.length} 组${sizeHint ? `（${sizeHint}）` : ""}`,
+    next.period ? `period ${next.period}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const preset = promoNameGroups.length
+    ? writePreset({
+        name: "晋级赛",
+        nameGroups: promoNameGroups,
+        period: next.period,
+        groupSize: Math.max(...sizes, next.rules.groupSize),
+        note,
+        existingId: next.stages.promo.presetId,
+      })
+    : null;
+
+  if (preset) {
+    next.stages.promo.presetId = preset.id;
+    next.stages.promo.presetName = preset.name;
+  }
+
+  const saved = saveTournamentState(next);
+  const head = opts?.extraNote || "小组赛已结算";
+  return {
+    state: saved,
+    preset,
+    message: preset
+      ? `${head} · 累计晋级池 ${promoPool.length} 人 · 已写入 PK 分组 · 晋级赛`
+      : `${head} · 累计晋级池 ${promoPool.length} 人`,
+  };
+}
+
+/**
+ * 结算小组赛**当前半程**（前四组或后四组）：
+ * 半程内 7 人前4后3 / 6 人前4后2 → 直晋 + 复活池；只结算本半程的组。
+ * 前四组结算后进入复活赛①；后四组结算后进入复活赛②。
+ */
 export function settleGroupStage(state: TournamentState): SettleResult {
   const next = cloneState(state);
   const stage = next.stages.group;
@@ -702,20 +947,30 @@ export function settleGroupStage(state: TournamentState): SettleResult {
     return { state, preset: null, message: "小组赛无分组，无法结算" };
   }
   if (stage.settled) {
-    return { state, preset: null, message: "小组赛已结算" };
+    return { state, preset: null, message: "小组赛已全部结算" };
+  }
+
+  const phase = currentGroupPhase(next);
+  const phaseGroups = groupPhaseList(stage, phase);
+  if (phaseGroups.length === 0) {
+    return { state, preset: null, message: "小组赛分组为空，无法结算" };
+  }
+  const phaseLabel = phase === 1 ? "前四组" : "后四组";
+  if (phaseGroups.every((g) => g.status === "settled")) {
+    return { state, preset: null, message: `小组赛${phaseLabel}已结算` };
   }
 
   const rules = next.rules;
-  const advanceAll: string[] = [];
-  const reviveAll: string[] = [];
-
   const sevenMode = resolveSevenPersonSplit({
     groupSizes: stage.groups.map((g) => g.members.length),
     idealPromoPool: rules.idealPromoPool,
     sevenPersonSplit: rules.sevenPersonSplit,
   });
 
-  for (const group of stage.groups) {
+  const advanceAll: string[] = [];
+  const reviveAll: string[] = [];
+  for (const group of phaseGroups) {
+    if (group.status === "settled") continue;
     const ranked = rankedMembersOfGroup(group);
     if (!ranked.length) {
       return {
@@ -733,89 +988,95 @@ export function settleGroupStage(state: TournamentState): SettleResult {
     reviveAll.push(...split.revive);
   }
 
-  // 去重保序
-  const seenA = new Set<string>();
-  const advanceKeys = advanceAll.filter((k) => {
-    if (seenA.has(k)) return false;
-    seenA.add(k);
-    return true;
-  });
+  // 直晋累计到本阶段（保序去重）；复活池 = 本半程复活尾
+  const advanceKeys = mergeOrderedUnique([...(stage.advanceKeys || []), ...advanceAll]);
+  const advanceSet = new Set(advanceKeys);
   const seenR = new Set<string>();
   const reviveKeys = reviveAll.filter((k) => {
-    if (seenR.has(k) || seenA.has(k)) return false;
+    if (!k || seenR.has(k) || advanceSet.has(k)) return false;
     seenR.add(k);
     return true;
   });
 
   stage.advanceKeys = advanceKeys;
   stage.reviveKeys = reviveKeys;
-  next.stages.group = markStageSettled(stage);
+  // 只标记本半程的组为已结算
+  const phaseKeySet = new Set(phaseGroups.map((g) => g.key));
+  stage.groups = stage.groups.map((g) =>
+    phaseKeySet.has(g.key)
+      ? { ...g, status: "settled" as StageGroupStatus, updatedAt: nowIso() }
+      : g
+  );
+  if (isGroupPhaseSettled(stage, 1) && isGroupPhaseSettled(stage, 2)) {
+    stage.settled = true;
+  }
+
+  // 直晋计入晋级池；复活池进本半程复活赛
+  next.flow = {
+    ...next.flow,
+    promoPool: mergeOrderedUnique([...(next.flow?.promoPool || []), ...advanceAll]),
+    revivePhase: phase,
+  };
 
   const lookup = collectMemberLookup(next);
-  // 复活赛：均分若干组（约 6–8 人/组），组内记分后前 4 出线
-  const reviveGroupCount = resolveReviveGroupCount(reviveKeys.length);
-  const reviveNameGroups = nameGroupsSplitN(
-    reviveKeys,
-    lookup,
-    reviveGroupCount || 1
+  const meta = buildMetaMap(
+    Array.from(lookup.values()).map((m) => ({
+      personId: m.personId,
+      name: m.name,
+      anchorId: m.anchorId,
+      douyinNos: m.douyinNos,
+    }))
   );
-  const reviveGroups = groupsFromNameGroups(
-    "revive",
-    reviveNameGroups,
-    buildMetaMap(
-      Array.from(lookup.values()).map((m) => ({
-        personId: m.personId,
-        name: m.name,
-        anchorId: m.anchorId,
-        douyinNos: m.douyinNos,
-      }))
-    )
-  );
+
+  let reviveNameGroups: string[][] = [];
+  let reviveGroups: StageGroup[] = [];
+  if (reviveKeys.length) {
+    const reviveGroupCount = resolveReviveGroupCount(reviveKeys.length);
+    reviveNameGroups = nameGroupsSplitN(reviveKeys, lookup, reviveGroupCount || 1);
+    reviveGroups = groupsFromNameGroups("revive", reviveNameGroups, meta);
+  }
   next.stages.revive = {
     groups: reviveGroups,
     settled: false,
     advanceKeys: [],
   };
 
-  // 晋级池草稿：直晋先占位（复活出线后 settleRevive 再固定 8 组均分）
-  const promoDraftKeys = [...advanceKeys];
-  const promoNameGroups = nameGroupsSplitN(
-    promoDraftKeys,
-    lookup,
-    PROMO_GROUP_COUNT
-  );
-  next.stages.promo = {
-    groups: groupsFromNameGroups(
-      "promo",
-      promoNameGroups,
-      buildMetaMap(
-        Array.from(lookup.values()).map((m) => ({
-          personId: m.personId,
-          name: m.name,
-          anchorId: m.anchorId,
-          douyinNos: m.douyinNos,
-        }))
-      )
-    ),
-    settled: false,
-    advanceKeys: [],
-  };
+  // 本轮没有复活池 → 直接推进流程
+  if (!reviveGroups.length) {
+    if (phase === 1) {
+      next.flow = { ...next.flow, groupPhase: 2 };
+      next.stages.promo = emptyStage();
+      next.stages.finals = emptyStage();
+      next.activeStage = "group";
+      const saved = saveTournamentState(next);
+      return {
+        state: saved,
+        preset: null,
+        message: `小组赛前四组已结算：直晋 ${advanceAll.length} · 无复活池，进入后四组小组赛`,
+      };
+    }
+    return buildPromoFromPoolSettle(next, {
+      extraNote: `小组赛后四组已结算：直晋 ${advanceAll.length} · 无复活池`,
+    });
+  }
+
+  next.stages.promo = emptyStage();
   next.stages.finals = emptyStage();
-  next.activeStage = reviveGroups.length ? "revive" : "promo";
+  next.activeStage = "revive";
 
   const note = [
-    `小组赛结算 ${nowIso()}`,
-    `直晋 ${advanceKeys.length} · 复活池 ${reviveKeys.length}`,
-    `复活 ${reviveNameGroups.length} 组（组内前4出线）`,
+    `小组赛${phaseLabel}结算 ${nowIso()}`,
+    `直晋 ${advanceAll.length} · 复活池 ${reviveKeys.length}`,
+    `复活 ${reviveGroups.length} 组（组内前4出线）`,
     `规则 8人组前4后4 · 7人组${sevenMode === "3-4" ? "前3后4" : "前4后3"}`,
     next.period ? `period ${next.period}` : "",
   ]
     .filter(Boolean)
     .join(" · ");
 
-  const preset = reviveNameGroups.length
+  const preset = reviveGroups.length
     ? writePreset({
-        name: "复活赛",
+        name: phase === 1 ? "复活赛①" : "复活赛②",
         nameGroups: reviveNameGroups,
         period: next.period,
         groupSize: rules.groupSize,
@@ -834,15 +1095,14 @@ export function settleGroupStage(state: TournamentState): SettleResult {
     state: saved,
     preset,
     message: preset
-      ? `小组赛已结算：直晋 ${advanceKeys.length} · 进复活 ${reviveKeys.length}（小组零淘汰）· 已写入 PK 分组 · 复活赛`
-      : `小组赛已结算：直晋 ${advanceKeys.length} · 无复活池（小组零淘汰）`,
+      ? `小组赛${phaseLabel}已结算：直晋 ${advanceAll.length}（累计 ${advanceKeys.length}）· 本程进复活 ${reviveKeys.length} · 已写入 PK 分组 · ${preset.name}`
+      : `小组赛${phaseLabel}已结算：直晋 ${advanceAll.length} · 无复活池`,
   };
 }
 
 export function settleReviveStage(state: TournamentState): SettleResult {
   const next = cloneState(state);
   const stage = next.stages.revive;
-  const groupStage = next.stages.group;
   if (!stage.groups.length) {
     return { state, preset: null, message: "复活赛无分组，无法结算" };
   }
@@ -851,7 +1111,6 @@ export function settleReviveStage(state: TournamentState): SettleResult {
   }
 
   const rules = next.rules;
-  const direct = groupStage.advanceKeys || [];
   // 复活：各组内前 N 晋级、其余淘汰（不再全局 top K）
   const advanceAll: string[] = [];
   let poolScored = 0;
@@ -887,74 +1146,38 @@ export function settleReviveStage(state: TournamentState): SettleResult {
   stage.advanceKeys = capped;
   next.stages.revive = markStageSettled(stage);
 
-  // 合并：直晋保持原序，再接复活出线
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const key of [...direct, ...capped]) {
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    merged.push(key);
-  }
-
-  const lookup = collectMemberLookup(next);
-  // 晋级赛：固定 8 组均分，目标每组 6–8 人
-  const promoNameGroups = nameGroupsSplitN(merged, lookup, PROMO_GROUP_COUNT);
-  const meta = buildMetaMap(
-    Array.from(lookup.values()).map((m) => ({
-      personId: m.personId,
-      name: m.name,
-      anchorId: m.anchorId,
-      douyinNos: m.douyinNos,
-    }))
-  );
-  next.stages.promo = {
-    groups: groupsFromNameGroups("promo", promoNameGroups, meta),
-    settled: false,
-    advanceKeys: [],
+  const revivePhase = next.flow?.revivePhase === 2 ? 2 : 1;
+  // 复活出线累计进晋级池
+  next.flow = {
+    ...next.flow,
+    promoPool: mergeOrderedUnique([...(next.flow?.promoPool || []), ...capped]),
   };
-  next.stages.finals = emptyStage();
-  next.activeStage = "promo";
-
-  const sizes = promoNameGroups.map((g) => g.length);
-  const sizeHint = sizes.length
-    ? sizes.every((n) => n === sizes[0])
-      ? `${sizes[0]} 人/组`
-      : `${Math.min(...sizes)}–${Math.max(...sizes)} 人/组`
-    : "";
+  const phaseLabel = revivePhase === 1 ? "前四组" : "后四组";
+  const head = `复活赛${phaseLabel}已结算：组内前4 · 出线 ${capped.length} · 淘汰 ${eliminatedCount}`;
   const note = [
-    `复活赛结算 ${nowIso()}`,
+    `复活赛${phaseLabel}结算 ${nowIso()}`,
     `组内前4出线 · 出线 ${capped.length} · 淘汰 ${eliminatedCount}`,
-    `晋级池 ${merged.length} · 晋级 ${promoNameGroups.length} 组${sizeHint ? `（${sizeHint}）` : ""}`,
-    `idealPromo ${rules.idealPromoPool}`,
     next.period ? `period ${next.period}` : "",
   ]
     .filter(Boolean)
     .join(" · ");
 
-  const preset = promoNameGroups.length
-    ? writePreset({
-        name: "晋级赛",
-        nameGroups: promoNameGroups,
-        period: next.period,
-        groupSize: Math.max(...sizes, rules.groupSize),
-        note,
-        existingId: next.stages.promo.presetId,
-      })
-    : null;
-
-  if (preset) {
-    next.stages.promo.presetId = preset.id;
-    next.stages.promo.presetName = preset.name;
+  if (revivePhase === 1) {
+    // 前半程复活完成 → 进入后四组小组赛
+    next.flow = { ...next.flow, groupPhase: 2 };
+    next.stages.promo = emptyStage();
+    next.stages.finals = emptyStage();
+    next.activeStage = "group";
+    const saved = saveTournamentState(next);
+    return {
+      state: saved,
+      preset: null,
+      message: `${head} · 接下来 小组赛·后四组`,
+    };
   }
 
-  const saved = saveTournamentState(next);
-  return {
-    state: saved,
-    preset,
-    message: preset
-      ? `复活赛已结算：组内前4 · 出线 ${capped.length} · 淘汰 ${eliminatedCount} · 晋级 ${promoNameGroups.length} 组（${sizeHint || merged.length + " 人"}）· 已写入 PK 分组 · 晋级赛`
-      : `复活赛已结算：组内前4 · 出线 ${capped.length} · 淘汰 ${eliminatedCount}`,
-  };
+  // 后半程复活完成 → 全量晋级池 → 晋级赛 8 组均分
+  return buildPromoFromPoolSettle(next, { extraNote: head });
 }
 
 export function settlePromoStage(state: TournamentState): SettleResult {

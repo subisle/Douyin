@@ -24,6 +24,8 @@ const NAME_ALIASES = {
   狼宝: "狼小宝",
   玖月: "玖玥",
   农村小胖孩: "狼轩",
+  中鹏先生: "鹏先生",
+  鹏鹏: "鹏先生",
 };
 
 function normalizeName(value) {

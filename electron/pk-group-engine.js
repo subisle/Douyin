@@ -9,7 +9,7 @@
  * - high_to_low（默认）：其余人按战力从高到低切块，特殊人后置插入，再调出场顺序
  * - balanced：蛇形均衡 + 爬山修补
  * - score_capable（能出分）：每组保底高战力，剩余补给当前最弱组
- * - preset（内置）：使用锁定的 PRESET_BATTLE_GROUPS，不跑自动算法
+ * - preset（815）：使用锁定的 815 唯一分组 PRESET_BATTLE_GROUPS，不跑自动算法
  *
  * 硬约束（默认）：
  * - 浩阳 与 浩沐 不同组，组序号差 ≥ 4
@@ -34,8 +34,6 @@ const {
 const {
   PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_META,
-  PRESET_PROMO_GROUPS,
-  PRESET_PROMO_META,
 } = require("../shared/pk-preset-battle-groups");
 
 
@@ -45,7 +43,7 @@ const MODE_LABELS = {
   high_to_low: "顺序分组",
   balanced: "均衡分组",
   score_capable: "能出分",
-  preset: "内置分组",
+  preset: "815",
 };
 
 function normalizeMode(raw) {
@@ -75,7 +73,8 @@ function normalizeMode(raw) {
     s === "内置" ||
     s === "固定" ||
     s === "锁定" ||
-    s === "内置分组"
+    s === "内置分组" ||
+    s === "815"
   ) {
     return "preset";
   }
@@ -1226,14 +1225,19 @@ function formatHm(totalMinutes) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function attachSchedule(groups, { firstStart = "08:15", stepMinutes = 15 } = {}) {
+function attachSchedule(groups, { firstStart = "08:15", stepMinutes = 15, reviveExtraMinutes = 0 } = {}) {
   const match = String(firstStart).match(/^(\d{1,2}):(\d{2})$/);
   const start = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
-  return groups.map((g, i) => ({
-    ...g,
-    startTime: formatHm(start + i * stepMinutes),
-    scheduleLabel: `${formatHm(start + i * stepMinutes)} 开始连麦`,
-  }));
+  const extra = Number(reviveExtraMinutes) || 0;
+  return groups.map((g, i) => {
+    // 第4组后插复活赛：第5组起（index>=4）顺延 extra 分钟
+    const startTime = formatHm(start + i * stepMinutes + (i >= 4 ? extra : 0));
+    return {
+      ...g,
+      startTime,
+      scheduleLabel: `${startTime} 开始连麦`,
+    };
+  });
 }
 
 /**
@@ -1257,6 +1261,8 @@ function buildPkGroupsFromNameGroups(options = {}) {
       : "wave";
   const firstStart = options.firstStart || PRESET_BATTLE_META.firstStart || "08:15";
   const stepMinutes = Number(options.stepMinutes) || PRESET_BATTLE_META.stepMinutes || 15;
+  const reviveExtraMinutes =
+    Number(options.reviveExtraMinutes) || Number(PRESET_BATTLE_META.reviveExtraMinutes) || 0;
   const rawMembers = Array.isArray(options.members) ? options.members : [];
 
   const byKey = new Map();
@@ -1321,7 +1327,7 @@ function buildPkGroupsFromNameGroups(options = {}) {
     };
   });
 
-  const staged = attachSchedule(withStats, { firstStart, stepMinutes });
+  const staged = attachSchedule(withStats, { firstStart, stepMinutes, reviveExtraMinutes });
   const ranked = staged
     .map((g, i) => ({ i, top4: g.top4 }))
     .sort((a, b) => b.top4 - a.top4 || a.i - b.i);
@@ -1372,6 +1378,8 @@ function buildPkGroups(options = {}) {
       nameGroups: options.nameGroups || PRESET_BATTLE_GROUPS,
       firstStart: options.firstStart || PRESET_BATTLE_META.firstStart,
       stepMinutes: options.stepMinutes || PRESET_BATTLE_META.stepMinutes,
+      reviveExtraMinutes:
+        options.reviveExtraMinutes ?? PRESET_BATTLE_META.reviveExtraMinutes,
     });
   }
   const groupSize = Math.max(4, Number(options.groupSize) || DEFAULT_GROUP_SIZE);
@@ -1704,8 +1712,6 @@ module.exports = {
   MODE_LABELS,
   PRESET_BATTLE_GROUPS,
   PRESET_BATTLE_META,
-  PRESET_PROMO_GROUPS,
-  PRESET_PROMO_META,
   canonicalName,
   normalizeName,
   normalizeMode,

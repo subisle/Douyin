@@ -1,4 +1,4 @@
-"use strict";
+ "use strict";
 
 /**
  * 每日之星（前三名）海报：日报推送 / 指令「每日报告」时与报告图一并发送。
@@ -68,9 +68,10 @@ function truncateName(name, max = 8) {
  * @param {string} date YYYY-MM-DD
  * @param {"male"|"female"} gender
  * @param {{ rows?: any[] } | null} report
+ * @param {Record<number, string>} avatarsByRank
  * @returns {string} SVG
  */
-function renderDailyStarSvg(date, gender, report) {
+function renderDailyStarSvg(date, gender, report, avatarsByRank = {}) {
   const meta = genderMeta(gender);
   const top = pickTopByDailyWave(report?.rows, 3);
   while (top.length < 3) {
@@ -145,6 +146,13 @@ function renderDailyStarSvg(date, gender, report) {
       `<circle cx="160" cy="${y + podiumH / 2}" r="46" fill="${medal.soft}" stroke="${medal.accent}" stroke-width="3"/>`
     );
     parts.push(
+      `<clipPath id="avatarClip" x="160" y="${y + podiumH / 2 - 46}" width="92" height="92" />`
+    );
+    const avatarUrl = avatarsByRank[index + 1] || "";
+    parts.push(
+      `<image x="160" y="${y + podiumH / 2 - 46}" width="92" height="92" href="${avatarUrl}" clip-path="url(#avatarClip)" />`
+    );
+    parts.push(
       `<text x="160" y="${y + podiumH / 2 + 10}" text-anchor="middle" fill="#1F2937" font-size="28" font-family="${FONT}" font-weight="900">${escapeXml(medal.label)}</text>`
     );
     parts.push(
@@ -169,12 +177,21 @@ function renderDailyStarSvg(date, gender, report) {
  * @param {string} date
  * @param {"male"|"female"} gender
  * @param {{ rows?: any[] } | null} report
+ * @param {Record<number, string>} avatarsByRank
  * @returns {Promise<{ buffer: Buffer, fileName: string }>}
  */
-async function renderDailyStarPng(date, gender, report) {
+async function renderDailyStarPng(date, gender, report, avatarsByRank = {}) {
+  if (!avatarsByRank || Object.keys(avatarsByRank).length === 0) {
+    avatarsByRank = {};
+    (report?.rows || []).forEach(row => {
+      if (row.anchorId && row.avatarUrl) {
+        avatarsByRank[row.rank] = row.avatarUrl;
+      }
+    });
+  }
   const day = String(date || "").trim() || "当日";
   const label = gender === "female" ? "女队" : "男团";
-  const svg = renderDailyStarSvg(day, gender === "female" ? "female" : "male", report);
+  const svg = renderDailyStarSvg(day, gender === "female" ? "female" : "male", report, avatarsByRank);
   const buffer = await getSharp()(Buffer.from(svg, "utf8"))
     .png({ compressionLevel: 9 })
     .toBuffer();
