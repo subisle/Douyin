@@ -23,6 +23,10 @@
     "test:weixin-bot": "node --test electron/weixin-bot*.test.js electron/project-bots.test.js shared/business-date.test.js src/server/bots/store-crypto.test.js",
     "db:migrate": "node scripts/migrate.js up",
     "db:migrate:status": "node scripts/migrate.js status",
+    "db:tunnel": "node scripts/ssh-tunnel-rk3318.js start",
+    "db:tunnel:status": "node scripts/ssh-tunnel-rk3318.js status",
+    "db:tunnel:stop": "node scripts/ssh-tunnel-rk3318.js stop",
+    "db:backup": "node scripts/backup-mysql.js",
     "electron": "electron .",
     "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"cross-env PROJECT_BOTS=0 next dev\" \"wait-on tcp:3000 && electron .\"",
     "electron:build": "node scripts/electron-next-build.mjs",
@@ -35,9 +39,7 @@
     "bot:seed-credential": "node scripts/ilink-seed-credential.js",
     "storage:bench": "node scripts/bench-local-storage.mjs",
     "storage:doctor": "node scripts/storage-doctor.mjs",
-    "test:qq-bot": "node --test shared/qqbot-adapter.test.js electron/qq-bot.test.js",
-    "backup:init": "node scripts/init-backup-db.js",
-    "backup:sync": "node scripts/sync-backup.js"
+    "test:qq-bot": "node --test shared/qqbot-adapter.test.js electron/qq-bot.test.js"
   },
   "build": {
     "appId": "com.subisle.douyin",
@@ -62,6 +64,15 @@
       ".env",
       "out/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "data/builtin",
+        "to": "builtin-config",
+        "filter": [
+          "*.json"
+        ]
+      }
     ],
     "mac": {
       "category": "public.app-category.utilities",

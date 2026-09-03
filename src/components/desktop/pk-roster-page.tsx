@@ -59,6 +59,7 @@ import {
   setActiveGroupPreset,
   suggestNextGroupPresetName,
   syncBuiltInGroupsToPkStorage,
+  syncAugustEndGroupsToPkStorage,
   downloadPkGroupsCsv,
   exportPkGroupsToCsv,
   formatPkGroupsCopyText,
@@ -75,11 +76,32 @@ type UiGroup = BuildPkGroupsGroup & { key: string };
 type DragPerson = { groupKey: string; personId: number | null; name: string };
 
 const MODE_OPTIONS: { key: PkGroupMode; label: string }[] = [
-  { key: "preset", label: "815" },
+  { key: "preset", label: "争霸赛" },
   { key: "high_to_low", label: "顺序" },
   { key: "balanced", label: "均衡" },
   { key: "score_capable", label: "能出分" },
 ];
+
+const PRESET_SECTIONS = [
+  { key: "tournament", label: "争霸赛", names: new Set(["815", "晋级赛-815"]) },
+  { key: "monthend", label: "月底", names: new Set(["8月月底"]) },
+] as const;
+
+function presetSections(presets: SavedGroupPreset[]) {
+  const known = new Set<string>();
+  const sections = PRESET_SECTIONS.map((section) => {
+    const items = presets.filter((preset) => {
+      const matches = section.names.has(String(preset.name || "").trim());
+      if (matches) known.add(preset.id);
+      return matches;
+    });
+    return { ...section, items };
+  });
+  const custom = presets.filter((preset) => !known.has(preset.id));
+  return custom.length
+    ? [...sections, { key: "custom", label: "自定义", names: new Set<string>(), items: custom }]
+    : sections;
+}
 
 function currentPeriod() {
   const now = new Date();
@@ -250,13 +272,11 @@ export function PkRosterPage() {
         setDirty(true);
         return false;
       }
-      // 手动调整内置「815」→ 自动脱离内置，另存为自定义分组并激活。
-      // 否则存档名仍为 815，下次加载被 preferSaved 的内置表覆盖，改动即丢失。
+      // 手动调整内置「815」→ 直接更新「815」存档（持久化保护已确保启动时不被覆盖）
       if (opts?.silent && activePresetName === BUILTIN_GROUP_PRESET_NAME) {
-        const name = suggestNextGroupPresetName();
         const saved = saveNamedGroupPreset({
-          id: undefined,
-          name,
+          id: activePresetId || undefined,
+          name: BUILTIN_GROUP_PRESET_NAME,
           note: "815 手动调整",
           nameGroups,
           period,
@@ -649,6 +669,8 @@ export function PkRosterPage() {
   );
 
   useEffect(() => {
+    // 挂载时同步内置分组存档（815 + 8月月底），确保预设列表可见
+    syncAugustEndGroupsToPkStorage({ makeActive: false });
     void loadRoster();
   }, [loadRoster]);
 
@@ -1181,49 +1203,54 @@ export function PkRosterPage() {
       </div>
 
       {presets.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
-          <span className="text-xs font-medium text-muted-foreground">已存分组</span>
-          {presets.map((preset) => {
-            const active = preset.id === activePresetId;
-            return (
-              <div key={preset.id} className="inline-flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => loadPreset(preset)}
-                  disabled={building}
-                  title={
-                    [
-                      preset.name,
-                      preset.note || "",
-                      preset.savedAt ? new Date(preset.savedAt).toLocaleString("zh-CN") : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")
-                  }
-                  className={`rounded-full px-2.5 py-1 text-xs transition ${
-                    active
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "bg-background text-muted-foreground hover:bg-muted border"
-                  }`}
-                >
-                  {preset.name}
-                  {preset.note ? (
-                    <span className={`ml-1 ${active ? "opacity-80" : "opacity-70"}`}>
-                      · {preset.note.length > 10 ? `${preset.note.slice(0, 10)}…` : preset.note}
-                    </span>
-                  ) : null}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeletePreset(preset)}
-                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  title={`删除 ${preset.name}`}
-                >
-                  <Trash2 className="size-3" />
-                </button>
-              </div>
-            );
-          })}
+        <div className="space-y-2 rounded-md border bg-muted/30 px-3 py-2">
+          <div className="text-xs font-medium text-muted-foreground">已存分组</div>
+          {presetSections(presets).map((section) => (
+            <div key={section.key} className="flex flex-wrap items-center gap-2">
+              <span className="w-16 shrink-0 text-xs font-medium text-foreground">{section.label}</span>
+              {section.items.map((preset) => {
+                const active = preset.id === activePresetId;
+                return (
+                  <div key={preset.id} className="inline-flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => loadPreset(preset)}
+                      disabled={building}
+                      title={
+                        [
+                          preset.name,
+                          preset.note || "",
+                          preset.savedAt ? new Date(preset.savedAt).toLocaleString("zh-CN") : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      }
+                      className={`rounded-full px-2.5 py-1 text-xs transition ${
+                        active
+                          ? "bg-primary text-primary-foreground shadow-sm"
+                          : "border bg-background text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {preset.name}
+                      {preset.note ? (
+                        <span className={`ml-1 ${active ? "opacity-80" : "opacity-70"}`}>
+                          · {preset.note.length > 10 ? `${preset.note.slice(0, 10)}…` : preset.note}
+                        </span>
+                      ) : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePreset(preset)}
+                      className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      title={`删除 ${preset.name}`}
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
 

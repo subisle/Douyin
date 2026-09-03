@@ -16,6 +16,25 @@ async function ensureImportRecordsTable(db) {
   );
 }
 
+async function ensureChannelAnchorBindsTable(db) {
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS channel_anchor_binds (
+      id INT NOT NULL AUTO_INCREMENT,
+      channel VARCHAR(16) NOT NULL,
+      channel_user_id VARCHAR(128) NOT NULL,
+      person_id INT NOT NULL,
+      douyin_no VARCHAR(64) NOT NULL,
+      anchor_id VARCHAR(64) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_bind_user (channel, channel_user_id),
+      UNIQUE KEY uk_bind_douyin (douyin_no),
+      UNIQUE KEY uk_bind_person (person_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+  );
+}
+
 async function ensurePersonDailyReportVisibilityColumn(db) {
   const [rows] = await db.query(
     `SELECT column_name AS name
@@ -118,5 +137,6 @@ async function hasCoveringIndex(db, table, columns) {
 module.exports = {
   ensureDatabaseIndexes,
   ensureImportRecordsTable,
+  ensureChannelAnchorBindsTable,
   ensurePersonDailyReportVisibilityColumn,
 };

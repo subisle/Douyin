@@ -64,12 +64,29 @@ import {
 } from "../../../shared/business-date.js";
 
 type GenderView = ReportGender;
-type ExportKind = "image" | "report" | "duration" | "durationImage";
+type ExportKind = "image" | "report" | "duration" | "durationImage" | "notLiveImage" | "notLiveCsv";
 type ReportViewMode = "daily" | "monthly";
-type ReportSortBy = "wave" | "duration";
+type ReportSortBy = "totalWave" | "duration" | "notLiveDays";
 
 // 时长精简图固定四列：序号 / 姓名 / 未播天数 / 当月时长
 const DURATION_IMAGE_COLUMNS: ColumnKey[] = ["rank", "name", "notLiveDays", "duration"];
+// 未开播报告固定四列：序号 / 名字 / 未播天数 / 师傅姓名（无师傅显示空白）
+const NOT_LIVE_IMAGE_COLUMNS: ColumnKey[] = ["rank", "name", "notLiveDays", "master"];
+// 未开播报告专用列宽：序号与未播天数固定，名字略宽、师傅按内容自适应（flex 分配多余空间）
+const NOT_LIVE_IMAGE_COLUMN_WIDTHS: ColumnWidths = {
+  rank: 80,
+  name: 220,
+  notLiveDays: 120,
+  master: 200,
+};
+
+function sortNotLiveReportRows<T extends { notLiveDays?: number; totalWave?: number; name?: string }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) =>
+    (Number(b.notLiveDays) || 0) - (Number(a.notLiveDays) || 0)
+    || (Number(b.totalWave) || 0) - (Number(a.totalWave) || 0)
+    || String(a.name || "").localeCompare(String(b.name || ""), "zh")
+  );
+}
 
 function sanitizeColumnWidth(value: unknown): number | null {
   const width = Number(value);
@@ -82,6 +99,12 @@ function formatRankDelta(delta: number | null | undefined): string {
   if (delta > 0) return `上升${delta}`;
   if (delta < 0) return `下降${Math.abs(delta)}`;
   return "";
+}
+
+function readStoredSortBy(value: string | null): ReportSortBy {
+  if (value === "duration") return "duration";
+  if (value === "notLiveDays") return "notLiveDays";
+  return "totalWave";
 }
 
 function escapeCsvCell(value: unknown): string {
@@ -133,11 +156,11 @@ export function DailyReportPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // 导出图片分割方式：true=拆成两张，false=一张完整长图
   const [exportImageSplit, setExportImageSplit] = useState(true);
-  // 报告排序方式：wave=按音浪（默认），duration=按时长
-  const [sortBy, setSortBy] = useState<ReportSortBy>("wave");
+  // 报告排序方式：totalWave=按总音浪（默认），duration=按时长，notLiveDays=按未开播天数
+  const [sortBy, setSortBy] = useState<ReportSortBy>("totalWave");
   // 导出设置弹窗（草稿值，点「保存」才生效）
   const [showExportSettings, setShowExportSettings] = useState(false);
-  const [sortDraft, setSortDraft] = useState<ReportSortBy>("wave");
+  const [sortDraft, setSortDraft] = useState<ReportSortBy>("totalWave");
   const [splitDraft, setSplitDraft] = useState(true);
 
   // 初始化读取 localStorage
@@ -147,7 +170,7 @@ export function DailyReportPage() {
     setReportStyles(loadReportStyles());
     try {
       setExportImageSplit(localStorage.getItem(EXPORT_SPLIT_STORAGE_KEY) !== "0");
-      setSortBy(localStorage.getItem(REPORT_SORT_STORAGE_KEY) === "duration" ? "duration" : "wave");
+      setSortBy(readStoredSortBy(localStorage.getItem(REPORT_SORT_STORAGE_KEY)));
     } catch {
       // ignore
     }
@@ -253,10 +276,13 @@ export function DailyReportPage() {
     [viewMode, visibleColumns]
   );
   const activeRows = viewMode === "monthly" ? monthlyRows : rows;
-  // 排序：音浪（默认，后端已按音浪降序）/ 时长（按当月时长降序重排）
+  // 排序：总音浪（默认，后端已按音浪降序）/ 时长（按当月时长降序）/ 未开播天数（降序）
   const sortedRows = useMemo(() => {
-    if (sortBy === "wave") return activeRows;
-    return [...activeRows].sort((a, b) => b.totalDuration - a.totalDuration);
+    if (sortBy === "totalWave") return activeRows;
+    if (sortBy === "duration") {
+      return [...activeRows].sort((a, b) => b.totalDuration - a.totalDuration);
+    }
+    return [...activeRows].sort((a, b) => (Number(b.notLiveDays) || 0) - (Number(a.notLiveDays) || 0));
   }, [activeRows, sortBy]);
   const activeSummary = viewMode === "monthly" ? monthlyReport?.summary : report?.summary;
   const currentReportTitle = reportTitles[gender] || DEFAULT_REPORT_TITLE;
@@ -265,6 +291,8 @@ export function DailyReportPage() {
   const activeDateLabel = viewMode === "monthly" ? month : date;
   const durationTitleMonth = Number(month.slice(5));
   const durationReportTitle = `${gender === "male" ? "男" : "女"}主播${Number.isFinite(durationTitleMonth) ? durationTitleMonth : ""}月数据统计`;
+  const notLiveRows = useMemo(() => sortNotLiveReportRows(activeRows), [activeRows]);
+  const notLiveReportTitle = `${gender === "male" ? "男" : "女"}主播未开播天数报告`;
 
   // 时长精简图：序号 / 姓名 / 未播天数 / 当月时长
   const drawDurationReport = useCallback(
@@ -310,6 +338,54 @@ export function DailyReportPage() {
       gender,
       month,
       reportStyle,
+    ]
+  );
+
+  const drawNotLiveReport = useCallback(
+    (
+      canvas: HTMLCanvasElement,
+      page?: {
+        rows: typeof activeRows;
+        rankOffset?: number;
+        pageIndex?: number;
+        pageCount?: number;
+      }
+    ) => {
+      const pageRows = page?.rows ?? notLiveRows;
+      const options = {
+        date: activeDateLabel,
+        rows: pageRows,
+        gender,
+        customTitle: notLiveReportTitle,
+        subtitle: viewMode === "monthly" ? `Not Live • ${month}` : `Not Live • ${date}`,
+        hideDateInTitle: viewMode === "monthly",
+        notLiveCount: activeSummary?.notLiveCount ?? 0,
+        notLiveDays: activeSummary?.notLiveDays ?? 0,
+        scale: 2,
+        visibleColumns: NOT_LIVE_IMAGE_COLUMNS,
+        columnWidths: NOT_LIVE_IMAGE_COLUMN_WIDTHS,
+        rankOffset: page?.rankOffset ?? 0,
+        pageIndex: page?.pageIndex ?? 1,
+        pageCount: page?.pageCount ?? 1,
+        statsRows: notLiveRows,
+      };
+      if (reportStyle === "apple") {
+        drawAppleReportToCanvas(canvas, options);
+        return;
+      }
+      drawReportToCanvas(canvas, options);
+    },
+    [
+      activeDateLabel,
+      activeSummary?.notLiveCount,
+      activeSummary?.notLiveDays,
+      date,
+      gender,
+      month,
+      notLiveReportTitle,
+      notLiveRows,
+      reportStyle,
+      viewMode,
     ]
   );
 
@@ -630,6 +706,60 @@ export function DailyReportPage() {
     }
   };
 
+  const handleExportNotLiveImage = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || exporting || notLiveRows.length === 0) return;
+    setExporting("notLiveImage");
+    try {
+      const genderText = gender === "male" ? "男" : "女";
+      const pages = splitDailyReportRowsForExport(notLiveRows, {
+        maxPages: exportImageSplit ? 2 : 1,
+      });
+      for (const page of pages) {
+        const pageTag =
+          page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "";
+        const filename = `${activeDateLabel}_${genderText}_未开播天数报告_${notLiveRows.length}人${pageTag}.png`;
+        await downloadCanvasAsPng(canvas, filename, () => {
+          drawNotLiveReport(canvas, page);
+        });
+        if (pages.length > 1) {
+          await new Promise((r) => window.setTimeout(r, 350));
+        }
+      }
+      drawSelectedReport(canvas);
+    } catch (e) {
+      console.error("导出未开播图片失败", e);
+      alert("导出失败: " + String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const handleExportNotLiveCSV = () => {
+    if (notLiveRows.length === 0 || exporting) return;
+    setExporting("notLiveCsv");
+    try {
+      const liveLabel = viewMode === "monthly" ? "本月开播" : "当日开播";
+      const data = notLiveRows.map((row, index) => ({
+        排名: index + 1,
+        主播ID: row.anchorId,
+        主播姓名: row.name,
+        [formatMonthNotLiveDaysLabel(activeDateLabel)]: row.notLiveDays ?? 0,
+        [liveLabel]: row.isLive ? "是" : "否",
+        累计总音浪: row.totalWave,
+        师傅: row.masterName || "",
+        日期: activeDateLabel,
+      }));
+      const genderText = gender === "male" ? "男" : "女";
+      downloadCsv(data, `${activeDateLabel}_${genderText}_未开播天数_${notLiveRows.length}人.csv`);
+    } catch (e) {
+      console.error("导出未开播CSV失败", e);
+      alert("导出失败: " + String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const handleExportDurationCSV = () => {
     if (activeRows.length === 0 || exporting) return;
     setExporting("duration");
@@ -883,6 +1013,24 @@ export function DailyReportPage() {
                   {exporting === "durationImage" ? "导出中…" : "导出时长图"}
                 </button>
               )}
+              {/* 导出未开播天数图 */}
+              <button
+                onClick={handleExportNotLiveImage}
+                disabled={exporting !== null || !activeSummary || notLiveRows.length === 0}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+              >
+                <CalendarDays className="size-4" />
+                {exporting === "notLiveImage" ? "导出中…" : "导出未开播图"}
+              </button>
+              {/* 导出未开播天数 CSV */}
+              <button
+                onClick={handleExportNotLiveCSV}
+                disabled={exporting !== null || !activeSummary || notLiveRows.length === 0}
+                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
+              >
+                <FileSpreadsheet className="size-4" />
+                {exporting === "notLiveCsv" ? "导出中…" : "导出未开播 CSV"}
+              </button>
               {/* 导出 CSV */}
               <button
                 onClick={handleExportCSV}
@@ -942,15 +1090,15 @@ export function DailyReportPage() {
                     <p className="text-sm font-medium text-foreground">报告排序方式</p>
                     <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card p-0.5">
                       <button
-                        onClick={() => setSortDraft("wave")}
+                        onClick={() => setSortDraft("totalWave")}
                         className={cn(
                           "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
-                          sortDraft === "wave"
+                          sortDraft === "totalWave"
                             ? "bg-accent text-foreground"
                             : "text-muted-foreground hover:text-foreground"
                         )}
                       >
-                        按音浪
+                        按总音浪
                       </button>
                       <button
                         onClick={() => setSortDraft("duration")}
@@ -962,6 +1110,17 @@ export function DailyReportPage() {
                         )}
                       >
                         按时长
+                      </button>
+                      <button
+                        onClick={() => setSortDraft("notLiveDays")}
+                        className={cn(
+                          "flex-1 rounded-md px-2.5 py-1.5 text-xs font-medium transition",
+                          sortDraft === "notLiveDays"
+                            ? "bg-accent text-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        按未开播天数
                       </button>
                     </div>
                     <p className="text-xs text-muted-foreground">

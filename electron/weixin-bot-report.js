@@ -122,6 +122,46 @@ function splitDailyReportRowsForExport(rows, options = {}) {
   ];
 }
 
+function sortNotLiveReportRows(rows) {
+  const list = (Array.isArray(rows) ? rows : []).map((row) => ({ ...row }));
+  list.sort((a, b) =>
+    (Number(b.notLiveDays) || 0) - (Number(a.notLiveDays) || 0)
+    || (Number(b.totalWave) || 0) - (Number(a.totalWave) || 0)
+    || String(a.name || "").localeCompare(String(b.name || ""), "zh")
+  );
+  list.forEach((row, index) => {
+    row.rank = index + 1;
+  });
+  return list;
+}
+
+function formatPeriodLabel(dateOrMonth) {
+  const parts = String(dateOrMonth || "").split("-");
+  const year = parseInt(parts[0] || "2026", 10) || 2026;
+  const month = parseInt(parts[1] || "1", 10) || 1;
+  if (parts.length === 2) return `${year}年${month}月`;
+  const day = parseInt(parts[2] || "1", 10) || 1;
+  return `${year}年${month}月${day}日`;
+}
+
+function getNotLiveTitle(report, options = {}) {
+  const custom = String(options.title || "").trim();
+  if (custom) return custom;
+  const gender = report.gender === "female" ? "female" : "male";
+  return `${gender === "female" ? "女" : "男"}主播未开播天数报告`;
+}
+
+function buildNotLiveCsvRows(report, options = {}) {
+  const dateLabel = String(options.dateLabel || report.date || report.month || "");
+  const notLiveDaysLabel = formatMonthNotLiveDaysLabel(dateLabel);
+  return sortNotLiveReportRows(report?.rows).map((row) => ({
+    序号: row.rank,
+    名字: row.name || "",
+    [notLiveDaysLabel]: Number(row.notLiveDays) || 0,
+    师傅姓名: row.masterName || "",
+  }));
+}
+
 function appleTierColor(tier) {
   const key = String(tier || "").charAt(0).toUpperCase();
   if (key === "A") return { bg: "#FFF7E6", border: "#FDBA74", text: "#9A3412" };
@@ -586,6 +626,312 @@ function renderAppleSvg(report, options = {}) {
   return parts.join("");
 }
 
+function notLivePeople(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => (Number(row.notLiveDays) || 0) > 0 || !row.isLive);
+}
+
+function renderNotLiveClassicSvg(report, options = {}) {
+  const rows = normalizeRows(report);
+  const date = String(report.date || report.month || options.date || "");
+  const gender = report.gender === "female" ? "female" : "male";
+  const genderText = gender === "male" ? "男" : "女";
+  const formattedDate = formatPeriodLabel(date);
+  const rankOffset = Math.max(0, Number(options.rankOffset) || 0);
+  const pageIndex = Math.max(1, Number(options.pageIndex) || 1);
+  const pageCount = Math.max(1, Number(options.pageCount) || 1);
+  const titleBase = getNotLiveTitle(report, options);
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleText = `${titleBase} ${formattedDate}${pageSuffix ? ` ${pageSuffix}` : ""}`;
+  const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const summary = report.summary || {};
+  const allRows = Array.isArray(options.statsRows) && options.statsRows.length ? options.statsRows : rows;
+  const inactiveStreamers = notLivePeople(allRows);
+  const notLivePeopleCount = Number(summary.notLiveCount ?? inactiveStreamers.length) || 0;
+  const notLiveDays = Number(summary.notLiveDays) || 0;
+  const showInactiveFooter = options.showInactiveFooter != null
+    ? Boolean(options.showInactiveFooter)
+    : pageCount <= 1 || pageIndex >= pageCount;
+  const hasInactive = showInactiveFooter && inactiveStreamers.length > 0;
+
+  const width = 1440;
+  const scale = 2;
+  const logicalW = width / scale;
+  const headerHeight = 54;
+  const tableHeaderHeight = 32;
+  const rowHeight = 38;
+  const tablePaddingX = 20;
+  const inactiveText = groupInactiveStreamers(inactiveStreamers);
+  const inactiveLines = hasInactive ? wrapText(inactiveText, 58) : [];
+  const footerHeight = hasInactive
+    ? Math.max(118, 86 + inactiveLines.length * 18)
+    : 64;
+  const height = (headerHeight + tableHeaderHeight + rowHeight * rows.length + footerHeight) * scale;
+
+  const columns = [
+    { key: "rank", label: "序号", width: 80, align: "center" },
+    { key: "name", label: "名字", width: 200, align: "left" },
+    { key: "notLiveDays", label: notLiveDaysLabel, width: 140, align: "center" },
+    { key: "master", label: "师傅姓名", width: 180, align: "left" },
+  ];
+  const tableWidth = logicalW - tablePaddingX * 2;
+  const totalCol = columns.reduce((sum, col) => sum + col.width, 0);
+  columns.forEach((col) => { col.width = (col.width / totalCol) * tableWidth; });
+  let xCursor = tablePaddingX;
+  columns.forEach((col) => {
+    col.x = xCursor;
+    xCursor += col.width;
+  });
+
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${logicalW} ${height / scale}">`,
+    `<rect width="${logicalW}" height="${height / scale}" fill="#F8FAFC"/>`,
+  ];
+
+  let y = 0;
+  parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${headerHeight}" fill="#7F1D1D"/>`);
+  parts.push(textNode(titleText, logicalW / 2, y + headerHeight / 2 + 1, {
+    size: 22, fill: "#FEF2F2", weight: 700, anchor: "middle", baseline: "middle",
+  }));
+  y += headerHeight;
+
+  parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${tableHeaderHeight}" fill="#FEE2E2"/>`);
+  for (const col of columns) {
+    const alignLeft = col.align === "left";
+    parts.push(textNode(col.label, alignLeft ? col.x + 8 : col.x + col.width / 2, y + tableHeaderHeight / 2 + 1, {
+      size: 13, fill: "#7F1D1D", weight: 700, anchor: alignLeft ? "start" : "middle", baseline: "middle",
+    }));
+  }
+  y += tableHeaderHeight;
+
+  rows.forEach((row, index) => {
+    const rank = rankOffset + index + 1;
+    const days = Number(row.notLiveDays) || 0;
+    const isInactive = days > 0 || !row.isLive;
+    const fill = isInactive
+      ? (index % 2 === 0 ? "#FEF2F2" : "#FFF1F2")
+      : (index % 2 === 0 ? "#FFFFFF" : "#F8FAFC");
+    parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${rowHeight}" fill="${fill}"/>`);
+    if (isInactive) {
+      parts.push(`<rect x="0" y="${y}" width="4" height="${rowHeight}" fill="#DC2626"/>`);
+    }
+    parts.push(`<line x1="0" y1="${y}" x2="${logicalW}" y2="${y}" stroke="${isInactive ? "#FECACA" : "#E2E8F0"}" stroke-width="0.5"/>`);
+
+    const cy = y + rowHeight / 2 + 1;
+    for (const col of columns) {
+      if (col.key === "rank") {
+        parts.push(textNode(String(rank).padStart(2, "0"), col.x + col.width / 2, cy, {
+          size: 15, fill: isInactive ? "#B91C1C" : "#334155", weight: 700, anchor: "middle", baseline: "middle",
+          family: "Georgia, Times New Roman, serif",
+        }));
+      } else if (col.key === "name") {
+        parts.push(textNode(truncateText(row.name || "-", 12), col.x + 8, cy, {
+          size: 15, fill: isInactive ? "#991B1B" : "#0F172A", weight: isInactive ? 700 : 500, anchor: "start", baseline: "middle",
+        }));
+      } else if (col.key === "notLiveDays") {
+        parts.push(textNode(String(days), col.x + col.width / 2, cy, {
+          size: 16, fill: days > 0 ? "#B91C1C" : "#15803D", weight: 800, anchor: "middle", baseline: "middle",
+        }));
+      } else if (col.key === "master") {
+        parts.push(textNode(truncateText(row.masterName || "", 10), col.x + 8, cy, {
+          size: 13, fill: "#475569", weight: 500, anchor: "start", baseline: "middle",
+        }));
+      }
+    }
+    y += rowHeight;
+  });
+
+  parts.push(`<rect x="0" y="${y}" width="${logicalW}" height="${footerHeight}" fill="#FEE2E2"/>`);
+  const totalCount = allRows.length;
+  const pageCountLabel = pageCount > 1
+    ? `本页 ${rows.length} 人 · 共 ${totalCount} 人`
+    : `${genderText}主播 ${totalCount} 人`;
+  const summaryText = `${pageCountLabel} · 未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`;
+  parts.push(textNode(summaryText, tablePaddingX, y + 26, {
+    size: 18, fill: "#7F1D1D", weight: 700, anchor: "start",
+  }));
+  parts.push(textNode(`数据日期 ${formattedDate}`, tablePaddingX, y + 50, {
+    size: 12, fill: "#9F1239", weight: 500, anchor: "start",
+  }));
+
+  if (hasInactive) {
+    const warnX = tablePaddingX;
+    const warnY = y + 64;
+    const warnW = logicalW - tablePaddingX * 2;
+    const warnH = footerHeight - 78;
+    parts.push(`<rect x="${warnX}" y="${warnY}" width="${warnW}" height="${warnH}" rx="8" fill="#FEF2F2" stroke="#FECACA"/>`);
+    parts.push(textNode(`未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`, warnX + 14, warnY + 22, {
+      size: 14, fill: "#DC2626", weight: 700, anchor: "start",
+    }));
+    inactiveLines.forEach((line, i) => {
+      parts.push(textNode(line, warnX + 14, warnY + 40 + i * 16, {
+        size: 11, fill: "#7F1D1D", weight: 500, anchor: "start",
+      }));
+    });
+  }
+
+  parts.push("</svg>");
+  return parts.join("");
+}
+
+function renderNotLiveAppleSvg(report, options = {}) {
+  const rows = normalizeRows(report);
+  const date = String(report.date || report.month || options.date || "");
+  const gender = report.gender === "female" ? "female" : "male";
+  const genderText = gender === "male" ? "男团" : "女队";
+  const rankOffset = Math.max(0, Number(options.rankOffset) || 0);
+  const pageIndex = Math.max(1, Number(options.pageIndex) || 1);
+  const pageCount = Math.max(1, Number(options.pageCount) || 1);
+  const titleBaseRaw = getNotLiveTitle(report, options);
+  const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
+  const titleBase = pageSuffix ? `${titleBaseRaw} ${pageSuffix}` : titleBaseRaw;
+  const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
+  const summary = report.summary || {};
+  const allRows = Array.isArray(options.statsRows) && options.statsRows.length ? options.statsRows : rows;
+  const inactiveRows = notLivePeople(allRows);
+  const notLivePeopleCount = Number(summary.notLiveCount ?? inactiveRows.length) || 0;
+  const notLiveDays = Number(summary.notLiveDays) || 0;
+  const showInactiveFooter = options.showInactiveFooter != null
+    ? Boolean(options.showInactiveFooter)
+    : pageCount <= 1 || pageIndex >= pageCount;
+
+  const width = 1440;
+  const scale = 2;
+  const logicalW = width / scale;
+  const headerH = 86;
+  const tableHeaderH = 34;
+  const rowH = 48;
+  const rowGap = 6;
+  const footerTextGap = 8;
+  const footerTextH = 18;
+  const warnGap = 20;
+  const warnH = 42;
+  const footerH = footerTextGap + footerTextH + (showInactiveFooter && inactiveRows.length > 0 ? warnGap + warnH : 0);
+  const tableRowsH = rows.length * rowH + Math.max(0, rows.length - 1) * rowGap;
+  const heightLogical = headerH + tableHeaderH + rowGap + tableRowsH + footerH;
+  const height = heightLogical * scale;
+
+  const columns = [
+    { key: "rank", label: "序号", width: 80, align: "center" },
+    { key: "name", label: "名字", width: 180, align: "left" },
+    { key: "notLiveDays", label: notLiveDaysLabel, width: 140, align: "center" },
+    { key: "master", label: "师傅姓名", width: 180, align: "left" },
+  ];
+  const tableX = 0;
+  const tableW = logicalW;
+  const totalCol = columns.reduce((sum, col) => sum + col.width, 0);
+  columns.forEach((col) => { col.width = (col.width / totalCol) * tableW; });
+  let xCursor = tableX;
+  columns.forEach((col) => {
+    col.x = xCursor;
+    xCursor += col.width;
+  });
+
+  const font = "-apple-system, BlinkMacSystemFont, SF Pro Display, SF Pro Text, PingFang SC, sans-serif";
+  const mono = "SF Mono, Menlo, Consolas, monospace";
+
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${logicalW} ${heightLogical}">`,
+    `<rect width="${logicalW}" height="${heightLogical}" fill="#FFFFFF"/>`,
+  ];
+
+  const watermark = "内部数据 · 请勿外传";
+  for (let wy = -40; wy <= heightLogical + 40; wy += 76) {
+    for (let wx = -40; wx <= logicalW + 40; wx += 180) {
+      parts.push(
+        `<text x="${wx}" y="${wy}" font-family="${escapeXml(font)}" font-size="18" font-weight="900" fill="rgba(51,65,85,0.055)" text-anchor="middle" transform="rotate(-18 ${wx} ${wy})">${escapeXml(watermark)}</text>`
+      );
+    }
+  }
+
+  let y = 0;
+  parts.push(textNode(titleBase, logicalW / 2, y + 22, {
+    size: 25, fill: "#101828", weight: 700, anchor: "middle", family: font,
+  }));
+  parts.push(textNode(formatPeriodLabel(date), logicalW / 2, y + 50, {
+    size: 13, fill: "#475467", weight: 500, anchor: "middle", family: font,
+  }));
+  y += headerH;
+
+  parts.push(`<rect x="${tableX}" y="${y}" width="${tableW}" height="${tableHeaderH}" fill="#FFF1F2"/>`);
+  for (const col of columns) {
+    const alignLeft = col.align === "left";
+    parts.push(textNode(col.label, alignLeft ? col.x + 8 : col.x + col.width / 2, y + tableHeaderH / 2 + 1, {
+      size: 12, fill: "#B42318", weight: 700, anchor: alignLeft ? "start" : "middle", baseline: "middle", family: font,
+    }));
+  }
+  y += tableHeaderH + rowGap;
+
+  rows.forEach((row, index) => {
+    const rank = rankOffset + index + 1;
+    const days = Number(row.notLiveDays) || 0;
+    const isInactive = days > 0 || !row.isLive;
+    const rowFill = isInactive ? "#FFF7F7" : "#FFFFFF";
+    const stroke = isInactive ? "#FEE4E2" : "#EAECF0";
+    parts.push(`<rect x="${tableX}" y="${y}" width="${tableW}" height="${rowH}" fill="${rowFill}" stroke="${stroke}" stroke-width="1"/>`);
+    if (isInactive) {
+      parts.push(`<rect x="${tableX}" y="${y + 8}" width="4" height="${rowH - 16}" rx="2" fill="#F04438"/>`);
+    }
+
+    const cy = y + rowH / 2 + 1;
+    for (const col of columns) {
+      if (col.key === "rank") {
+        const chipW = 40;
+        const chipH = 24;
+        const chipX = col.x + (col.width - chipW) / 2;
+        const chipY = y + (rowH - chipH) / 2;
+        const chipFill = isInactive ? "#FFF1F2" : "#F2F4F7";
+        const chipStroke = isInactive ? "#FFE4E6" : "#EAECF0";
+        const chipText = isInactive ? "#B42318" : "#475467";
+        parts.push(`<rect x="${chipX}" y="${chipY}" width="${chipW}" height="${chipH}" rx="${chipH / 2}" fill="${chipFill}" stroke="${chipStroke}"/>`);
+        parts.push(textNode(String(rank).padStart(2, "0"), chipX + chipW / 2, cy, {
+          size: 12, fill: chipText, weight: 700, anchor: "middle", baseline: "middle", family: mono,
+        }));
+      } else if (col.key === "name") {
+        parts.push(textNode(truncateText(row.name || "-", 12), col.x + 8, cy, {
+          size: 14, fill: isInactive ? "#B42318" : "#101828", weight: 700, anchor: "start", baseline: "middle", family: font,
+        }));
+      } else if (col.key === "notLiveDays") {
+        parts.push(textNode(String(days), col.x + col.width / 2, cy, {
+          size: 16, fill: days > 0 ? "#B42318" : "#027A48", weight: 800, anchor: "middle", baseline: "middle", family: font,
+        }));
+      } else if (col.key === "master") {
+        parts.push(textNode(truncateText(row.masterName || "", 10), col.x + 8, cy, {
+          size: 13, fill: "#475467", weight: 500, anchor: "start", baseline: "middle", family: font,
+        }));
+      }
+    }
+
+    y += rowH + (index === rows.length - 1 ? 0 : rowGap);
+  });
+
+  y += footerTextGap;
+  const totalCount = allRows.length;
+  const peopleLabel = pageCount > 1
+    ? `本页 ${rows.length}/${totalCount} 人`
+    : `${genderText} ${totalCount} 人`;
+  parts.push(textNode(`数据日期 ${formatPeriodLabel(date)} · ${peopleLabel}`, tableX + 8, y + 4, {
+    size: 12, fill: "#667085", weight: 600, anchor: "start", family: font,
+  }));
+  parts.push(textNode(`未开播人数 ${notLivePeopleCount} 人 · 未开播天数 ${notLiveDays} 天`, tableX + tableW - 8, y + 4, {
+    size: 12, fill: "#B42318", weight: 600, anchor: "end", family: font,
+  }));
+  parts.push(textNode("内部数据 · 请勿外传", tableX + tableW / 2, y + 4, {
+    size: 12, fill: "#98A2B3", weight: 700, anchor: "middle", family: font,
+  }));
+
+  if (showInactiveFooter && inactiveRows.length > 0) {
+    const warnY = y + warnGap;
+    parts.push(`<rect x="${tableX}" y="${warnY}" width="${tableW}" height="${warnH}" fill="#FFF7F7" stroke="#FEE4E2"/>`);
+    const inactiveText = inactiveRows.map((row) => row.name).join("、");
+    parts.push(textNode(truncateText(`未开播：${inactiveText}`, 56), tableX + 14, warnY + warnH / 2 + 1, {
+      size: 12, fill: "#B42318", weight: 700, anchor: "start", baseline: "middle", family: font,
+    }));
+  }
+
+  parts.push("</svg>");
+  return parts.join("");
+}
+
 /**
  * Render a daily report image for bot replies.
  * Uses the project's built-in export styles:
@@ -675,6 +1021,57 @@ async function toDailyReportImagePages(renderFn, report, options = {}) {
   }];
 }
 
+async function renderNotLiveReportPng(report, options = {}) {
+  const rows = normalizeRows(report);
+  if (rows.length === 0) throw new Error("该日期没有可生成的未开播报告数据");
+  const gender = report.gender === "female" ? "female" : "male";
+  const style = resolveReportStyle(gender, options);
+  const svg = style === "classic"
+    ? renderNotLiveClassicSvg({ ...report, gender }, options)
+    : renderNotLiveAppleSvg({ ...report, gender }, options);
+
+  return getSharp()(Buffer.from(svg, "utf8"))
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
+
+async function renderNotLiveReportPngPages(report, options = {}) {
+  const allRows = normalizeRows(report);
+  if (!allRows.length) throw new Error("该日期没有可生成的未开播报告数据");
+  const gender = report.gender === "female" ? "female" : "male";
+  const pages = splitDailyReportRowsForExport(allRows, {
+    threshold: options.threshold,
+    maxPages: options.maxPages,
+  });
+  const out = [];
+  for (const page of pages) {
+    const buffer = await renderNotLiveReportPng(
+      { ...report, gender, rows: page.rows },
+      {
+        ...options,
+        rankOffset: page.rankOffset,
+        pageIndex: page.pageIndex,
+        pageCount: page.pageCount,
+        statsRows: allRows,
+      }
+    );
+    out.push({
+      buffer,
+      pageIndex: page.pageIndex,
+      pageCount: page.pageCount,
+      fileNameSuffix: page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "",
+    });
+  }
+  return out;
+}
+
+async function toNotLiveReportImagePages(renderFn, report, options = {}) {
+  if (typeof renderFn?.renderNotLivePages === "function") {
+    return renderFn.renderNotLivePages(report, options);
+  }
+  return renderNotLiveReportPngPages(report, options);
+}
+
 module.exports = {
   escapeXml,
   formatWave,
@@ -684,9 +1081,20 @@ module.exports = {
   resolveReportStyle,
   splitDailyReportRowsForExport,
   DAILY_REPORT_EXPORT_SPLIT_THRESHOLD,
+  formatMonthNotLiveDaysLabel,
+  sortNotLiveReportRows,
+  formatPeriodLabel,
+  getNotLiveTitle,
+  buildNotLiveCsvRows,
+  notLivePeople,
   renderClassicSvg,
   renderAppleSvg,
   renderDailyReportPng,
   renderDailyReportPngPages,
   toDailyReportImagePages,
+  renderNotLiveClassicSvg,
+  renderNotLiveAppleSvg,
+  renderNotLiveReportPng,
+  renderNotLiveReportPngPages,
+  toNotLiveReportImagePages,
 };

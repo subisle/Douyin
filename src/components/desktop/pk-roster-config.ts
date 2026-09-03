@@ -7,6 +7,26 @@ const SHARED_PRESET_BATTLE_GROUPS: string[][] =
     ?.PRESET_BATTLE_GROUPS ||
   [];
 
+const AUGUST_END_BATTLE_GROUPS: string[][] =
+  (SharedPresetBattle as { AUGUST_END_BATTLE_GROUPS?: string[][] }).AUGUST_END_BATTLE_GROUPS ||
+  (SharedPresetBattle as { default?: { AUGUST_END_BATTLE_GROUPS?: string[][] } }).default
+    ?.AUGUST_END_BATTLE_GROUPS ||
+  [];
+
+const AUGUST_END_BATTLE_META = {
+  label: "8月月底",
+  source: "8月月底分组",
+  firstStart: "12:15",
+  stepMinutes: 15,
+  reviveExtraMinutes: 0,
+  periodHint: "2026-08",
+  notes: [] as string[],
+  ...((SharedPresetBattle as { AUGUST_END_BATTLE_META?: Record<string, unknown> }).AUGUST_END_BATTLE_META ||
+    (SharedPresetBattle as { default?: { AUGUST_END_BATTLE_META?: Record<string, unknown> } }).default
+      ?.AUGUST_END_BATTLE_META ||
+    {}),
+};
+
 const SHARED_PRESET_BATTLE_META = {
   label: "815",
   source: "815 唯一分组",
@@ -139,6 +159,73 @@ export const PRESET_BATTLE_STEP_MINUTES = PRESET_BATTLE_META.stepMinutes;
 /** 第4组后插复活赛造成的额外顺延（第5组起每组 +N 分钟）；815 = 5 */
 export const PRESET_BATTLE_REVIVE_EXTRA_MINUTES = PRESET_BATTLE_META.reviveExtraMinutes;
 export const PRESET_BATTLE_NOTES = [...PRESET_BATTLE_META.notes];
+
+// ===== 8月月底内置分组 =====
+export const AUGUST_END_BATTLE_GROUPS_EXPORT: string[][] = AUGUST_END_BATTLE_GROUPS.map((row) => [...row]);
+export const AUGUST_END_BATTLE_META_EXPORT = {
+  label: String(AUGUST_END_BATTLE_META.label || "8月月底"),
+  source: String(AUGUST_END_BATTLE_META.source || "8月月底分组"),
+  firstStart: String(AUGUST_END_BATTLE_META.firstStart || "12:15"),
+  stepMinutes: Number(AUGUST_END_BATTLE_META.stepMinutes) || 15,
+  reviveExtraMinutes: Number(AUGUST_END_BATTLE_META.reviveExtraMinutes) || 0,
+  periodHint: String(AUGUST_END_BATTLE_META.periodHint || "2026-08"),
+  notes: Array.isArray(AUGUST_END_BATTLE_META.notes)
+    ? (AUGUST_END_BATTLE_META.notes as string[]).map(String)
+    : [],
+};
+/** 8月月底分组存档名 */
+export const BUILTIN_AUGUST_END_PRESET_NAME = "8月月底";
+
+/** 当前代码锁定的 8月月底名组（拷贝，避免外部 mutate） */
+export function getAugustEndNameGroups(): string[][] {
+  return (AUGUST_END_BATTLE_GROUPS_EXPORT || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
+
+/**
+ * 把代码内置 8月月底表写入 PK 分组命名存档「8月月底」。
+ * 默认 makeActive=false（不抢占当前激活的 815 分组）。
+ */
+export function syncAugustEndGroupsToPkStorage(options?: {
+  makeActive?: boolean;
+  period?: string;
+  note?: string;
+}): SavedGroupPreset | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = getAugustEndNameGroups();
+  if (!nameGroups.length) return null;
+
+  const existing = listSavedGroupPresets().find(
+    (p) => String(p.name || "").trim() === BUILTIN_AUGUST_END_PRESET_NAME
+  );
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  const period =
+    String(options?.period || AUGUST_END_BATTLE_META_EXPORT.periodHint || "").trim() || undefined;
+  const note =
+    String(options?.note || "").trim() ||
+    [
+      AUGUST_END_BATTLE_META_EXPORT.source || "8月月底分组",
+      `${nameGroups.length} 组 · ${total} 人`,
+      `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+      `${AUGUST_END_BATTLE_META_EXPORT.firstStart}×${AUGUST_END_BATTLE_META_EXPORT.stepMinutes}min`,
+      `同步 ${new Date().toISOString()}`,
+    ].join(" · ");
+
+  return saveNamedGroupPreset({
+    id: existing?.id,
+    name: BUILTIN_AUGUST_END_PRESET_NAME,
+    nameGroups,
+    period,
+    mode: "preset",
+    firstStart: AUGUST_END_BATTLE_META_EXPORT.firstStart,
+    stepMinutes: AUGUST_END_BATTLE_META_EXPORT.stepMinutes,
+    reviveExtraMinutes: AUGUST_END_BATTLE_META_EXPORT.reviveExtraMinutes,
+    groupSize: DEFAULT_PK_GROUP_SIZE,
+    note,
+    makeActive: options?.makeActive === true,
+  });
+}
 
 /** 815 晋级赛分组元信息（44 人 · 8 组 · 规模 [5,5,5,5,6,6,6,6] · 无四人组） */
 export const PRESET_PROMO_META = {
@@ -684,11 +771,13 @@ export function getBuiltInNameGroups(): string[][] {
 /**
  * 把代码内置 815 表写入 PK 分组命名存档「815」，并同步白名单文本。
  * 默认 makeActive=true，打开 PK 分组即见最新锁定表。
+ * 注意：若「815」存档已存在，不覆盖用户已保存的修改（持久化保护）。
  */
 export function syncBuiltInGroupsToPkStorage(options?: {
   makeActive?: boolean;
   period?: string;
   note?: string;
+  force?: boolean;
 }): SavedGroupPreset | null {
   if (typeof window === "undefined") return null;
   const nameGroups = getBuiltInNameGroups();
@@ -704,6 +793,15 @@ export function syncBuiltInGroupsToPkStorage(options?: {
   const existing = listSavedGroupPresets().find(
     (p) => String(p.name || "").trim() === BUILTIN_GROUP_PRESET_NAME
   );
+
+  // 持久化保护：已存在且非强制同步时，不覆盖用户修改
+  if (existing && options?.force !== true) {
+    if (options?.makeActive !== false) {
+      setActiveGroupPreset(existing.id);
+    }
+    return existing;
+  }
+
   const total = nameGroups.reduce((s, g) => s + g.length, 0);
   const period =
     String(options?.period || PRESET_BATTLE_META.periodHint || "").trim() || undefined;

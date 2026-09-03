@@ -19,7 +19,7 @@ const MAX_FACT_SUMMARY_CHARS = 240;
 const FACT_TTL_MS = THREAD_TTL_MS;
 
 /** 指令/系统口令等不应进入 topAnchors 的噪声 query */
-const NOISE_QUERY_RE = /^(?:\/?help|帮助|菜单|命令|指令|人工客服|智能客服|客服|开启客服|打开客服|退出客服|关闭客服|结束客服|取消客服|清空对话|清除记忆|清除习惯|清除我的习惯|清空习惯|每日报告|日报|导出|对比)$/i;
+const NOISE_QUERY_RE = /^(?:\/?help|帮助|菜单|命令|指令|人工客服|智能客服|客服|开启客服|打开客服|退出客服|关闭客服|结束客服|取消客服|清空对话|清除记忆|清除习惯|清除我的习惯|清空习惯|每日报告|日报|未开播报告|未开播天数报告|未播报告|导出|对比)$/i;
 
 const WAVE_TOOLS = new Set([
   "get_anchor_wave_profile",
@@ -495,7 +495,7 @@ function createWeixinUserMemory(options = {}) {
       changed = true;
     }
 
-    if (name === "get_daily_report_data" || name === "export_daily_report_image") {
+    if (name === "get_daily_report_data" || name === "export_daily_report_image" || name === "export_not_live_report") {
       const gender = String(args.gender || args.team || "").toLowerCase();
       if (gender === "male" || gender === "female" || gender === "both") {
         profile.preferTeam = gender;
@@ -503,7 +503,7 @@ function createWeixinUserMemory(options = {}) {
       }
     }
 
-    if (name === "export_daily_report_image") {
+    if (name === "export_daily_report_image" || name === "export_not_live_report") {
       profile.preferArtifact = bumpMetric(profile.preferArtifact, "image");
       changed = true;
     } else if (name === "export_wave_file") {

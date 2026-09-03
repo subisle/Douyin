@@ -176,7 +176,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
       { key: "dailyWave", label: dailyWaveLabel,   minWidth: 168, flex: 0.7, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
       { key: "totalWave", label: "累计总音浪",     minWidth: 120, flex: 0.4, align: "right",  getText: (r) => formatWave(r.totalWave) },
       { key: "duration",  label: "当月时长",       minWidth: 86,  flex: 0.25, align: "center", getText: (r) => formatDailyDurationText(r.totalDuration) },
-      { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "—" },
+      { key: "master",    label: "师傅",           minWidth: 92,  flex: 0.4, align: "left",   getText: (r) => r.masterName || "" },
       { key: "tier",      label: "等级",           minWidth: 64,  flex: 0.15, align: "center", getText: (r) => r.tier || "" },
     ];
   }
@@ -187,7 +187,7 @@ function getColumnDefinitions(profile: ColumnProfile = "classic", notLiveDaysLab
     { key: "dailyWave", label: dailyWaveLabel,   minWidth: 160, flex: 0.55, align: "right",  getText: (r) => (r.isLive ? formatWave(r.dailyWave) : "未开播") },
     { key: "totalWave", label: "累计总音浪",     minWidth: 130, flex: 1.2, align: "right",  getText: (r) => formatWave(r.totalWave) },
     { key: "duration",  label: "当月时长",       minWidth: 94,  flex: 0.7, align: "center", getText: (r) => formatDailyDurationText(r.totalDuration) },
-    { key: "master",    label: "师傅",           minWidth: 96,  flex: 1.2, align: "left",   getText: (r) => r.masterName || "—" },
+            { key: "master",    label: "师傅",           minWidth: 96,  flex: 0.3, align: "left",   getText: (r) => r.masterName || "" },
     { key: "tier",      label: "等级",           minWidth: 72,  flex: 0.35, align: "center", getText: (r) => r.tier || "" },
   ];
 }
@@ -259,14 +259,21 @@ function buildColumns(
   const manualFlags = measured.manualFlags;
 
   const totalW = widths.reduce((s, w) => s + w, 0);
+  const allManual = manualFlags.length > 0 && manualFlags.every(Boolean);
   if (totalW < cardWidth) {
-    const extra = cardWidth - totalW;
-    const autoIndexes = defs.map((_, i) => i).filter((i) => !manualFlags[i]);
-    const targetIndexes = autoIndexes.length > 0 ? autoIndexes : defs.map((_, i) => i);
-    const totalFlex = targetIndexes.reduce((s, i) => s + defs[i].flex, 0) || 1;
-    widths = widths.map((w, i) =>
-      targetIndexes.includes(i) ? w + extra * (defs[i].flex / totalFlex) : w
-    );
+    if (allManual) {
+      // 所有列都指定了手宽：按手宽比例等比拉伸填满卡片，保持相对列宽关系
+      const ratio = cardWidth / totalW;
+      widths = widths.map((w) => Math.round(w * ratio));
+    } else {
+      const extra = cardWidth - totalW;
+      const autoIndexes = defs.map((_, i) => i).filter((i) => !manualFlags[i]);
+      const targetIndexes = autoIndexes.length > 0 ? autoIndexes : defs.map((_, i) => i);
+      const totalFlex = targetIndexes.reduce((s, i) => s + defs[i].flex, 0) || 1;
+      widths = widths.map((w, i) =>
+        targetIndexes.includes(i) ? w + extra * (defs[i].flex / totalFlex) : w
+      );
+    }
   } else if (totalW > cardWidth) {
     const ratio = cardWidth / totalW;
     widths = widths.map((w) => w * ratio);
@@ -456,9 +463,20 @@ export function drawReportToCanvas(
   ctx.font = `bold ${13 * scale}px sans-serif`;
   cols.forEach((col) => {
     const drawX = tablePaddingX + col.x;
-    // 表头列名统一居中
-    ctx.textAlign = "center";
-    ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderHeight / 2);
+    // 表头对齐与数据值一致：名字/师傅左对齐，累计音浪右对齐，其余居中
+    if (col.key === "name") {
+      ctx.textAlign = "left";
+      ctx.fillText(col.label, drawX + 8 * scale, y + tableHeaderHeight / 2);
+    } else if (col.key === "master") {
+      ctx.textAlign = "left";
+      ctx.fillText(col.label, drawX + 12 * scale, y + tableHeaderHeight / 2);
+    } else if (col.key === "totalWave") {
+      ctx.textAlign = "right";
+      ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderHeight / 2);
+    } else {
+      ctx.textAlign = "center";
+      ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderHeight / 2);
+    }
   });
   y += tableHeaderHeight;
 
@@ -906,9 +924,20 @@ export function drawAppleReportToCanvas(
   ctx.textBaseline = "middle";
   cols.forEach((col) => {
     const drawX = tableX + col.x;
-    // 表头列名统一居中
-    ctx.textAlign = "center";
-    ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderH / 2);
+    // 表头对齐与数据值一致：名字/师傅左对齐，累计音浪右对齐，其余居中
+    if (col.key === "name") {
+      ctx.textAlign = "left";
+      ctx.fillText(col.label, drawX + 8 * scale, y + tableHeaderH / 2);
+    } else if (col.key === "master") {
+      ctx.textAlign = "left";
+      ctx.fillText(col.label, drawX + 12 * scale, y + tableHeaderH / 2);
+    } else if (col.key === "totalWave") {
+      ctx.textAlign = "right";
+      ctx.fillText(col.label, drawX + col.width - 12 * scale, y + tableHeaderH / 2);
+    } else {
+      ctx.textAlign = "center";
+      ctx.fillText(col.label, drawX + col.width / 2, y + tableHeaderH / 2);
+    }
   });
   y += tableHeaderH + rowGap;
 

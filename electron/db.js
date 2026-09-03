@@ -5,6 +5,7 @@ const { resolveDbConfig } = require("./db-config");
 const {
   ensureDatabaseIndexes,
   ensureImportRecordsTable,
+  ensureChannelAnchorBindsTable,
   ensurePersonDailyReportVisibilityColumn,
 } = require("./db-maintenance");
 
@@ -23,8 +24,36 @@ require("dotenv").config({
 /** @type {import('mysql2/promise').Pool | null} */
 let pool = null;
 let dailyReportVisibilityColumnReady = false;
+// 防止重试递归：query/getConnection 重试用，避免包装方法自身无限嵌套
+let dbRetryInProgress = false;
 
 const LIVE_WAVE_THRESHOLD = 2;
+
+/** 判断是否为连接被服务端断开的可恢复错误 */
+function isConnectionLostError(err) {
+  if (!err) return false;
+  const code = String(err.code || "");
+  const message = String(err.message || "");
+  return (
+    code === "PROTOCOL_CONNECTION_LOST" ||
+    code === "ECONNRESET" ||
+    code === "EPIPE" ||
+    code === "ETIMEDOUT" ||
+    /Connection lost/i.test(message) ||
+    /The server closed the connection/i.test(message) ||
+    /socket hang up/i.test(message) ||
+    err.fatal === true
+  );
+}
+
+/** 安全关闭并清空连接池，下次 getPool 时重建 */
+function resetPool() {
+  if (pool) {
+    const old = pool;
+    pool = null;
+    try { old.end(); } catch (_) { /* ignore */ }
+  }
+}
 
 function getPool() {
   if (!pool) {
@@ -38,9 +67,63 @@ function getPool() {
       waitForConnections: true,
       connectionLimit: 5,
       connectTimeout: 10000,
+      // 远程 MySQL 防断连：开启 TCP keepalive + 缩短空闲超时，避免被服务端 wait_timeout 踢掉
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10000,
+      idleTimeout: 30000,
+      maxIdle: 1,
       // DATE/DATETIME 直接返回字符串，避免 JS Date 经 UTC 转换导致日期回退一天
       dateStrings: true,
     });
+    pool.on("error", (err) => {
+      console.warn("[db] pool error, will reset on next query:", err?.code || err?.message);
+      // 连接池致命错误（如服务器断开）时清空 pool，下次 getPool 重建
+      if (isConnectionLostError(err)) {
+        pool = null;
+      }
+    });
+
+    // ---- 包装 query：连接丢失时自动重置连接池并重试一次 ----
+    const originalQuery = pool.query.bind(pool);
+    pool.query = async function wrappedQuery(sql, params) {
+      try {
+        return await originalQuery(sql, params);
+      } catch (err) {
+        if (isConnectionLostError(err) && !dbRetryInProgress) {
+          console.warn("[db] query connection lost, reset pool and retry once:", err?.code || err?.message);
+          dbRetryInProgress = true;
+          try {
+            resetPool();
+            const fresh = getPool();
+            return await fresh.query(sql, params);
+          } finally {
+            dbRetryInProgress = false;
+          }
+        }
+        throw err;
+      }
+    };
+
+    // ---- 包装 getConnection：连接丢失时自动重置连接池并重试一次 ----
+    const originalGetConnection = pool.getConnection.bind(pool);
+    pool.getConnection = async function wrappedGetConnection() {
+      try {
+        return await originalGetConnection();
+      } catch (err) {
+        if (isConnectionLostError(err) && !dbRetryInProgress) {
+          console.warn("[db] getConnection connection lost, reset pool and retry once:", err?.code || err?.message);
+          dbRetryInProgress = true;
+          try {
+            resetPool();
+            const fresh = getPool();
+            return await fresh.getConnection();
+          } finally {
+            dbRetryInProgress = false;
+          }
+        }
+        throw err;
+      }
+    };
   }
   return pool;
 }
@@ -3165,5 +3248,6 @@ module.exports = {
   exportFamilyRoster,
   verifyAppPassword,
   hasAppPassword,
+  ensureChannelAnchorBindsTable: () => ensureChannelAnchorBindsTable(getPool()),
   __testing: { importSnapshotRows, normalizeDurationImportDate },
 };

@@ -92,6 +92,8 @@ test("normalizeQuery filters noise and keeps short anchor ids", () => {
   assert.equal(normalizeQuery("  小张  "), "小张");
   assert.equal(normalizeQuery("帮助"), "");
   assert.equal(normalizeQuery("每日报告"), "");
+  assert.equal(normalizeQuery("未开播报告"), "");
+  assert.equal(normalizeQuery("未开播天数报告"), "");
   assert.equal(normalizeQuery("清空对话"), "");
   assert.equal(normalizeQuery("清除习惯"), "");
   assert.equal(normalizeQuery("！"), "");

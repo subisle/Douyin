@@ -91,9 +91,10 @@ function renderPkGroupsSvg(result, options = {}) {
   if (!groups.length) throw new Error("没有可绘制的分组");
 
   const showWave = options.showWave === true;
+  const showRank = options.showRank === true;
   const count = groups.length;
-  const columns = count <= 3 ? count : count <= 6 ? 3 : 4;
-  const cardW = 292;
+  const columns = showRank ? 2 : (count <= 3 ? count : count <= 6 ? 3 : 4);
+  const cardW = showRank ? 380 : 292;
   const gap = 18;
   const pad = 40;
   const headerH = 128;
@@ -101,11 +102,11 @@ function renderPkGroupsSvg(result, options = {}) {
   const boardW = Math.max(980, columns * cardW + (columns - 1) * gap + pad * 2);
 
   const maxMembers = Math.max(...groups.map((g) => (g.members || []).length), 1);
-  // 双列名单更紧凑好看
-  const nameCols = maxMembers >= 6 ? 2 : 1;
+  // 显示排名时强制单列，行高更大
+  const nameCols = showRank ? 1 : (maxMembers >= 6 ? 2 : 1);
   const nameRows = Math.ceil(maxMembers / nameCols);
   const cardHeader = 70;
-  const rowH = 34;
+  const rowH = showRank ? 52 : 34;
   const cardPadY = 16;
   const cardH = cardHeader + cardPadY + nameRows * rowH + 20;
   const rows = Math.ceil(count / columns);
@@ -273,9 +274,10 @@ function renderPkGroupsSvg(result, options = {}) {
       const my = y + cardHeader + 6 + r * rowH;
       const rank = m.index || mi + 1;
       const name = m.name || "";
+      const rowHeight = showRank ? 46 : 28;
 
       parts.push(
-        `<rect x="${mx}" y="${my}" width="${colW - 8}" height="28" rx="10" fill="${accent.soft}" fill-opacity="0.55"/>`
+        `<rect x="${mx}" y="${my}" width="${colW - 8}" height="${rowHeight}" rx="10" fill="${accent.soft}" fill-opacity="0.55"/>`
       );
       parts.push(
         `<circle cx="${mx + 14}" cy="${my + 14}" r="9" fill="#fff" stroke="${accent.main}55"/>`
@@ -284,8 +286,21 @@ function renderPkGroupsSvg(result, options = {}) {
         `<text x="${mx + 14}" y="${my + 18}" text-anchor="middle" fill="${accent.deep}" font-size="10" font-weight="800" font-family="${FONT}">${rank}</text>`
       );
       parts.push(
-        `<text x="${mx + 28}" y="${my + 18}" fill="#1A1033" font-size="13" font-weight="700" font-family="${FONT}">${escapeXml(truncate(name, nameCols === 2 ? 5 : 10))}</text>`
+        `<text x="${mx + 28}" y="${my + 18}" fill="#1A1033" font-size="13" font-weight="700" font-family="${FONT}">${escapeXml(truncate(name, showRank ? 8 : (nameCols === 2 ? 5 : 10)))}</text>`
       );
+
+      if (showRank && m.globalRank) {
+        // 总排名标签（右上角）
+        parts.push(
+          `<text x="${mx + colW - 14}" y="${my + 18}" text-anchor="end" fill="${accent.deep}" font-size="10" font-weight="700" font-family="${FONT}">总榜 #${m.globalRank}</text>`
+        );
+        // 距离分数（第二行）
+        if (m.distanceText) {
+          parts.push(
+            `<text x="${mx + 28}" y="${my + 38}" fill="#6B5B95" font-size="10" font-weight="600" font-family="${FONT}">${escapeXml(m.distanceText)}</text>`
+          );
+        }
+      }
 
       if (showWave) {
         const strength = m.strength || m.trimmedAvg || m.wave || 0;

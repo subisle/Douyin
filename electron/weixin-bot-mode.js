@@ -15,7 +15,8 @@ const SYSTEM_HELP_RE = /^(?:\/?help|帮助|菜单|命令|指令)$/i;
 
 const INSTRUCTION_HELP = [
   "【纯指令模式】",
-  "· 固定指令：每日报告、艺名音浪、音浪文件、帮助等",
+  "· 固定指令：每日报告、未开播报告、艺名音浪、音浪文件、帮助等",
+  "· 绑定：绑定 抖音号 / 我的绑定 / 解绑（仅主播列表内抖音号，一人一号）",
   "· 管理员：开启日报推送 / 关闭日报推送 / 日报推送状态",
   "· 发 CSV → 默认昨天；先说「24号数据」可指定日",
   "· 切换：发「智能模式」或「AI模式」→ 改用 AI 模型",
@@ -23,7 +24,8 @@ const INSTRUCTION_HELP = [
 
 const AGENT_HELP = [
   "【AI 模型模式】",
-  "· 业务文本由 AI + 技能处理（查音浪/出图/导出等）",
+  "· 业务文本由 AI + 技能处理（查音浪/出图/导出/绑定等）",
+  "· 绑定：发送「绑定 + 本人抖音号」；仅主播列表内有效，一个抖音号对应一个用户",
   "· 发 CSV → 默认昨天；先说「24号数据」可指定日（导入仍确定性）",
   "· 「清空对话」→ 清本会话对话记忆；「清除习惯」→ 清习惯画像",
   "· 切换：发「纯指令」→ 只走固定指令，不调模型（不会自动切换）",
@@ -116,11 +118,15 @@ function matchFastRoute(text, { parseBotCommand }) {
   // Only high-confidence business intents
   const allowed = new Set([
     "report",
+    "not-live-report",
     "anchor-profile",
     "anchor-duration",
     "anchor-wave",
     "anchor-wave-days",
     "export-wave-file",
+    "bind",
+    "bind-status",
+    "unbind",
   ]);
   if (!allowed.has(command.type)) return null;
   // 裸艺名：排除明显口语/问句，避免抢走 agent 自然语言

@@ -39,6 +39,7 @@ const { createUpdater } = require("./updater");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const { renderDailyReportPng } = require("./weixin-bot-report");
 const { createProjectBots } = require("./project-bots");
+const { resolveBuiltinBotFile } = require("./builtin-config");
 
 /**
  * Bot 日报图片渲染器：通过渲染进程 Canvas 绘制，与桌面端"导出图片"完全一致。
@@ -253,8 +254,16 @@ livePkMultiMonitor.on("status", (status) => {
 });
 
 const projectBots = createProjectBots({
-  weixinStoragePath: () => path.join(app.getPath("userData"), "weixin-bot.v1.json"),
-  qqStoragePath: () => path.join(app.getPath("userData"), "qq-bot.v1.json"),
+  weixinStoragePath: () => resolveBuiltinBotFile("weixin", {
+    isPackaged: app.isPackaged,
+    projectDir: path.join(__dirname, ".."),
+    resourcesPath: process.resourcesPath,
+  }),
+  qqStoragePath: () => resolveBuiltinBotFile("qq", {
+    isPackaged: app.isPackaged,
+    projectDir: path.join(__dirname, ".."),
+    resourcesPath: process.resourcesPath,
+  }),
   encryptToken: (token) => {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error("当前系统不可用安全存储，未保存微信令牌");

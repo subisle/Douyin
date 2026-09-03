@@ -33,7 +33,9 @@ const {
 const {
   renderDailyReportPng,
   renderDailyReportPngPages,
+  renderNotLiveReportPng,
   splitDailyReportRowsForExport,
+  sortNotLiveReportRows,
   DAILY_REPORT_EXPORT_SPLIT_THRESHOLD,
   toDailyReportImagePages,
 } = require("./weixin-bot-report");
@@ -100,6 +102,48 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
   assert.deepEqual(parseBotCommand("音浪文件18号"), {
     type: "export-wave-file",
     dateSpec: { type: "day", day: 18 },
+  });
+  assert.deepEqual(parseBotCommand("未开播报告"), {
+    type: "not-live-report",
+    gender: "both",
+    dateSpec: null,
+    monthSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("未开播天数报告"), {
+    type: "not-live-report",
+    gender: "both",
+    dateSpec: null,
+    monthSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("未播报告"), {
+    type: "not-live-report",
+    gender: "both",
+    dateSpec: null,
+    monthSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("女团未开播报告"), {
+    type: "not-live-report",
+    gender: "female",
+    dateSpec: null,
+    monthSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("男团未开播报告18号"), {
+    type: "not-live-report",
+    gender: "male",
+    dateSpec: { type: "day", day: 18 },
+    monthSpec: null,
+  });
+  assert.deepEqual(parseBotCommand("8月未开播报告"), {
+    type: "not-live-report",
+    gender: "both",
+    dateSpec: null,
+    monthSpec: { type: "month-only", month: 8 },
+  });
+  assert.deepEqual(parseBotCommand("女队2026年8月未开播天数报告"), {
+    type: "not-live-report",
+    gender: "female",
+    dateSpec: null,
+    monthSpec: { type: "month", year: 2026, month: 8 },
   });
   assert.equal(resolveDateSpec({ type: "day", day: 18 }, "2026-07-20"), "2026-07-18");
 });
@@ -445,12 +489,148 @@ test("report command with long male roster sends two images", async () => {
     replyText: async (text) => { replies.push(text); },
     replyImage: async (image) => { images.push(image); },
   });
-  assert.equal(images.length, 3);
-  assert.equal(images[0].fileName, "2026-07-18_男团_每日之星.png");
-  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_1of2.png");
-  assert.equal(images[2].fileName, "2026-07-18_男团_每日报告_2of2.png");
+  assert.equal(images.length, 2);
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告_1of2.png");
+  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告_2of2.png");
   assert.match(replies[0], /2026-07-18 每日报告/);
   assert.match(replies[0], /【男团】每日之星（前三名）/);
+});
+
+test("sortNotLiveReportRows ranks by unpaid live days then wave", () => {
+  const sorted = sortNotLiveReportRows([
+    { name: "甲", notLiveDays: 2, totalWave: 900 },
+    { name: "乙", notLiveDays: 5, totalWave: 100 },
+    { name: "丙", notLiveDays: 5, totalWave: 300 },
+  ]);
+  assert.deepEqual(sorted.map((row) => row.name), ["丙", "乙", "甲"]);
+  assert.deepEqual(sorted.map((row) => row.rank), [1, 2, 3]);
+});
+
+test("not-live report renderer uses not-live columns and real PNG", async () => {
+  const { renderNotLiveClassicSvg, renderNotLiveAppleSvg } = require("./weixin-bot-report");
+  const sample = {
+    date: "2026-08-18",
+    gender: "male",
+    summary: { total: 2, notLiveCount: 1, notLiveDays: 6 },
+    rows: [
+      { rank: 1, name: "乙", notLiveDays: 5, dailyWave: 0, totalWave: 100, isLive: false, masterName: "师傅甲" },
+      { rank: 2, name: "甲", notLiveDays: 1, dailyWave: 12345, totalWave: 543210, isLive: true, masterName: "师傅乙" },
+    ],
+  };
+  const appleSvg = renderNotLiveAppleSvg(sample, {});
+  const classicSvg = renderNotLiveClassicSvg({ ...sample, gender: "female" }, {});
+  assert.match(appleSvg, /未开播天数报告|未开播天数/);
+  assert.match(appleSvg, /8月未播天数/);
+  assert.match(appleSvg, /序号/);
+  assert.match(appleSvg, /名字/);
+  assert.match(appleSvg, /师傅姓名/);
+  assert.doesNotMatch(appleSvg, /日音浪/);
+  assert.doesNotMatch(appleSvg, /累计总音浪/);
+  assert.doesNotMatch(appleSvg, /当日开播/);
+  assert.doesNotMatch(appleSvg, /主播ID/);
+  assert.match(classicSvg, /薇笑传媒|未开播天数/);
+  const png = await renderNotLiveReportPng(sample);
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  const metadata = await sharp(png).metadata();
+  assert.equal(metadata.width, 1440);
+  assert.ok(metadata.height > 200);
+});
+
+test("not-live report command sends images and csv", async () => {
+  const replies = [];
+  const images = [];
+  const files = [];
+  const rows = [
+    { name: "乙", anchorId: "b", notLiveDays: 5, dailyWave: 0, totalWave: 80, isLive: false, masterName: "师傅甲" },
+    { name: "甲", anchorId: "a", notLiveDays: 1, dailyWave: 200, totalWave: 900, isLive: true, masterName: "师傅乙" },
+  ];
+  const light = async () => Buffer.from("PNG");
+  light.renderNotLivePages = async (report) => [{
+    buffer: Buffer.from(`PNG-${report.gender}`),
+    pageIndex: 1,
+    pageCount: 1,
+    fileNameSuffix: "",
+  }];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-08-18", latestDataDate: "2026-08-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async (date, gender) => ({
+        date,
+        gender,
+        summary: { total: rows.length, notLiveCount: 1, notLiveDays: 6 },
+        rows,
+      }),
+      getMonthlyReport: async () => ({ rows: [] }),
+    },
+    renderReportPng: light,
+    renderDailyStarPng: mockDailyStarPng,
+  });
+  await handler({
+    text: "未开播报告",
+    items: [{ type: 1, text_item: { text: "未开播报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+    replyFile: async (file) => { files.push(file); },
+  });
+  assert.equal(images.length, 2);
+  assert.equal(images[0].fileName, "2026-08-18_男团_未开播天数报告.png");
+  assert.equal(images[1].fileName, "2026-08-18_女队_未开播天数报告.png");
+  assert.equal(files.length, 2);
+  assert.equal(files[0].fileName, "2026-08-18_男团_未开播天数.csv");
+  assert.equal(files[1].fileName, "2026-08-18_女队_未开播天数.csv");
+  const csvText = files[0].buffer.toString("utf8");
+  assert.match(csvText, /未播天数/);
+  assert.match(csvText, /序号/);
+  assert.match(csvText, /名字/);
+  assert.match(csvText, /师傅姓名/);
+  assert.doesNotMatch(csvText, /主播ID/);
+  assert.doesNotMatch(csvText, /主播姓名/);
+  assert.doesNotMatch(csvText, /累计总音浪/);
+  assert.match(csvText, /乙/);
+  assert.match(replies[0], /未开播天数报告/);
+  assert.match(replies[0], /未开播人数 1 人/);
+});
+
+test("month not-live report uses monthly rows", async () => {
+  const images = [];
+  const files = [];
+  const replies = [];
+  const monthlyRows = [
+    { name: "丁", anchorId: "d", notLiveDays: 12, totalWave: 10, isLive: false },
+    { name: "丙", anchorId: "c", notLiveDays: 3, totalWave: 800, isLive: true },
+  ];
+  const light = async () => Buffer.from("PNG");
+  light.renderNotLivePages = async (report) => [{
+    buffer: Buffer.from(`PNG-${report.gender}`),
+    pageIndex: 1,
+    pageCount: 1,
+    fileNameSuffix: "",
+  }];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-08-18", latestDataDate: "2026-08-18" }),
+      exportWaveSnapshots: async () => [{ 音浪: 100 }],
+      getDailyWaveReport: async () => ({ rows: [] }),
+      getMonthlyReport: async (month, gender) => ({
+        month,
+        gender,
+        summary: { total: monthlyRows.length, notLiveCount: 1, notLiveDays: 4, daysInMonth: 31 },
+        rows: monthlyRows,
+      }),
+    },
+    renderReportPng: light,
+  });
+  await handler({
+    text: "8月未开播报告",
+    items: [{ type: 1, text_item: { text: "8月未开播报告" } }],
+    replyText: async (text) => { replies.push(text); },
+    replyImage: async (image) => { images.push(image); },
+    replyFile: async (file) => { files.push(file); },
+  });
+  assert.equal(images[0].fileName, "2026-08_男团_未开播天数报告.png");
+  assert.equal(files[0].fileName, "2026-08_男团_未开播天数.csv");
+  assert.match(replies[0], /2026-08/);
 });
 
 
@@ -609,18 +789,16 @@ test("report command without gender sends male then female images", async () => 
     replyImage: async (image) => { images.push(image); },
   });
   assert.deepEqual(genders, ["male", "female"]);
-  // 顺序：男团每日之星文案/图/报告 → 女队每日之星文案/图/报告
+  // 顺序：男团每日之星文案/报告图 → 女队每日之星文案/报告图（不再发每日之星图）
   assert.equal(replies.length, 2);
   assert.match(replies[0], /2026-07-18 每日报告/);
   assert.match(replies[0], /【男团】每日之星（前三名）/);
   assert.match(replies[1], /【女队】每日之星（前三名）/);
   assert.doesNotMatch(replies[1], /2026-07-18 每日报告/);
-  assert.equal(images[0].fileName, "2026-07-18_男团_每日之星.png");
-  assert.equal(images[1].fileName, "2026-07-18_男团_每日报告.png");
-  assert.equal(images[2].fileName, "2026-07-18_女队_每日之星.png");
-  assert.equal(images[3].fileName, "2026-07-18_女队_每日报告.png");
-  assert.deepEqual(images[1].buffer, Buffer.from("PNG-male"));
-  assert.deepEqual(images[3].buffer, Buffer.from("PNG-female"));
+  assert.equal(images[0].fileName, "2026-07-18_男团_每日报告.png");
+  assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
+  assert.deepEqual(images[0].buffer, Buffer.from("PNG-male"));
+  assert.deepEqual(images[1].buffer, Buffer.from("PNG-female"));
 });
 
 test("report command with explicit gender still sends only one team", async () => {
@@ -654,8 +832,7 @@ test("report command with explicit gender still sends only one team", async () =
   assert.equal(replies.length, 1);
   assert.match(replies[0], /2026-07-18 每日报告/);
   assert.match(replies[0], /【女队】每日之星（前三名）/);
-  assert.equal(images[0].fileName, "2026-07-18_女队_每日之星.png");
-  assert.equal(images[1].fileName, "2026-07-18_女队_每日报告.png");
+  assert.equal(images[0].fileName, "2026-07-18_女队_每日报告.png");
 });
 
 
@@ -751,10 +928,8 @@ test("report command falls back when dashboard summary is empty", async () => {
   assert.match(replies[0], /2026-07-16 每日报告/);
   assert.match(replies[0], /【男团】每日之星（前三名）/);
   assert.match(replies[1], /【女队】每日之星（前三名）/);
-  assert.equal(images[0].fileName, "2026-07-16_男团_每日之星.png");
-  assert.equal(images[1].fileName, "2026-07-16_男团_每日报告.png");
-  assert.equal(images[2].fileName, "2026-07-16_女队_每日之星.png");
-  assert.equal(images[3].fileName, "2026-07-16_女队_每日报告.png");
+  assert.equal(images[0].fileName, "2026-07-16_男团_每日报告.png");
+  assert.equal(images[1].fileName, "2026-07-16_女队_每日报告.png");
 });
 
 test("anchor duration uses latestDurationDate when it diverges from wave", async () => {
@@ -843,6 +1018,12 @@ test("mode store + matchFastRoute unit", () => {
     type: "report",
     gender: "both",
     dateSpec: null,
+  });
+  assert.deepEqual(matchFastRoute("未开播报告", { parseBotCommand }), {
+    type: "not-live-report",
+    gender: "both",
+    dateSpec: null,
+    monthSpec: null,
   });
   assert.deepEqual(matchFastRoute("小张", { parseBotCommand }), {
     type: "anchor-profile",

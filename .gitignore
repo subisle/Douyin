@@ -62,6 +62,9 @@ backups/
 /data/backups/
 /data/rag/custom.json
 
+# Builtin bot credentials (WeChat tokens / QQ AppSecret) - packaged, not committed
+/data/builtin/
+
 # Poster PSD sources and generated diagnostics
 assets/fonts/
 assets/posters/
@@ -80,3 +83,14 @@ references/
 # Electron static build temp
 .api-backup/
 .api-backup-electron-build/
+
+# Packaged macOS app (large binary bundle)
+抖音数据管理.app/
+
+# Junk downloads / local-only artifacts
+checkra1n
+chi_sim.traineddata
+*.js.backup
+
+# Generated exports (ranking images etc.)
+/data/exports/

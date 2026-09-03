@@ -583,6 +583,78 @@ function createWeixinAnalytics({ db, renderReportPng = null } = {}) {
     };
   }
 
+  async function exportNotLiveReport({ date, month, gender = "both" } = {}) {
+    const {
+      toNotLiveReportImagePages,
+      sortNotLiveReportRows,
+      buildNotLiveCsvRows,
+    } = require("./weixin-bot-report");
+    if (typeof renderReportPng !== "function") {
+      return { ok: false, error: "缺少报告渲染器" };
+    }
+    const Papa = require("papaparse");
+    const teams = gender === "both" ? ["male", "female"] : [gender === "female" ? "female" : "male"];
+    const artifacts = [];
+    const errors = [];
+    const monthText = /^\d{4}-\d{2}$/.test(String(month || "")) ? String(month) : "";
+    const asOfDate = monthText ? null : (date || (await latestWaveDate()));
+    if (!monthText && !asOfDate) return { ok: false, error: "没有可用音浪日期" };
+    const periodLabel = monthText || asOfDate;
+    const period = monthText ? "monthly" : "daily";
+
+    for (const team of teams) {
+      const report = monthText
+        ? (typeof db.getMonthlyReport === "function" ? await db.getMonthlyReport(monthText, team) : null)
+        : await db.getDailyWaveReport(asOfDate, team);
+      const label = team === "female" ? "女队" : "男团";
+      if (!report?.rows?.length) {
+        errors.push(`${periodLabel} 没有${label}数据`);
+        continue;
+      }
+      const sorted = {
+        ...report,
+        gender: team,
+        date: report.date || asOfDate || periodLabel,
+        month: report.month || monthText || undefined,
+        rows: sortNotLiveReportRows(report.rows),
+      };
+      const pages = await toNotLiveReportImagePages(renderReportPng, sorted, { period });
+      for (const page of pages) {
+        artifacts.push({
+          kind: "image",
+          buffer: page.buffer,
+          fileName: `${periodLabel}_${label}_未开播天数报告${page.fileNameSuffix || ""}.png`,
+          gender: team,
+          meta: {
+            total: sorted.rows.length,
+            notLiveCount: sorted.summary?.notLiveCount || 0,
+            pageIndex: page.pageIndex,
+            pageCount: page.pageCount,
+          },
+        });
+      }
+      const csv = Papa.unparse(buildNotLiveCsvRows(sorted, { dateLabel: periodLabel, period }));
+      artifacts.push({
+        kind: "file",
+        buffer: Buffer.from("\uFEFF" + String(csv || ""), "utf8"),
+        fileName: `${periodLabel}_${label}_未开播天数.csv`,
+        gender: team,
+        meta: { rowCount: sorted.rows.length },
+      });
+    }
+    if (!artifacts.length) {
+      return { ok: false, error: errors.join("；") || "没有可导出的未开播报告" };
+    }
+    return {
+      ok: true,
+      asOfDate: periodLabel,
+      gender: gender === "both" ? "both" : teams[0],
+      artifacts,
+      artifact: artifacts[0],
+      errors,
+    };
+  }
+
   async function exportWaveFile({ date } = {}) {
     const asOfDate = date || (await latestWaveDate());
     if (!asOfDate) return { ok: false, error: "没有可用音浪日期" };
@@ -622,6 +694,7 @@ function createWeixinAnalytics({ db, renderReportPng = null } = {}) {
     analyzeAnchorWave,
     getDailyReportData,
     exportDailyReportImage,
+    exportNotLiveReport,
     exportWaveFile,
     localYesterdayIso,
   };

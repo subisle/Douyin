@@ -91,6 +91,7 @@ const TOOL_PROGRESS_LABELS = Object.freeze({
   analyze_anchor_wave: "正在分析音浪…",
   get_daily_report_data: "正在查询日报数据…",
   export_daily_report_image: "正在生成日报图…",
+  export_not_live_report: "正在生成未开播天数报告…",
   export_wave_file: "正在导出音浪文件…",
   rag_search: "正在检索说明…",
 });

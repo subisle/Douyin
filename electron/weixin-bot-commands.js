@@ -12,8 +12,9 @@ const {
 } = require("./weixin-bot-mode");
 const { threadKeyFromContext } = require("./weixin-bot-agent");
 const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
-const { toDailyReportImagePages } = require("./weixin-bot-report");
+const { toDailyReportImagePages, toNotLiveReportImagePages, sortNotLiveReportRows, buildNotLiveCsvRows } = require("./weixin-bot-report");
 const { renderDailyStarPng } = require("./weixin-bot-daily-star");
+const { parseBindCommand, formatBindReply, createAnchorBindService } = require("./bot-anchor-bind");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -53,6 +54,38 @@ function parseDateSpec(value) {
   const dayCompact = text.match(/^(\d{1,2})[日号](?:数据|音浪|文件|日报|报告)?$/);
   if (dayCompact) return { type: "day", day: Number(dayCompact[1]) };
   return null;
+}
+
+function parseMonthSpec(value) {
+  const text = normalizeText(value);
+  if (!text) return null;
+  const full = text.match(/(20\d{2})\s*[年./-]\s*(\d{1,2})\s*月?/);
+  if (full) return { type: "month", year: Number(full[1]), month: Number(full[2]) };
+  const compact = text.match(/(20\d{2})(\d{2})(?!\d)/);
+  if (compact) return { type: "month", year: Number(compact[1]), month: Number(compact[2]) };
+  const monthOnly = text.match(/(\d{1,2})\s*月/);
+  if (monthOnly) return { type: "month-only", month: Number(monthOnly[1]) };
+  return null;
+}
+
+function resolveMonthSpec(spec, fallbackDate = null) {
+  const fallback = /^\d{4}-\d{2}-\d{2}$/.test(String(fallbackDate || ""))
+    ? String(fallbackDate)
+    : localYesterdayIso();
+  const year = Number(fallback.slice(0, 4));
+  const month = Number(fallback.slice(5, 7));
+  if (!spec) return `${year}-${String(month).padStart(2, "0")}`;
+  if (spec.type === "month") {
+    const m = Number(spec.month);
+    if (!Number.isFinite(m) || m < 1 || m > 12) throw new Error("月份无效");
+    return `${Number(spec.year)}-${String(m).padStart(2, "0")}`;
+  }
+  if (spec.type === "month-only") {
+    const m = Number(spec.month);
+    if (!Number.isFinite(m) || m < 1 || m > 12) throw new Error("月份无效");
+    return `${year}-${String(m).padStart(2, "0")}`;
+  }
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 /** 仅从用户文字解析导入日期；不读文件名，避免误把 22 号发的文件落到 22 */
@@ -155,6 +188,9 @@ function parseBotCommand(input) {
   if (!original) return null;
   if (/^(?:\/?help|帮助|菜单|命令|指令)$/i.test(original)) return { type: "help" };
 
+  const bindCommand = parseBindCommand(original);
+  if (bindCommand) return bindCommand;
+
   const withoutGender = original.replace(/(?:男团|男队|男性|女团|女队|女性)/g, "").trim();
 
   const fileMatch = withoutGender.match(/^(?:\/?(?:音浪文件|导出音浪(?:文件)?))(?:\s*(.+))?$/i);
@@ -162,6 +198,20 @@ function parseBotCommand(input) {
 
   if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
   if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
+
+  const notLiveMatch = withoutGender.match(/^(?:\/?(?:未开播天数报告|未开播报告|未播天数报告|未播报告))(?:\s*(.+))?$/i)
+    || withoutGender.match(/^(.+?)\s*(?:未开播天数报告|未开播报告|未播天数报告|未播报告)$/);
+  if (notLiveMatch) {
+    const rest = String(notLiveMatch[1] || "").trim();
+    const dateSpec = parseDateSpec(rest);
+    const monthSpec = dateSpec ? null : parseMonthSpec(rest);
+    return {
+      type: "not-live-report",
+      gender: parseReportGender(original),
+      dateSpec,
+      monthSpec,
+    };
+  }
 
   const reportMatch = withoutGender.match(/^(?:\/?(?:每日报告|日报|报告))(?:\s*(.+))?$/i);
   if (reportMatch) {
@@ -223,7 +273,7 @@ function parseBotCommand(input) {
     withoutGender.length >= 1
     && withoutGender.length <= 40
     && !/[，。！？、；：,.!?;:]/.test(withoutGender)
-    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能|第?[1-9一二三四五六七八九十]组|组[1-9一二三四五六七八九十]|各组)/.test(withoutGender)
+    && !/^(今日|今天|昨日|昨天|音浪|文件|报告|日报|导出|帮助|菜单|命令|指令|人工|客服|智能|未开播|未播|第?[1-9一二三四五六七八九十]组|组[1-9一二三四五六七八九十]|各组)/.test(withoutGender)
   ) {
     return { type: "anchor-profile", query: withoutGender };
   }
@@ -545,6 +595,84 @@ async function sendReport(args, command, db, renderReportPng, extra = {}) {
   }
 }
 
+function notLiveSummaryText(periodLabel, gender, report) {
+  const label = genderLabel(gender);
+  const total = report?.rows?.length || 0;
+  const notLiveCount = Number(report?.summary?.notLiveCount) || 0;
+  const notLiveDays = Number(report?.summary?.notLiveDays) || 0;
+  return `${periodLabel} ${label}未开播天数报告：共 ${total} 人，未开播人数 ${notLiveCount} 人，未开播天数 ${notLiveDays} 天。`;
+}
+
+async function sendOneGenderNotLiveReport(args, periodLabel, gender, report, renderReportPng, options = {}) {
+  const label = genderLabel(gender);
+  const sorted = {
+    ...report,
+    gender,
+    date: report.date || periodLabel,
+    month: report.month || (periodLabel.length === 7 ? periodLabel : undefined),
+    rows: sortNotLiveReportRows(report.rows || []),
+  };
+  if (!sorted.rows.length) {
+    await args.replyText(`${periodLabel} 没有${label}主播数据。`);
+    return false;
+  }
+  await args.replyText(notLiveSummaryText(periodLabel, gender, sorted));
+  try {
+    const pages = await toNotLiveReportImagePages(renderReportPng, sorted, {
+      period: options.period || "daily",
+    });
+    for (const page of pages) {
+      await args.replyImage({
+        buffer: page.buffer,
+        fileName: `${periodLabel}_${label}_未开播天数报告${page.fileNameSuffix || ""}.png`,
+      });
+    }
+  } catch (error) {
+    await args.replyText(`${label}未开播报告图片生成失败：${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  if (typeof args.replyFile === "function") {
+    const csvRows = buildNotLiveCsvRows(sorted, {
+      dateLabel: periodLabel,
+      period: options.period || "daily",
+    });
+    await args.replyFile({
+      buffer: csvBuffer(csvRows),
+      fileName: `${periodLabel}_${label}_未开播天数.csv`,
+    });
+  }
+  return true;
+}
+
+async function sendNotLiveReport(args, command, db, renderReportPng) {
+  const latest = await getLatestDate(db, "wave");
+  const genders = command.gender === "both" ? ["male", "female"] : [command.gender === "female" ? "female" : "male"];
+  if (command.monthSpec) {
+    const month = resolveMonthSpec(command.monthSpec, latest);
+    if (typeof db.getMonthlyReport !== "function") {
+      await args.replyText("月度未开播报告暂不可用。");
+      return;
+    }
+    for (const gender of genders) {
+      const report = await db.getMonthlyReport(month, gender);
+      await sendOneGenderNotLiveReport(args, month, gender, report, renderReportPng, { period: "monthly" });
+    }
+    return;
+  }
+  const date = await resolveReportDate(db, command.dateSpec, "wave");
+  const available = typeof db.exportWaveSnapshots === "function"
+    ? await db.exportWaveSnapshots(date)
+    : [{ 音浪: 1 }];
+  if (!available.length) {
+    await args.replyText(`${date} 没有音浪快照，暂时没有可发送的未开播报告。`);
+    return;
+  }
+  for (const gender of genders) {
+    const report = await db.getDailyWaveReport(date, gender);
+    await sendOneGenderNotLiveReport(args, date, gender, report, renderReportPng, { period: "daily" });
+  }
+}
+
 async function resolveAnchorOrReply(args, query, db) {
   const anchors = await db.getAnchors();
   const anchor = findAnchor(query, anchors);
@@ -837,14 +965,42 @@ async function handleCustomCommand(args, command, db, renderReportPng, extra = {
   }
 }
 
-async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics }) {
+async function handleBindCommand(args, command, bindService) {
+  if (!bindService) {
+    await args.replyText("绑定功能暂不可用。");
+    return true;
+  }
+  const context = {
+    channel: args.channel,
+    fromUserId: args.fromUserId || args.userId,
+    userId: args.userId,
+  };
+  let result;
+  if (command.type === "bind") {
+    result = await bindService.bind({ ...context, douyinNo: command.douyinNo });
+  } else if (command.type === "bind-status") {
+    result = await bindService.status(context);
+  } else if (command.type === "unbind") {
+    result = await bindService.unbind(context);
+  } else {
+    return false;
+  }
+  await args.replyText(formatBindReply(result));
+  return true;
+}
+
+async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics, bindService = null }) {
   if (!command) return false;
   if (command.type === "report") await sendReport(args, command, db, renderReportPng, { renderDailyStarPng });
+  else if (command.type === "not-live-report") await sendNotLiveReport(args, command, db, renderReportPng);
   else if (command.type === "anchor-profile") await handleAnchorProfile(args, command, db, analytics);
   else if (command.type === "anchor-duration") await handleAnchorDuration(args, command, db, analytics);
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
+  else if (command.type === "bind" || command.type === "bind-status" || command.type === "unbind") {
+    await handleBindCommand(args, command, bindService);
+  }
   else return false;
   return true;
 }
@@ -855,7 +1011,8 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
   const pendingImportDates = createPendingImportDateStore();
   const modeStore = createModeStore();
   const analytics = sharedAnalytics || createWeixinAnalytics({ db, renderReportPng });
-  const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics };
+  const bindService = createAnchorBindService({ db });
+  const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics, bindService };
 
   async function handleCommand(args) {
     try {
@@ -1051,6 +1208,9 @@ module.exports = {
   normalizeIsoDate,
   getLatestDate,
   parseBotCommand,
+  parseMonthSpec,
+  resolveMonthSpec,
+  parseBindCommand,
   matchCustomCommand,
   parseWaveValue,
   parseDurationValue,

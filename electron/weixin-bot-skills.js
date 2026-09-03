@@ -159,6 +159,22 @@ function createWeixinBotSkills({ db, renderReportPng }) {
     {
       type: "function",
       function: {
+        name: "export_not_live_report",
+        description: "生成并发送未开播天数报告图片和 CSV。可按日或按月；gender=both 时男女各发一套。",
+        parameters: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "YYYY-MM-DD，按日报告" },
+            month: { type: "string", description: "YYYY-MM，按月报告" },
+            gender: { type: "string", enum: ["male", "female", "both"] },
+          },
+        },
+      },
+      execute: analytics.exportNotLiveReport,
+    },
+    {
+      type: "function",
+      function: {
         name: "export_wave_file",
         description: "导出并发送某日音浪 CSV 文件",
         parameters: {
