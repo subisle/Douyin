@@ -568,6 +568,8 @@ export type SavedGroupsLayout = {
   reviveExtraMinutes?: number;
   groupSize?: number;
   nameGroups: string[][];
+  /** 自定义组名（与 nameGroups 下标对齐；空串/缺省 = 默认「第N组」） */
+  groupLabels?: string[];
   savedAt: string;
 };
 
@@ -583,6 +585,8 @@ export type SavedGroupPreset = {
   reviveExtraMinutes?: number;
   groupSize?: number;
   nameGroups: string[][];
+  /** 自定义组名（与 nameGroups 下标对齐；空串/缺省 = 默认「第N组」） */
+  groupLabels?: string[];
   savedAt: string;
 };
 
@@ -600,6 +604,13 @@ function sanitizeNameGroups(input: string[][] | undefined | null): string[][] {
   return (input || [])
     .map((row) => (Array.isArray(row) ? row.map((n) => String(n || "").trim()).filter(Boolean) : []))
     .filter((row) => row.length > 0);
+}
+
+/** 组名列表：去空白；全部为空时返回 undefined（即全部用默认名） */
+function sanitizeGroupLabels(input: string[] | undefined | null): string[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const labels = input.map((n) => String(n || "").trim());
+  return labels.some(Boolean) ? labels : undefined;
 }
 
 function normalizePreset(raw: Partial<SavedGroupPreset> | null | undefined): SavedGroupPreset | null {
@@ -623,6 +634,7 @@ function normalizePreset(raw: Partial<SavedGroupPreset> | null | undefined): Sav
         : undefined,
     groupSize: raw.groupSize != null ? normalizeGroupSize(raw.groupSize) : undefined,
     nameGroups,
+    groupLabels: sanitizeGroupLabels(raw.groupLabels),
     savedAt: raw.savedAt || new Date().toISOString(),
   };
 }
@@ -641,6 +653,7 @@ function presetToLayout(preset: SavedGroupPreset): SavedGroupsLayout {
     reviveExtraMinutes: preset.reviveExtraMinutes,
     groupSize: preset.groupSize,
     nameGroups: preset.nameGroups,
+    groupLabels: preset.groupLabels,
     savedAt: preset.savedAt,
   };
 }
@@ -658,6 +671,7 @@ function layoutToPreset(layout: SavedGroupsLayout, fallbackName = "分组1"): Sa
     reviveExtraMinutes: layout.reviveExtraMinutes,
     groupSize: layout.groupSize,
     nameGroups: layout.nameGroups,
+    groupLabels: layout.groupLabels,
     savedAt: layout.savedAt,
   });
 }
@@ -844,6 +858,7 @@ export function saveNamedGroupPreset(input: {
   name: string;
   note?: string;
   nameGroups: string[][];
+  groupLabels?: string[];
   period?: string;
   mode?: string;
   scoreDisplay?: string;
@@ -871,6 +886,7 @@ export function saveNamedGroupPreset(input: {
     reviveExtraMinutes: input.reviveExtraMinutes,
     groupSize: input.groupSize,
     nameGroups,
+    groupLabels: sanitizeGroupLabels(input.groupLabels),
     savedAt: new Date().toISOString(),
   });
   if (!incoming) return null;
@@ -1000,6 +1016,7 @@ export function loadSavedGroupsLayout(): SavedGroupsLayout | null {
           : undefined,
       groupSize: parsed.groupSize != null ? normalizeGroupSize(parsed.groupSize) : undefined,
       nameGroups,
+      groupLabels: sanitizeGroupLabels(parsed?.groupLabels),
       savedAt: parsed.savedAt || "",
     };
   } catch {
@@ -1009,6 +1026,7 @@ export function loadSavedGroupsLayout(): SavedGroupsLayout | null {
 
 export function saveGroupsLayout(input: {
   nameGroups: string[][];
+  groupLabels?: string[];
   period?: string;
   mode?: string;
   scoreDisplay?: string;
@@ -1036,6 +1054,7 @@ export function saveGroupsLayout(input: {
     name,
     note,
     nameGroups: input.nameGroups,
+    groupLabels: input.groupLabels,
     period: input.period,
     mode: input.mode,
     scoreDisplay: input.scoreDisplay,

@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   GripVertical,
   Loader2,
+  Pencil,
   RefreshCw,
   RotateCcw,
   Save,
@@ -75,7 +76,7 @@ import {
 } from "../../../shared/pk-group-constraints.js";
 
 type ScoreDisplay = "total" | "latest";
-type UiGroup = BuildPkGroupsGroup & { key: string };
+type UiGroup = BuildPkGroupsGroup & { key: string; customLabel?: string };
 type DragPerson = { groupKey: string; personId: number | null; name: string };
 
 const MODE_OPTIONS: { key: PkGroupMode; label: string }[] = [
@@ -127,7 +128,11 @@ function cloneGroups(groups: UiGroup[]): UiGroup[] {
   }));
 }
 
-function relabelGroups(groups: UiGroup[], scoreDisplay: ScoreDisplay): UiGroup[] {
+function relabelGroups(
+  groups: UiGroup[],
+  scoreDisplay: ScoreDisplay,
+  explicitLabels?: string[]
+): UiGroup[] {
   return groups.map((g, i) => {
     const strengths = g.members
       .map((m) => memberScore(m, scoreDisplay))
@@ -137,11 +142,14 @@ function relabelGroups(groups: UiGroup[], scoreDisplay: ScoreDisplay): UiGroup[]
       g.members.length > 0
         ? g.members.reduce((s, m) => s + memberScore(m, scoreDisplay), 0) / g.members.length
         : 0;
+    // 自定义组名：显式传入（载入存档）优先，否则沿用组上已有的改名；空 = 默认「第N组」
+    const customLabel = String(explicitLabels?.[i] ?? g.customLabel ?? "").trim() || undefined;
     return {
       ...g,
       key: `g-${i + 1}`,
       order: i + 1,
-      label: `第${i + 1}组`,
+      customLabel,
+      label: customLabel || `第${i + 1}组`,
       count: g.members.length,
       top4: Math.round(top4),
       average: Math.round(average),
@@ -355,6 +363,9 @@ export function PkRosterPage() {
   const toggleHeaderMenu = useCallback((key: "settings" | "export") => {
     setHeaderMenu((cur) => (cur === key ? null : key));
   }, []);
+  // 组名编辑
+  const [renamingGroupKey, setRenamingGroupKey] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   const undoStack = useRef<UiGroup[][]>([]);
   const exportRef = useRef<HTMLDivElement>(null);
@@ -395,6 +406,7 @@ export function PkRosterPage() {
   const persistGroups = useCallback(
     (nextGroups: UiGroup[], opts?: { silent?: boolean; name?: string; note?: string; asNew?: boolean }) => {
       const nameGroups = groupsToNameGroups(nextGroups);
+      const groupLabels = nextGroups.map((g) => g.customLabel || "");
       if (!nameGroups.length) {
         if (!opts?.silent) showToast("保存失败：分组为空");
         return false;
@@ -417,6 +429,7 @@ export function PkRosterPage() {
           name: BUILTIN_GROUP_PRESET_NAME,
           note: "815 手动调整",
           nameGroups,
+          groupLabels,
           period,
           mode,
           scoreDisplay,
@@ -447,6 +460,7 @@ export function PkRosterPage() {
               suggestNextGroupPresetName(),
             note: opts?.note !== undefined ? opts.note : activePresetNote,
             nameGroups,
+            groupLabels,
             period,
             mode,
             scoreDisplay,
@@ -458,6 +472,7 @@ export function PkRosterPage() {
           })
         : saveGroupsLayout({
             nameGroups,
+            groupLabels,
             period,
             mode,
             scoreDisplay,
@@ -550,9 +565,9 @@ export function PkRosterPage() {
   }, [period]);
 
   const applyBuiltResult = useCallback(
-    (built: BuildPkGroupsResult) => {
+    (built: BuildPkGroupsResult, opts?: { groupLabels?: string[] }) => {
       const stamped = attachScheduleTimes(toUiGroups(built), firstStart, stepMinutes, reviveExtraMinutes);
-      setGroups(relabelGroups(stamped, scoreDisplay));
+      setGroups(relabelGroups(stamped, scoreDisplay, opts?.groupLabels));
       undoStack.current = [];
       let warn = built.warning || "";
       if (resolution.unmatchedNames.length) {
@@ -624,7 +639,7 @@ export function PkRosterPage() {
           setFirstStart(PRESET_BATTLE_FIRST_START);
           setStepMinutes(PRESET_BATTLE_STEP_MINUTES);
           setReviveExtraMinutes(PRESET_BATTLE_REVIVE_EXTRA_MINUTES);
-          applyBuiltResult(built);
+          applyBuiltResult(built, { groupLabels: synced?.groupLabels });
           if (synced) {
             setActivePresetId(synced.id);
             setActivePresetName(synced.name);
@@ -660,7 +675,7 @@ export function PkRosterPage() {
         if (saved.mode && ["preset", "high_to_low", "balanced", "score_capable"].includes(saved.mode)) {
           setMode(saved.mode as PkGroupMode);
         }
-        applyBuiltResult(built);
+        applyBuiltResult(built, { groupLabels: saved.groupLabels });
         setActiveGroupPreset(saved.id);
         setActivePresetId(saved.id);
         setActivePresetName(saved.name);
@@ -703,7 +718,7 @@ export function PkRosterPage() {
             }
             if (saved.reviveExtraMinutes != null)
               setReviveExtraMinutes(normalizeReviveExtraMinutes(saved.reviveExtraMinutes));
-            applyBuiltResult(built);
+            applyBuiltResult(built, { groupLabels: saved.groupLabels });
             setActivePresetId(saved.id || null);
             setActivePresetName(saved.name || null);
             setActivePresetNote(saved.note || "");
@@ -733,7 +748,7 @@ export function PkRosterPage() {
           setFirstStart(PRESET_BATTLE_FIRST_START);
           setStepMinutes(PRESET_BATTLE_STEP_MINUTES);
           setReviveExtraMinutes(PRESET_BATTLE_REVIVE_EXTRA_MINUTES);
-          applyBuiltResult(built);
+          applyBuiltResult(built, { groupLabels: synced?.groupLabels });
           if (synced) {
             setActivePresetId(synced.id);
             setActivePresetName(synced.name);
@@ -871,6 +886,39 @@ export function PkRosterPage() {
       groups,
       persistGroups,
       pushUndo,
+      scoreDisplay,
+      showToast,
+      stepMinutes,
+    ]
+  );
+
+  /** 改组名：空字符串 = 恢复默认「第N组」；改名跟随该组（拖拽换位/调序不丢） */
+  const commitGroupRename = useCallback(
+    (groupKey: string, raw: string) => {
+      setRenamingGroupKey(null);
+      const name = raw.trim();
+      const target = groups.find((g) => g.key === groupKey);
+      if (!target) return;
+      if ((target.customLabel || "") === name) return;
+      pushUndo(cloneGroups(groups));
+      const next = cloneGroups(groups);
+      const g = next.find((x) => x.key === groupKey);
+      if (!g) return;
+      if (name) g.customLabel = name;
+      else delete g.customLabel;
+      const scheduled = attachScheduleTimes(next, firstStart, stepMinutes, reviveExtraMinutes);
+      const normalized = relabelGroups(scheduled, scoreDisplay);
+      setGroups(normalized);
+      setDirty(true);
+      persistGroups(normalized, { silent: true });
+      showToast(name ? `组名已改为「${name}」` : "已恢复默认组名");
+    },
+    [
+      firstStart,
+      groups,
+      persistGroups,
+      pushUndo,
+      reviveExtraMinutes,
       scoreDisplay,
       showToast,
       stepMinutes,
@@ -1492,33 +1540,83 @@ export function PkRosterPage() {
                     isGroupTarget ? "bg-violet-50 dark:bg-violet-950/30" : "bg-muted/30"
                   }`}
                 >
-                  <CardTitle
-                    className="flex cursor-grab items-center gap-2 text-sm active:cursor-grabbing"
-                    draggable
-                    onDragStart={(e) => {
-                      dragGroupKeyRef.current = group.key;
-                      setDraggingGroupKey(group.key);
-                      e.dataTransfer.effectAllowed = "move";
-                      try {
-                        e.dataTransfer.setData("text/plain", `group:${group.key}`);
-                      } catch {
-                        /* ignore */
-                      }
-                    }}
-                    onDragEnd={() => {
-                      clearDragVisual();
-                    }}
-                  >
-                    <GripVertical className="size-3.5 text-muted-foreground" />
-                    <span>{group.label}</span>
-                    {group.scheduleLabel && (
-                      <span className="font-normal text-muted-foreground">· {group.scheduleLabel}</span>
-                    )}
-                    {typeof group.top4 === "number" && group.top4 > 0 && (
-                      <span className="font-normal text-muted-foreground">· T4 {formatWave(group.top4)}</span>
-                    )}
-                    <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
+                <CardTitle
+                  className="flex cursor-grab items-center gap-2 text-sm active:cursor-grabbing"
+                  draggable={renamingGroupKey !== group.key}
+                  onDragStart={(e) => {
+                    if (renamingGroupKey === group.key) {
+                      e.preventDefault();
+                      return;
+                    }
+                    dragGroupKeyRef.current = group.key;
+                    setDraggingGroupKey(group.key);
+                    e.dataTransfer.effectAllowed = "move";
+                    try {
+                      e.dataTransfer.setData("text/plain", `group:${group.key}`);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  onDragEnd={() => {
+                    clearDragVisual();
+                  }}
+                >
+                  <GripVertical className="size-3.5 text-muted-foreground" />
+                  {renamingGroupKey === group.key ? (
+                    <Input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => commitGroupRename(group.key, renameDraft)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitGroupRename(group.key, renameDraft);
+                        else if (e.key === "Escape") setRenamingGroupKey(null);
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      draggable={false}
+                      placeholder={`第${groups.indexOf(group) + 1}组`}
+                      className="h-6 w-28 px-1.5 text-sm"
+                      aria-label="编辑组名"
+                    />
+                  ) : (
+                    <span
+                      onDoubleClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setRenameDraft(group.customLabel || group.label);
+                        setRenamingGroupKey(group.key);
+                      }}
+                      title="双击改组名"
+                    >
+                      {group.label}
+                    </span>
+                  )}
+                  {group.scheduleLabel && (
+                    <span className="font-normal text-muted-foreground">· {group.scheduleLabel}</span>
+                  )}
+                  {typeof group.top4 === "number" && group.top4 > 0 && (
+                    <span className="font-normal text-muted-foreground">· T4 {formatWave(group.top4)}</span>
+                  )}
+                  <span className="ml-auto font-normal text-muted-foreground">{group.count} 人</span>
+                  {renamingGroupKey === group.key ? null : (
                     <button
+                      type="button"
+                      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+                      title="改组名"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setRenameDraft(group.customLabel || group.label);
+                        setRenamingGroupKey(group.key);
+                      }}
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                  )}
+                  <button
                       type="button"
                       className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
                       title="复制本组（组·时间·人名）"
