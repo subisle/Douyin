@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ChevronDown,
   Copy,
   Download,
   FileSpreadsheet,
@@ -10,11 +11,13 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Settings,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { getDataApi } from "@/client/http-electron-api";
+import { cn } from "@/lib/utils";
 import type {
   BuildPkGroupsGroup,
   BuildPkGroupsResult,
@@ -168,6 +171,136 @@ function attachScheduleTimes(
   return attachScheduleToGroups(groups, { firstStart, stepMinutes, reviveExtraMinutes });
 }
 
+type HeaderMenuIcon = typeof Settings;
+
+/** 头部弹出面板（设置项等自定义内容），点击遮罩关闭 */
+function HeaderPopover({
+  label,
+  icon: Icon,
+  open,
+  onToggle,
+  children,
+  panelClassName,
+}: {
+  label: string;
+  icon: HeaderMenuIcon;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  panelClassName?: string;
+}) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition",
+          open
+            ? "border-primary bg-primary/10 text-foreground"
+            : "bg-background text-foreground hover:bg-muted"
+        )}
+      >
+        <Icon className="size-3.5" />
+        {label}
+        <ChevronDown className={cn("size-3 opacity-60 transition-transform", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-40" onClick={onToggle} />
+          <div
+            className={cn(
+              "absolute right-0 top-full z-50 mt-1.5 rounded-xl border border-border bg-card p-3 shadow-xl",
+              panelClassName || "w-72"
+            )}
+          >
+            {children}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** 头部下拉菜单（导出等动作列表），点击遮罩关闭 */
+function HeaderMenu({
+  label,
+  items,
+  open,
+  onToggle,
+}: {
+  label: string;
+  items: {
+    key: string;
+    label: string;
+    icon: HeaderMenuIcon;
+    onClick: () => void;
+    disabled?: boolean;
+    busy?: boolean;
+    hint?: string;
+  }[];
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition",
+          open
+            ? "border border-primary bg-primary/10 text-foreground"
+            : "bg-primary text-primary-foreground hover:bg-primary/90"
+        )}
+      >
+        <Download className="size-3.5" />
+        {items.some((item) => item.busy) ? "导出中…" : label}
+        <ChevronDown className={cn("size-3 opacity-60 transition-transform", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <>
+          <div className="fixed inset-0 z-40" onClick={onToggle} />
+          <div className="absolute right-0 top-full z-50 mt-1.5 w-56 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-xl">
+            {items.map((item) => {
+              const ItemIcon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={() => {
+                    onToggle();
+                    item.onClick();
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition",
+                    item.disabled
+                      ? "cursor-not-allowed text-muted-foreground/50"
+                      : "text-foreground hover:bg-accent"
+                  )}
+                >
+                  <ItemIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">
+                      {item.busy ? "导出中…" : item.label}
+                    </span>
+                    {item.hint ? (
+                      <span className="block truncate text-[11px] text-muted-foreground">{item.hint}</span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function PkRosterPage() {
   const [period, setPeriod] = useState(currentPeriod);
   const [mode, setMode] = useState<PkGroupMode>("preset");
@@ -217,6 +350,11 @@ export function PkRosterPage() {
   const [dragOverPersonKey, setDragOverPersonKey] = useState<string | null>(null);
   const [draggingPersonKey, setDraggingPersonKey] = useState<string | null>(null);
   const [draggingGroupKey, setDraggingGroupKey] = useState<string | null>(null);
+  // 头部弹层：设置 / 导出（同一时间只开一个）
+  const [headerMenu, setHeaderMenu] = useState<null | "settings" | "export">(null);
+  const toggleHeaderMenu = useCallback((key: "settings" | "export") => {
+    setHeaderMenu((cur) => (cur === key ? null : key));
+  }, []);
 
   const undoStack = useRef<UiGroup[][]>([]);
   const exportRef = useRef<HTMLDivElement>(null);
@@ -1014,24 +1152,27 @@ export function PkRosterPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">PK 分组</h1>
           <p className="text-xs text-muted-foreground">
             拖人员互换 / 拖到组板块移动 · 拖组标题调序 · 调整后自动保存 · 内置 815 调整后存为自定义分组
           </p>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {/* 数据源：名单月份 + 导入 */}
           <Input
             type="month"
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
-            className="h-8 w-[150px]"
+            className="h-8 w-[140px]"
+            title="名单月份"
           />
           <Button size="sm" variant="outline" onClick={openImport}>
             <Upload className="mr-1 size-3.5" />
             导入名单
           </Button>
+          {/* 分组方式：模式 + 分数口径 */}
           <div className="flex rounded-md border p-0.5">
             {MODE_OPTIONS.map((item) => (
               <button
@@ -1064,58 +1205,65 @@ export function PkRosterPage() {
               </button>
             ))}
           </div>
-          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
-            <span className="shrink-0">开始</span>
-            <Input
-              type="time"
-              value={firstStart}
-              onChange={(e) => setFirstStart(normalizeFirstStart(e.target.value || firstStart))}
-              className="h-6 w-[108px] border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-              title="连麦开始时间"
-            />
-          </label>
-          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
-            <span className="shrink-0">间隔</span>
-            <Input
-              type="number"
-              min={1}
-              max={180}
-              value={stepMinutes}
-              onChange={(e) => setStepMinutes(normalizeStepMinutes(e.target.value, stepMinutes))}
-              className="h-6 w-14 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-              title="组间连麦间隔（分钟）"
-            />
-            <span className="shrink-0">分</span>
-          </label>
-          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
-            <span className="shrink-0">第4组后</span>
-            <Input
-              type="number"
-              min={0}
-              max={60}
-              value={reviveExtraMinutes}
-              onChange={(e) =>
-                setReviveExtraMinutes(normalizeReviveExtraMinutes(e.target.value, reviveExtraMinutes))
-              }
-              className="h-6 w-12 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-              title="第4组后插复活赛：第5组起每组顺延（分钟）"
-            />
-            <span className="shrink-0">分</span>
-          </label>
-          <label className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground">
-            <span className="shrink-0">每组</span>
-            <Input
-              type="number"
-              min={2}
-              max={20}
-              value={groupSize}
-              onChange={(e) => setGroupSize(normalizeGroupSize(e.target.value, groupSize))}
-              className="h-6 w-12 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-              title="每组人数（非内置模式生效）"
-              disabled={mode === "preset"}
-            />
-            <span className="shrink-0">人</span>
-          </label>
+          {/* 连麦时间 / 每组人数 → 设置弹层 */}
+          <HeaderPopover
+            label="设置"
+            icon={Settings}
+            open={headerMenu === "settings"}
+            onToggle={() => toggleHeaderMenu("settings")}
+          >
+            <div className="grid grid-cols-2 gap-2.5">
+              <label className="block space-y-1">
+                <span className="text-[11px] text-muted-foreground">连麦开始</span>
+                <Input
+                  type="time"
+                  value={firstStart}
+                  onChange={(e) => setFirstStart(normalizeFirstStart(e.target.value || firstStart))}
+                  className="h-8 w-full"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-muted-foreground">组间间隔（分）</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={180}
+                  value={stepMinutes}
+                  onChange={(e) => setStepMinutes(normalizeStepMinutes(e.target.value, stepMinutes))}
+                  className="h-8 w-full"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-muted-foreground">第4组后顺延（分）</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={reviveExtraMinutes}
+                  onChange={(e) =>
+                    setReviveExtraMinutes(normalizeReviveExtraMinutes(e.target.value, reviveExtraMinutes))
+                  }
+                  className="h-8 w-full"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-muted-foreground">每组人数</span>
+                <Input
+                  type="number"
+                  min={2}
+                  max={20}
+                  value={groupSize}
+                  onChange={(e) => setGroupSize(normalizeGroupSize(e.target.value, groupSize))}
+                  className="h-8 w-full"
+                  disabled={mode === "preset"}
+                />
+              </label>
+            </div>
+            <p className="mt-2.5 text-[11px] leading-4 text-muted-foreground">
+              时间三项只重算各组连麦时间、不打散人员；每组人数仅对「顺序 / 均衡 / 能出分」生效。
+            </p>
+          </HeaderPopover>
+          {/* 常用操作 */}
           <Button
             size="sm"
             variant="outline"
@@ -1132,6 +1280,7 @@ export function PkRosterPage() {
           <Button size="sm" variant="ghost" onClick={undo} title="撤销上一次拖拽">
             撤销
           </Button>
+          {/* 保存 */}
           <Button
             size="sm"
             onClick={handleSave}
@@ -1146,24 +1295,39 @@ export function PkRosterPage() {
               另存为
             </Button>
           ) : null}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void handleCopyGroups()}
-            disabled={!groups.length}
-            title="复制全部：组名 · 时间 · 人名"
-          >
-            <Copy className="mr-1 size-3.5" />
-            复制
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleExportCsv} disabled={!groups.length} title="导出 CSV 文件">
-            <FileSpreadsheet className="mr-1 size-3.5" />
-            导出CSV
-          </Button>
-          <Button size="sm" onClick={() => void handleExport()} disabled={!groups.length || exporting} title="导出分组图片">
-            {exporting ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Download className="mr-1 size-3.5" />}
-            导出图片
-          </Button>
+          {/* 导出：复制 / CSV / 图片 收进下拉 */}
+          <HeaderMenu
+            label="导出"
+            open={headerMenu === "export"}
+            onToggle={() => toggleHeaderMenu("export")}
+            items={[
+              {
+                key: "copy",
+                label: "复制分组",
+                icon: Copy,
+                hint: "组名·时间·人名，可粘贴到微信",
+                disabled: !groups.length,
+                onClick: () => void handleCopyGroups(),
+              },
+              {
+                key: "csv",
+                label: "导出 CSV",
+                icon: FileSpreadsheet,
+                hint: "分组表格文件",
+                disabled: !groups.length,
+                onClick: handleExportCsv,
+              },
+              {
+                key: "png",
+                label: "导出图片",
+                icon: Download,
+                hint: "品牌样式分组长图",
+                disabled: !groups.length || exporting,
+                busy: exporting,
+                onClick: () => void handleExport(),
+              },
+            ]}
+          />
         </div>
       </div>
 
