@@ -7,11 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   CalendarDays,
+  ChevronDown,
   Clock,
   Columns3,
   Download,
   FileSpreadsheet,
   FileText,
+  Image as ImageIcon,
   Mars,
   Palette,
   RotateCcw,
@@ -112,6 +114,92 @@ function escapeCsvCell(value: unknown): string {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+/** 头部下拉菜单：一个按钮 + 弹出菜单项（点击遮罩关闭） */
+function HeaderMenu({
+  label,
+  icon: Icon,
+  items,
+  open,
+  onToggle,
+  primary = false,
+}: {
+  label: string;
+  icon: typeof Settings;
+  items: {
+    key: string;
+    label: string;
+    icon: typeof Settings;
+    onClick: () => void;
+    disabled?: boolean;
+    busy?: boolean;
+    hint?: string;
+  }[];
+  open: boolean;
+  onToggle: () => void;
+  /** 主操作样式（导出菜单用主色按钮） */
+  primary?: boolean;
+}) {
+  const activeCount = items.filter((item) => item.busy).length;
+  return (
+    <div className="app-no-drag relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "flex h-9 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold shadow-xs transition-all",
+          primary
+            ? "bg-primary text-primary-foreground hover:bg-primary/90"
+            : open
+              ? "border border-primary bg-primary/10 text-foreground"
+              : "border border-border bg-card/90 text-foreground hover:bg-accent"
+        )}
+      >
+        <Icon className="size-4" />
+        {activeCount > 0 ? "导出中…" : label}
+        <ChevronDown className={cn("size-3.5 opacity-60 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={onToggle} />
+          <div className="absolute right-0 top-full z-50 mt-1.5 w-56 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-xl">
+            {items.map((item) => {
+              const ItemIcon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={() => {
+                    onToggle();
+                    item.onClick();
+                  }}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition",
+                    item.disabled
+                      ? "cursor-not-allowed text-muted-foreground/50"
+                      : "text-foreground hover:bg-accent"
+                  )}
+                >
+                  <ItemIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">
+                      {item.busy ? "导出中…" : item.label}
+                    </span>
+                    {item.hint && (
+                      <span className="block truncate text-[11px] text-muted-foreground">{item.hint}</span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function DailyReportPage() {
   // 初始为空，挂载后优先填「最近有音浪数据的日期」
   const [date, setDate] = useState("");
@@ -162,6 +250,8 @@ export function DailyReportPage() {
   const [showExportSettings, setShowExportSettings] = useState(false);
   const [sortDraft, setSortDraft] = useState<ReportSortBy>("totalWave");
   const [splitDraft, setSplitDraft] = useState(true);
+  /** 头部下拉菜单：export / settings / null */
+  const [openMenu, setOpenMenu] = useState<"export" | "settings" | null>(null);
 
   // 初始化读取 localStorage
   useEffect(() => {
@@ -265,6 +355,7 @@ export function DailyReportPage() {
   const saveExportSettings = () => {
     setSortBy(sortDraft);
     setExportImageSplit(splitDraft);
+    saveCurrentTitle();
     setShowExportSettings(false);
   };
 
@@ -892,15 +983,15 @@ export function DailyReportPage() {
               )}
             </div>
             <div className="app-no-drag flex flex-wrap items-center justify-end gap-2">
-              {/* 性别切换 */}
-              <div className="flex h-10 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
+              {/* 预览控制：队伍 / 图片样式 / 日期（月份） */}
+              <div className="flex h-9 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
                 <span className="px-2 text-[11px] font-semibold text-muted-foreground">队伍</span>
                 {(["female", "male"] as GenderView[]).map((g) => (
                   <button
                     key={g}
                     onClick={() => setGender(g)}
                     className={cn(
-                      "flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold transition-all",
+                      "flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-semibold transition-all",
                       gender === g
                         ? "bg-primary text-primary-foreground shadow-sm"
                         : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -911,21 +1002,20 @@ export function DailyReportPage() {
                   </button>
                 ))}
               </div>
-              {/* 图片样式 */}
-              <div className="flex h-10 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
+              <div className="flex h-9 items-center rounded-xl border border-border bg-card/90 p-1 shadow-xs">
                 <span className="flex items-center gap-1 px-2 text-[11px] font-semibold text-muted-foreground">
                   <Palette className="size-3.5" />
-                  图片
+                  样式
                 </span>
                 {([
-                  ["classic", "样式一"],
-                  ["apple", "样式二"],
+                  ["classic", "一"],
+                  ["apple", "二"],
                 ] as const).map(([style, label]) => (
                   <button
                     key={style}
                     onClick={() => setReportStyles((prev) => ({ ...prev, [gender]: style }))}
                     className={cn(
-                      "h-8 rounded-lg px-3 text-sm font-semibold transition-all",
+                      "h-7 rounded-lg px-2.5 text-[13px] font-semibold transition-all",
                       reportStyle === style
                         ? "bg-foreground text-background shadow-sm"
                         : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -936,140 +1026,122 @@ export function DailyReportPage() {
                   </button>
                 ))}
               </div>
-              {/* 日期/月份选择 */}
-              <div className="flex h-10 items-center gap-2 rounded-xl border border-border bg-card/90 px-3 shadow-xs">
+              <div className="flex h-9 items-center gap-2 rounded-xl border border-border bg-card/90 px-3 shadow-xs">
                 <CalendarDays className="size-4 text-muted-foreground" />
                 {viewMode === "monthly" ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-muted-foreground">月份</span>
-                    <Input
-                      type="month"
-                      value={month}
-                      onChange={(e) => setMonth(e.target.value)}
-                      className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
-                    />
-                  </div>
+                  <Input
+                    type="month"
+                    value={month}
+                    onChange={(e) => setMonth(e.target.value)}
+                    className="h-7 w-32 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                    aria-label="报告月份"
+                  />
                 ) : (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-muted-foreground">日期</span>
-                    <Input
-                      type="date"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="h-8 w-36 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
-                    />
-                  </div>
+                  <Input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="h-7 w-32 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+                    aria-label="报告日期"
+                  />
                 )}
-                <span className="h-4 w-px bg-border" />
-                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                  报告 {viewMode === "monthly" ? month : date}
-                </span>
-                {/* 导出设置：排序方式 / 图片分割 */}
-                <button
-                  onClick={openExportSettings}
-                  className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent"
-                >
-                  <Settings className="size-4" />
-                  导出设置
-                </button>
               </div>
-              {/* 标题设置 */}
-              <div className="flex items-center gap-1 rounded-lg border border-border bg-card px-2 py-1">
-                <input
-                  value={titleDraft}
-                  onChange={(e) => setTitleDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveCurrentTitle();
-                  }}
-                  className="w-48 bg-transparent px-1 py-1 text-sm outline-none"
-                  placeholder={`${gender === "male" ? "男团" : "女队"}标题`}
-                  title={`${gender === "male" ? "男团" : "女队"}导出标题`}
-                />
-                <button
-                  onClick={saveCurrentTitle}
-                  className="rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                  title="保存当前队伍标题"
-                >
-                  保存
-                </button>
-              </div>
-              {/* 导出图片 */}
-              <button
-                onClick={handleExportImage}
-                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-              >
-                <Download className="size-4" />
-                {exporting === "image" ? "导出中…" : "导出图片"}
-              </button>
-              {/* 导出时长精简图（仅月度模式） */}
-              {viewMode === "monthly" && (
-                <button
-                  onClick={handleExportDurationImage}
-                  disabled={exporting !== null || !activeSummary || activeRows.length === 0}
-                  className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-                >
-                  <Clock className="size-4" />
-                  {exporting === "durationImage" ? "导出中…" : "导出时长图"}
-                </button>
-              )}
-              {/* 导出未开播天数图 */}
-              <button
-                onClick={handleExportNotLiveImage}
-                disabled={exporting !== null || !activeSummary || notLiveRows.length === 0}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-              >
-                <CalendarDays className="size-4" />
-                {exporting === "notLiveImage" ? "导出中…" : "导出未开播图"}
-              </button>
-              {/* 导出未开播天数 CSV */}
-              <button
-                onClick={handleExportNotLiveCSV}
-                disabled={exporting !== null || !activeSummary || notLiveRows.length === 0}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-              >
-                <FileSpreadsheet className="size-4" />
-                {exporting === "notLiveCsv" ? "导出中…" : "导出未开播 CSV"}
-              </button>
-              {/* 导出 CSV */}
-              <button
-                onClick={handleExportCSV}
-                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-              >
-                <FileSpreadsheet className="size-4" />
-                {exporting === "report" ? "导出中…" : "导出 CSV"}
-              </button>
-              {/* 单独导出时长 CSV */}
-              <button
-                onClick={handleExportDurationCSV}
-                disabled={exporting !== null || !activeSummary || activeRows.length === 0}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent disabled:opacity-50"
-              >
-                <Clock className="size-4" />
-                {exporting === "duration" ? "导出中…" : "导出时长"}
-              </button>
-              {/* 字段设置 */}
-              <button
-                onClick={() => setShowColumnSettings((s) => !s)}
-                className={cn(
-                  "app-no-drag flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition",
-                  showColumnSettings
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card hover:bg-accent"
-                )}
-              >
-                <Columns3 className="size-4" />
-                字段设置
-              </button>
-              {/* 等级设置 */}
-              <button
-                onClick={() => (showTierSettings ? setShowTierSettings(false) : startEditTiers())}
-                className="app-no-drag flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium transition hover:bg-accent"
-              >
-                <Settings className="size-4" />
-                等级设置
-              </button>
+
+              {/* 设置菜单：导出设置 / 字段设置 / 等级设置（导出标题在导出设置里） */}
+              <HeaderMenu
+                label="设置"
+                icon={Settings}
+                open={openMenu === "settings"}
+                onToggle={() => setOpenMenu((m) => (m === "settings" ? null : "settings"))}
+                items={[
+                  {
+                    key: "export-settings",
+                    label: "导出设置",
+                    icon: Settings,
+                    hint: "排序 · 图片分割 · 导出标题",
+                    onClick: openExportSettings,
+                  },
+                  {
+                    key: "columns",
+                    label: showColumnSettings ? "收起字段设置" : "字段设置",
+                    icon: Columns3,
+                    hint: "显示字段与列宽",
+                    onClick: () => setShowColumnSettings((s) => !s),
+                  },
+                  {
+                    key: "tiers",
+                    label: showTierSettings ? "收起等级设置" : "等级设置",
+                    icon: Save,
+                    hint: "按累计音浪自动分级",
+                    onClick: () => (showTierSettings ? setShowTierSettings(false) : startEditTiers()),
+                  },
+                ]}
+              />
+
+              {/* 导出菜单：全部导出入口收进一个下拉 */}
+              <HeaderMenu
+                label="导出"
+                icon={Download}
+                primary
+                open={openMenu === "export"}
+                onToggle={() => setOpenMenu((m) => (m === "export" ? null : "export"))}
+                items={[
+                  {
+                    key: "image",
+                    label: "报告图片",
+                    icon: ImageIcon,
+                    hint: "按当前样式导出长图",
+                    onClick: handleExportImage,
+                    disabled: exporting !== null || !activeSummary || activeRows.length === 0,
+                    busy: exporting === "image",
+                  },
+                  {
+                    key: "duration-image",
+                    label: "时长精简图",
+                    icon: Clock,
+                    hint: "仅月度报告",
+                    onClick: handleExportDurationImage,
+                    disabled: exporting !== null || viewMode !== "monthly" || !activeSummary || activeRows.length === 0,
+                    busy: exporting === "durationImage",
+                  },
+                  {
+                    key: "not-live-image",
+                    label: "未开播天数图",
+                    icon: CalendarDays,
+                    hint: notLiveRows.length ? `${notLiveRows.length} 人` : "暂无数据",
+                    onClick: handleExportNotLiveImage,
+                    disabled: exporting !== null || !activeSummary || notLiveRows.length === 0,
+                    busy: exporting === "notLiveImage",
+                  },
+                  {
+                    key: "csv",
+                    label: "报告 CSV",
+                    icon: FileSpreadsheet,
+                    hint: "完整字段",
+                    onClick: handleExportCSV,
+                    disabled: exporting !== null || !activeSummary || activeRows.length === 0,
+                    busy: exporting === "report",
+                  },
+                  {
+                    key: "duration-csv",
+                    label: "时长 CSV",
+                    icon: Clock,
+                    hint: "姓名 / 当月时长",
+                    onClick: handleExportDurationCSV,
+                    disabled: exporting !== null || !activeSummary || activeRows.length === 0,
+                    busy: exporting === "duration",
+                  },
+                  {
+                    key: "not-live-csv",
+                    label: "未开播 CSV",
+                    icon: FileSpreadsheet,
+                    hint: "姓名 / 未播天数 / 师傅",
+                    onClick: handleExportNotLiveCSV,
+                    disabled: exporting !== null || !activeSummary || notLiveRows.length === 0,
+                    busy: exporting === "notLiveCsv",
+                  },
+                ]}
+              />
             </div>
           </div>
         </CardHeader>
@@ -1086,6 +1158,20 @@ export function DailyReportPage() {
                   <CardTitle className="text-base">导出设置</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-foreground">导出标题</p>
+                    <Input
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveExportSettings();
+                      }}
+                      placeholder={`${gender === "male" ? "男团" : "女队"}报告标题`}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      显示在报告图片顶部，按队伍分别保存
+                    </p>
+                  </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-foreground">报告排序方式</p>
                     <div className="flex items-center overflow-hidden rounded-lg border border-border bg-card p-0.5">
