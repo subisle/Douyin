@@ -3,7 +3,7 @@
 const UP_STATEMENTS = Object.freeze([
   `CREATE TABLE IF NOT EXISTS ilink_login_requests (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    workspace_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    workspace_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     login_slot_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     account_id BIGINT UNSIGNED NULL,
     actor_id VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

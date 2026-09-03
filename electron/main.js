@@ -1262,6 +1262,13 @@ ipcMain.handle(
   wrap((period, config) => db.getRewardReport(period, config))
 );
 
+// ── 主播收入 IPC ────────────────────────────────────────
+ipcMain.handle("data:getAnchorIncome", wrap((period) => db.getAnchorIncome(period)));
+ipcMain.handle("data:getIncomePeriods", wrap(() => db.getIncomePeriods()));
+ipcMain.handle("data:importAnchorIncome", wrap((payload) => db.importAnchorIncome(payload)));
+ipcMain.handle("data:saveAnchorIncomeProfile", wrap((payload) => db.saveAnchorIncomeProfile(payload)));
+ipcMain.handle("data:deleteAnchorIncome", wrap((period, personIds) => db.deleteAnchorIncome(period, personIds)));
+
 // ── 应用密码锁 ──────────────────────────────────────────
 ipcMain.handle("auth:verifyPassword", wrap((password) => db.verifyAppPassword(password)));
 ipcMain.handle("auth:hasPassword", wrap(() => db.hasAppPassword()));

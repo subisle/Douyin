@@ -46,6 +46,11 @@ const ALLOWED_METHODS = new Set([
   "saveStarBattleScore",
   "getFlagWinner",
   "getRewardReport",
+  "getAnchorIncome",
+  "getIncomePeriods",
+  "importAnchorIncome",
+  "saveAnchorIncomeProfile",
+  "deleteAnchorIncome",
 ]);
 
 export async function POST(request: Request) {

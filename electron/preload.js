@@ -175,6 +175,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),
   getRewardReport: (period, config) => ipcRenderer.invoke("data:getRewardReport", period, config),
 
+  // ── 主播收入 ──
+  getAnchorIncome: (period) => ipcRenderer.invoke("data:getAnchorIncome", period),
+  getIncomePeriods: () => ipcRenderer.invoke("data:getIncomePeriods"),
+  importAnchorIncome: (payload) => ipcRenderer.invoke("data:importAnchorIncome", payload),
+  saveAnchorIncomeProfile: (payload) =>
+    ipcRenderer.invoke("data:saveAnchorIncomeProfile", payload),
+  deleteAnchorIncome: (period, personIds) =>
+    ipcRenderer.invoke("data:deleteAnchorIncome", period, personIds),
+
   // ── 应用密码锁 ──
   verifyAppPassword: (password) => ipcRenderer.invoke("auth:verifyPassword", password),
   hasAppPassword: () => ipcRenderer.invoke("auth:hasPassword"),

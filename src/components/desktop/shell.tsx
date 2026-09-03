@@ -10,6 +10,7 @@ import { DashboardPage } from "./dashboard-page";
 import { AnchorsPage } from "./anchors-page";
 import { FamilyTreePage } from "./family-tree-page";
 import { DataPage } from "./data-page";
+import { IncomePage } from "./income-page";
 import { FlowingFlagCard } from "./flowing-flag-card";
 import { PkRosterPage } from "./pk-roster-page";
 import { PkGroupStagePage } from "./pk-group-stage-page";
@@ -291,6 +292,8 @@ export function DesktopShell() {
                   incomingFile={droppedImportFile}
                   onIncomingFileConsumed={() => setDroppedImportFile(null)}
                 />
+              ) : currentPage === "income" ? (
+                <IncomePage />
               ) : currentPage === "flag" ? (
                 <FlowingFlagCard />
               ) : currentPage === "pk" ? (

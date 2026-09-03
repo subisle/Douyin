@@ -957,6 +957,116 @@ export interface RewardConfig {
   };
 }
 
+/** 主播收入：单行（人维度，多人账号已合并） */
+export interface AnchorIncomeRow {
+  personId: number;
+  name: string;
+  gender: string;
+  /** 入会时间（原文，如 2023年/4/5） */
+  joinDate: string;
+  /** CSV 里的主播昵称 */
+  nickname: string;
+  douyinNo: string;
+  anchorIds: string[];
+  startDate: string;
+  endDate: string;
+  /** 本期流水 */
+  revenue: number;
+  streamerRatio: string;
+  guildRatio: string;
+  /** 主播收入（本期个人收益） */
+  streamerIncome: number;
+  /** 公会收入 */
+  guildIncome: number;
+  incomeName: string;
+  feeType: string;
+  remark: string;
+  /** 本期直播时长（分钟） */
+  durationMinutes: number;
+  /** 上期个人收益 */
+  prevIncome: number;
+  /** 期初累计（手工维护的历史累计基线） */
+  openingTotal: number;
+  /** 个人总收益 = 期初累计 + 截至本期所有月份之和 */
+  totalIncome: number;
+  /** 本期是否有导入数据 */
+  hasIncome: boolean;
+}
+
+/** 已导入但没能匹配到主播账号的收入行 */
+export interface AnchorIncomeOrphan {
+  anchorId: string;
+  douyinNo: string;
+  nickname: string;
+  streamerIncome: number;
+  revenue: number;
+}
+
+export interface AnchorIncomeData {
+  period: string;
+  prevPeriod: string;
+  startDate: string;
+  endDate: string;
+  rows: AnchorIncomeRow[];
+  orphans: AnchorIncomeOrphan[];
+  summary: {
+    total: number;
+    maleCount: number;
+    femaleCount: number;
+    incomeCount: number;
+    totalRevenue: number;
+    totalStreamerIncome: number;
+    totalGuildIncome: number;
+    totalDuration: number;
+  };
+}
+
+export interface IncomePeriodItem {
+  period: string;
+  rowCount: number;
+  totalIncome: number;
+  updatedAt: string | null;
+}
+
+/** 导入个人明细的一行（键名兼容平台导出 CSV 的中文表头） */
+export interface IncomeImportRow {
+  anchorId?: string;
+  douyinNo?: string;
+  nickname?: string;
+  dateRange?: string;
+  incomeName?: string;
+  feeType?: string;
+  revenue?: number | string;
+  streamerRatio?: string;
+  guildRatio?: string;
+  streamerIncome?: number | string;
+  guildIncome?: number | string;
+  remark?: string;
+  /** 手工指派的主播 ID */
+  personId?: number | null;
+}
+
+export interface IncomeImportResult {
+  period: string;
+  saved: number;
+  skipped: number;
+  matched: number;
+  replaced: boolean;
+  unmatched: Array<{
+    anchorId: string;
+    douyinNo: string;
+    nickname: string;
+    streamerIncome: number;
+  }>;
+}
+
+export interface IncomeProfilePayload {
+  personId: number;
+  joinDate?: string;
+  openingTotal?: number;
+  note?: string;
+}
+
 export interface DuplicateAnchorPerson {
   id: number;
   name: string;
@@ -1210,6 +1320,22 @@ declare global {
     ) => Promise<IpcResult<{ saved: boolean; deleted: boolean }>>;
     getFlagWinner: (period: string) => Promise<IpcResult<FlagWinnerData | null>>;
     getRewardReport: (period: string, config?: RewardConfig) => Promise<IpcResult<RewardReportData>>;
+
+    // ── 主播收入 ──
+    getAnchorIncome: (period: string) => Promise<IpcResult<AnchorIncomeData>>;
+    getIncomePeriods: () => Promise<IpcResult<IncomePeriodItem[]>>;
+    importAnchorIncome: (payload: {
+      period: string;
+      rows: IncomeImportRow[];
+      replace?: boolean;
+    }) => Promise<IpcResult<IncomeImportResult>>;
+    saveAnchorIncomeProfile: (
+      payload: IncomeProfilePayload
+    ) => Promise<IpcResult<{ personId: number; joinDate: string; openingTotal: number; note: string }>>;
+    deleteAnchorIncome: (
+      period: string,
+      personIds?: number[]
+    ) => Promise<IpcResult<{ period: string; deleted: number }>>;
 
     // ── 应用密码锁 ──
     verifyAppPassword: (password: string) => Promise<IpcResult<{ ok: boolean; role: "admin" | "guest"; reason?: string }>>;

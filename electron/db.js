@@ -6,6 +6,7 @@ const {
   ensureDatabaseIndexes,
   ensureImportRecordsTable,
   ensureChannelAnchorBindsTable,
+  ensureAnchorIncomeTables,
   ensurePersonDailyReportVisibilityColumn,
 } = require("./db-maintenance");
 
@@ -3202,6 +3203,454 @@ async function getRosterBySurname(surname) {
   });
 }
 
+/* ============================================================
+ * 主播收入（按月个人明细）
+ * ========================================================== */
+
+let anchorIncomeTablesReady = false;
+
+async function ensureAnchorIncomeTablesReady(db = getPool()) {
+  if (anchorIncomeTablesReady) return;
+  await ensureAnchorIncomeTables(db);
+  anchorIncomeTablesReady = true;
+}
+
+/** 'YYYY-MM' / 'YYYY-MM-DD' / 'YYYY/MM' → 'YYYY-MM' */
+function normalizePeriod(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(\d{4})[-/年](\d{1,2})/);
+  if (!match) return "";
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return "";
+  return `${match[1]}-${String(month).padStart(2, "0")}`;
+}
+
+function periodStart(period) {
+  return `${period}-01`;
+}
+
+function periodEnd(period) {
+  const [y, m] = period.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${period}-${String(lastDay).padStart(2, "0")}`;
+}
+
+function shiftPeriod(period, deltaMonths) {
+  const [y, m] = period.split("-").map(Number);
+  const total = y * 12 + (m - 1) + deltaMonths;
+  const nextYear = Math.floor(total / 12);
+  const nextMonth = (total % 12) + 1;
+  return `${nextYear}-${String(nextMonth).padStart(2, "0")}`;
+}
+
+/** CSV 单元格：剥掉 Excel 的 ="123" 包裹，"-" 视作空 */
+function cleanIncomeCell(value) {
+  let text = String(value ?? "").trim();
+  text = text.replace(/^="(.*)"$/, "$1").replace(/^=(.*)$/, "$1").trim();
+  if (text === "-" || text === "—" || text === "" || text === "null") return "";
+  return text;
+}
+
+function parseIncomeMoney(value) {
+  const text = cleanIncomeCell(value).replace(/,/g, "");
+  if (!text) return 0;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** '2026/06/01 - 2026/06/30' → { startDate, endDate } */
+function parseIncomeDateRange(value) {
+  const text = cleanIncomeCell(value);
+  if (!text) return { startDate: null, endDate: null };
+  const parts = text.split(/\s*[-~至—]\s*/).map((item) => String(item).trim());
+  const toIso = (raw) => {
+    const match = String(raw || "").match(/^(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+    if (!match) return null;
+    return `${match[1]}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`;
+  };
+  if (parts.length >= 2) return { startDate: toIso(parts[0]), endDate: toIso(parts[1]) };
+  const single = toIso(parts[0]);
+  return { startDate: single, endDate: single };
+}
+
+/** 主播收入列表：按月返回人维度明细（含累计总收益、本期时长、上期收益） */
+async function getAnchorIncome(periodInput) {
+  const period = normalizePeriod(periodInput);
+  if (!period) throw new Error("月份格式应为 YYYY-MM");
+  const db = getPool();
+  await ensureAnchorIncomeTablesReady(db);
+
+  const monthStart = periodStart(period);
+  const monthEnd = periodEnd(period);
+  const prevPeriod = shiftPeriod(period, -1);
+
+  const [accountRows] = await db.query(
+    "SELECT a.anchor_id, a.douyin_no, a.anchor_name, a.person_id, a.is_primary " +
+    "FROM accounts a WHERE a.anchor_id IS NOT NULL AND a.anchor_id != ''"
+  );
+  const [personRows] = await db.query(
+    "SELECT id, name, gender, master_id FROM persons ORDER BY id"
+  );
+
+  const personMeta = new Map();
+  for (const p of personRows) {
+    personMeta.set(Number(p.id), {
+      personId: Number(p.id),
+      name: String(p.name || ""),
+      gender: String(p.gender || ""),
+    });
+  }
+  const accountsByPerson = new Map();
+  const anchorToPerson = new Map();
+  for (const a of accountRows) {
+    const pid = Number(a.person_id);
+    if (!pid || !personMeta.has(pid)) continue;
+    anchorToPerson.set(a.anchor_id, pid);
+    if (!accountsByPerson.has(pid)) accountsByPerson.set(pid, []);
+    accountsByPerson.get(pid).push(a);
+  }
+
+  const allAnchorIds = accountRows.map((a) => a.anchor_id);
+
+  // 本期收入明细（按账号）
+  const [incomeRows] = allAnchorIds.length
+    ? await db.query(
+        "SELECT * FROM anchor_income WHERE period = ?",
+        [period]
+      )
+    : [[]];
+
+  // 累计（<= 本期）与上一期
+  const [totalRows] = await db.query(
+    "SELECT person_id, COALESCE(SUM(streamer_income), 0) AS total, " +
+    "COALESCE(SUM(revenue), 0) AS revenue, COALESCE(SUM(guild_income), 0) AS guild " +
+    "FROM anchor_income WHERE person_id IS NOT NULL AND period <= ? GROUP BY person_id",
+    [period]
+  );
+  const [prevRows] = await db.query(
+    "SELECT person_id, COALESCE(SUM(streamer_income), 0) AS total " +
+    "FROM anchor_income WHERE person_id IS NOT NULL AND period = ? GROUP BY person_id",
+    [prevPeriod]
+  );
+  const [profileRows] = await db.query(
+    "SELECT person_id, join_date, opening_total, note FROM anchor_income_profiles"
+  );
+
+  const openingByPerson = new Map();
+  const joinByPerson = new Map();
+  for (const r of profileRows) {
+    openingByPerson.set(Number(r.person_id), Number(r.opening_total) || 0);
+    joinByPerson.set(Number(r.person_id), String(r.join_date || ""));
+  }
+  const totalByPerson = new Map();
+  const revenueTotalByPerson = new Map();
+  const guildTotalByPerson = new Map();
+  for (const r of totalRows) {
+    totalByPerson.set(Number(r.person_id), Number(r.total) || 0);
+    revenueTotalByPerson.set(Number(r.person_id), Number(r.revenue) || 0);
+    guildTotalByPerson.set(Number(r.person_id), Number(r.guild) || 0);
+  }
+  const prevByPerson = new Map();
+  for (const r of prevRows) prevByPerson.set(Number(r.person_id), Number(r.total) || 0);
+
+  // 本期时长：沿用日报口径，取该月范围内最近一次累计快照，人维度取名下最大账号
+  const durationMap = allAnchorIds.length
+    ? await getLatestDurationMap(db, {
+        anchorIds: allAnchorIds,
+        fromDate: monthStart,
+        asOfDate: monthEnd,
+      })
+    : new Map();
+
+  // 本期收入按人聚合
+  const incomeByPerson = new Map();
+  const orphanRows = [];
+  for (const r of incomeRows) {
+    const pid = r.person_id != null ? Number(r.person_id) : anchorToPerson.get(r.anchor_id) || null;
+    if (!pid || !personMeta.has(pid)) {
+      orphanRows.push({
+        anchorId: String(r.anchor_id || ""),
+        nickname: String(r.nickname || ""),
+        douyinNo: String(r.douyin_no || ""),
+        streamerIncome: Number(r.streamer_income) || 0,
+        revenue: Number(r.revenue) || 0,
+      });
+      continue;
+    }
+    let bucket = incomeByPerson.get(pid);
+    if (!bucket) {
+      bucket = {
+        revenue: 0,
+        streamerIncome: 0,
+        guildIncome: 0,
+        anchorIds: [],
+        nickname: "",
+        douyinNo: "",
+        startDate: null,
+        endDate: null,
+        streamerRatio: "",
+        guildRatio: "",
+        incomeName: "",
+        feeType: "",
+        remark: "",
+      };
+      incomeByPerson.set(pid, bucket);
+    }
+    bucket.revenue += Number(r.revenue) || 0;
+    bucket.streamerIncome += Number(r.streamer_income) || 0;
+    bucket.guildIncome += Number(r.guild_income) || 0;
+    bucket.anchorIds.push(String(r.anchor_id || ""));
+    if (!bucket.nickname && r.nickname) bucket.nickname = String(r.nickname);
+    if (!bucket.douyinNo && r.douyin_no) bucket.douyinNo = String(r.douyin_no);
+    if (!bucket.startDate && r.start_date) bucket.startDate = normalizeSnapshotDate(r.start_date);
+    if (r.end_date) bucket.endDate = normalizeSnapshotDate(r.end_date);
+    if (!bucket.streamerRatio && r.streamer_ratio) bucket.streamerRatio = String(r.streamer_ratio);
+    if (!bucket.guildRatio && r.guild_ratio) bucket.guildRatio = String(r.guild_ratio);
+    if (!bucket.incomeName && r.income_name) bucket.incomeName = String(r.income_name);
+    if (!bucket.feeType && r.fee_type) bucket.feeType = String(r.fee_type);
+    if (!bucket.remark && r.remark) bucket.remark = String(r.remark);
+  }
+
+  const rows = [];
+  for (const meta of personMeta.values()) {
+    const pid = meta.personId;
+    const income = incomeByPerson.get(pid);
+    const anchorIds = (accountsByPerson.get(pid) || []).map((a) => a.anchor_id);
+    const opening = openingByPerson.get(pid) || 0;
+    const cumulative = Number((opening + (totalByPerson.get(pid) || 0)).toFixed(2));
+    rows.push({
+      personId: pid,
+      name: meta.name,
+      gender: meta.gender,
+      joinDate: joinByPerson.get(pid) || "",
+      nickname: income?.nickname || "",
+      douyinNo: income?.douyinNo || (accountsByPerson.get(pid) || []).map((a) => a.douyin_no).filter(Boolean)[0] || "",
+      anchorIds: income?.anchorIds?.length ? income.anchorIds : anchorIds,
+      startDate: income?.startDate || monthStart,
+      endDate: income?.endDate || monthEnd,
+      revenue: Number((income?.revenue || 0).toFixed(2)),
+      streamerRatio: income?.streamerRatio || "",
+      guildRatio: income?.guildRatio || "",
+      streamerIncome: Number((income?.streamerIncome || 0).toFixed(2)),
+      guildIncome: Number((income?.guildIncome || 0).toFixed(2)),
+      incomeName: income?.incomeName || "",
+      feeType: income?.feeType || "",
+      remark: income?.remark || "",
+      durationMinutes: maxDurationAmongAnchors(anchorIds, durationMap),
+      prevIncome: Number((prevByPerson.get(pid) || 0).toFixed(2)),
+      openingTotal: Number(opening.toFixed(2)),
+      totalIncome: cumulative,
+      hasIncome: Boolean(income),
+    });
+  }
+
+  rows.sort(
+    (a, b) =>
+      Number(b.hasIncome) - Number(a.hasIncome) ||
+      b.streamerIncome - a.streamerIncome ||
+      a.personId - b.personId
+  );
+
+  const sum = (fn) => rows.reduce((acc, r) => acc + fn(r), 0);
+  return {
+    period,
+    prevPeriod,
+    startDate: rows.find((r) => r.hasIncome)?.startDate || monthStart,
+    endDate: rows.find((r) => r.hasIncome)?.endDate || monthEnd,
+    rows,
+    orphans: orphanRows,
+    summary: {
+      total: rows.length,
+      maleCount: rows.filter((r) => r.gender === "male").length,
+      femaleCount: rows.filter((r) => r.gender === "female").length,
+      incomeCount: rows.filter((r) => r.hasIncome).length,
+      totalRevenue: Number(sum((r) => r.revenue).toFixed(2)),
+      totalStreamerIncome: Number(sum((r) => r.streamerIncome).toFixed(2)),
+      totalGuildIncome: Number(sum((r) => r.guildIncome).toFixed(2)),
+      totalDuration: sum((r) => r.durationMinutes),
+    },
+  };
+}
+
+async function getIncomePeriods() {
+  const db = getPool();
+  await ensureAnchorIncomeTablesReady(db);
+  const [rows] = await db.query(
+    "SELECT period, COUNT(*) AS row_count, " +
+    "COALESCE(SUM(streamer_income), 0) AS total_income, MAX(updated_at) AS updated_at " +
+    "FROM anchor_income GROUP BY period ORDER BY period DESC"
+  );
+  return rows.map((r) => ({
+    period: String(r.period),
+    rowCount: Number(r.row_count) || 0,
+    totalIncome: Number(r.total_income) || 0,
+    updatedAt: r.updated_at ? String(r.updated_at).slice(0, 19).replace("T", " ") : null,
+  }));
+}
+
+/** 解析一行平台导出的个人明细（放在 db 层，导入预览与落库共用同一套规则） */
+function parseIncomeRow(raw) {
+  const anchorId = cleanIncomeCell(raw.anchorId ?? raw["主播UID"] ?? raw["主播uid"]);
+  const douyinNo = cleanIncomeCell(raw.douyinNo ?? raw["主播抖音号"]);
+  const nickname = cleanIncomeCell(raw.nickname ?? raw["主播昵称"]);
+  const { startDate, endDate } = parseIncomeDateRange(raw.dateRange ?? raw["起止日期"]);
+  return {
+    anchorId,
+    douyinNo,
+    nickname,
+    startDate,
+    endDate,
+    incomeName: cleanIncomeCell(raw.incomeName ?? raw["收入名称"]),
+    feeType: cleanIncomeCell(raw.feeType ?? raw["费用类型"]),
+    revenue: parseIncomeMoney(raw.revenue ?? raw["本期流水（元）"]),
+    streamerRatio: cleanIncomeCell(raw.streamerRatio ?? raw["主播分成比"]),
+    guildRatio: cleanIncomeCell(raw.guildRatio ?? raw["公会分成比"]),
+    streamerIncome: parseIncomeMoney(raw.streamerIncome ?? raw["主播收入（元）"]),
+    guildIncome: parseIncomeMoney(raw.guildIncome ?? raw["公会收入（元）"]),
+    remark: cleanIncomeCell(raw.remark ?? raw["备注"]),
+    personId: raw.personId ? Number(raw.personId) || null : null,
+  };
+}
+
+/**
+ * 导入个人明细。
+ * payload: { period, rows, replace }
+ *  - rows 每项至少含 anchorId；personId 为空时按 anchor_id → 抖音号 → 昵称匹配主播
+ *  - replace=true 时先清空该月全部记录
+ */
+async function importAnchorIncome(payload) {
+  const period = normalizePeriod(payload?.period);
+  if (!period) throw new Error("月份格式应为 YYYY-MM");
+  const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+  if (rows.length === 0) throw new Error("没有可导入的数据行");
+
+  const db = getPool();
+  await ensureAnchorIncomeTablesReady(db);
+
+  const [accountRows] = await db.query(
+    "SELECT a.anchor_id, a.douyin_no, a.anchor_name, a.person_id FROM accounts a " +
+    "INNER JOIN persons p ON p.id = a.person_id " +
+    "WHERE a.anchor_id IS NOT NULL AND a.anchor_id != ''"
+  );
+  const byAnchorId = new Map();
+  const byDouyinNo = new Map();
+  const byNickname = new Map();
+  const nicknameDup = new Set();
+  for (const a of accountRows) {
+    byAnchorId.set(a.anchor_id, Number(a.person_id));
+    const no = String(a.douyin_no || "").trim();
+    if (no) byDouyinNo.set(no, Number(a.person_id));
+    const nm = String(a.anchor_name || "").trim();
+    if (nm) {
+      if (byNickname.has(nm)) nicknameDup.add(nm);
+      else byNickname.set(nm, Number(a.person_id));
+    }
+  }
+
+  const parsed = rows.map(parseIncomeRow);
+  const usable = parsed.filter((r) => r.anchorId);
+  const skipped = parsed.length - usable.length;
+
+  if (payload?.replace) {
+    await db.query("DELETE FROM anchor_income WHERE period = ?", [period]);
+  }
+
+  let saved = 0;
+  let matched = 0;
+  const unmatched = [];
+  for (const row of usable) {
+    let personId = row.personId;
+    if (!personId) {
+      personId =
+        byAnchorId.get(row.anchorId) ||
+        (row.douyinNo ? byDouyinNo.get(row.douyinNo) || null : null) ||
+        (row.nickname && !nicknameDup.has(row.nickname) ? byNickname.get(row.nickname) || null : null);
+    }
+    if (personId) matched += 1;
+    else unmatched.push({ anchorId: row.anchorId, douyinNo: row.douyinNo, nickname: row.nickname, streamerIncome: row.streamerIncome });
+
+    await db.query(
+      `INSERT INTO anchor_income
+         (period, anchor_id, person_id, douyin_no, nickname, start_date, end_date,
+          income_name, fee_type, revenue, streamer_ratio, guild_ratio,
+          streamer_income, guild_income, remark)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         person_id = VALUES(person_id),
+         douyin_no = VALUES(douyin_no),
+         nickname = VALUES(nickname),
+         start_date = VALUES(start_date),
+         end_date = VALUES(end_date),
+         income_name = VALUES(income_name),
+         fee_type = VALUES(fee_type),
+         revenue = VALUES(revenue),
+         streamer_ratio = VALUES(streamer_ratio),
+         guild_ratio = VALUES(guild_ratio),
+         streamer_income = VALUES(streamer_income),
+         guild_income = VALUES(guild_income),
+         remark = VALUES(remark)`,
+      [
+        period,
+        row.anchorId,
+        personId || null,
+        row.douyinNo,
+        row.nickname,
+        row.startDate,
+        row.endDate,
+        row.incomeName,
+        row.feeType,
+        row.revenue,
+        row.streamerRatio,
+        row.guildRatio,
+        row.streamerIncome,
+        row.guildIncome,
+        row.remark,
+      ]
+    );
+    saved += 1;
+  }
+
+  return { period, saved, skipped, matched, unmatched, replaced: Boolean(payload?.replace) };
+}
+
+/** 保存入会时间 / 期初累计个人收益 */
+async function saveAnchorIncomeProfile(payload) {
+  const personId = Number(payload?.personId);
+  if (!personId) throw new Error("缺少主播 ID");
+  const db = getPool();
+  await ensureAnchorIncomeTablesReady(db);
+  const joinDate = String(payload?.joinDate ?? "").trim().slice(0, 32);
+  const openingTotal = Number(payload?.openingTotal) || 0;
+  const note = String(payload?.note ?? "").trim().slice(0, 255);
+
+  await db.query(
+    `INSERT INTO anchor_income_profiles (person_id, join_date, opening_total, note)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE join_date = VALUES(join_date), opening_total = VALUES(opening_total), note = VALUES(note)`,
+    [personId, joinDate, openingTotal, note]
+  );
+  return { personId, joinDate, openingTotal, note };
+}
+
+/** 清空某月收入（personIds 为空则整月清空） */
+async function deleteAnchorIncome(periodInput, personIds) {
+  const period = normalizePeriod(periodInput);
+  if (!period) throw new Error("月份格式应为 YYYY-MM");
+  const db = getPool();
+  await ensureAnchorIncomeTablesReady(db);
+  const ids = Array.isArray(personIds) ? personIds.map(Number).filter(Boolean) : [];
+  if (ids.length === 0) {
+    const [result] = await db.query("DELETE FROM anchor_income WHERE period = ?", [period]);
+    return { period, deleted: Number(result.affectedRows) || 0 };
+  }
+  const ph = ids.map(() => "?").join(",");
+  const [result] = await db.query(
+    `DELETE FROM anchor_income WHERE period = ? AND person_id IN (${ph})`,
+    [period, ...ids]
+  );
+  return { period, deleted: Number(result.affectedRows) || 0 };
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -3246,6 +3695,11 @@ module.exports = {
   getRewardReport,
   getRosterBySurname,
   exportFamilyRoster,
+  getAnchorIncome,
+  getIncomePeriods,
+  importAnchorIncome,
+  saveAnchorIncomeProfile,
+  deleteAnchorIncome,
   verifyAppPassword,
   hasAppPassword,
   ensureChannelAnchorBindsTable: () => ensureChannelAnchorBindsTable(getPool()),

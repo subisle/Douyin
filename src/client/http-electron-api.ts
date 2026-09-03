@@ -351,6 +351,15 @@ export function createHttpElectronApi(): ElectronAPI {
       return request(`/rewards/report${qs({ period })}`);
     },
 
+    // ── 主播收入 ──
+    getAnchorIncome: (period) => request(`/income${qs({ period })}`),
+    getIncomePeriods: () => request("/income/periods"),
+    importAnchorIncome: (payload) => request("/income/import", { method: "POST", body: payload }),
+    saveAnchorIncomeProfile: (payload) =>
+      request("/income/profile", { method: "POST", body: payload }),
+    deleteAnchorIncome: (period, personIds) =>
+      request("/income", { method: "DELETE", body: { period, personIds: personIds ?? [] } }),
+
     // ── 应用密码锁（Web 模式 stub）──
     verifyAppPassword: () => Promise.resolve({ success: true, data: { ok: true, role: "admin" as const } }),
     hasAppPassword: () => Promise.resolve({ success: true, data: { hasPassword: false } }),

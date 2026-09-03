@@ -14,6 +14,7 @@ import {
   Activity,
   Radio,
   Download,
+  Wallet,
 } from "lucide-react";
 
 export type PageId =
@@ -21,6 +22,7 @@ export type PageId =
   | "family-tree"
   | "anchors"
   | "data"
+  | "income"
   | "flag"
   | "pk"
   | "pk-group-stage"
@@ -127,6 +129,13 @@ export const NAV_ITEMS: NavItem[] = [
     description: "数据导入、导出与每日报告",
   },
   {
+    id: "income",
+    label: "主播收入",
+    icon: Wallet,
+    description: "月度个人明细导入与导出",
+    adminOnly: true,
+  },
+  {
     id: "flag",
     label: "红旗",
     icon: Flag,
@@ -206,6 +215,13 @@ export const NAV_TREE: NavEntry[] = [
     label: "数据",
     icon: Database,
     description: "数据导入、导出与每日报告",
+  },
+  {
+    id: "income",
+    label: "主播收入",
+    icon: Wallet,
+    description: "月度个人明细导入与导出",
+    adminOnly: true,
   },
   {
     id: "flag",

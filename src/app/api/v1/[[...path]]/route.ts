@@ -127,6 +127,11 @@ export async function GET(request: Request, context: RouteContext) {
     if (one === "star-battle" && two === "scores") return apiOk(await call("getStarBattleScores", str(sp.get("period"))));
     if (one === "rewards" && two === "report") return apiOk(await call("getRewardReport", str(sp.get("period"))));
 
+    if (one === "income" && two === "periods") return apiOk(await call("getIncomePeriods"));
+    if (one === "income" && path.length === 1) {
+      return apiOk(await call("getAnchorIncome", str(sp.get("period"))));
+    }
+
     return apiFail(`接口不存在：GET /api/v1/${path.join("/")}`, 404, "NOT_FOUND");
   } catch (error) {
     console.error("[api/v1][GET]", error);
@@ -163,6 +168,9 @@ export async function POST(request: Request, context: RouteContext) {
     if (one === "pk" && two === "groups") return apiOk(await call("buildPkGroups", body));
 
     if (one === "rewards" && two === "report") return apiOk(await call("getRewardReport", body.period, body.config));
+
+    if (one === "income" && two === "import") return apiOk(await call("importAnchorIncome", body));
+    if (one === "income" && two === "profile") return apiOk(await call("saveAnchorIncomeProfile", body));
 
     if (one === "bots") {
       const result = await handleBotsRequest({
@@ -246,6 +254,12 @@ export async function DELETE(request: Request, context: RouteContext) {
       const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Number.isFinite) : [];
       if (ids.length === 0) return apiFail("缺少要删除的主播 ID", 400, "MISSING_IDS");
       return apiOk(await call("deleteAnchors", ids));
+    }
+
+    if (one === "income" && path.length === 1) {
+      const body = await readJson(request);
+      const ids = Array.isArray(body.personIds) ? body.personIds.map(Number).filter(Number.isFinite) : [];
+      return apiOk(await call("deleteAnchorIncome", str(String(body.period ?? "")), ids));
     }
 
     return apiFail(`接口不存在：DELETE /api/v1/${path.join("/")}`, 404, "NOT_FOUND");
