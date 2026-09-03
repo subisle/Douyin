@@ -1,7 +1,8 @@
 const https = require("https");
 const { autoUpdater } = require("electron-updater");
 
-const GITHUB_UPDATE_FEED = "https://github.com/subisle/douyin-updater/releases/latest/download";
+// 更新源指向主仓库的最新 Release（发版时上传 dmg/zip/blockmap/latest-mac.yml 即生效）
+const GITHUB_UPDATE_FEED = "https://github.com/subisle/Douyin/releases/latest/download";
 const AKAMS_PROXY_NODES = [
   "gh.dpik.top",
   "github.tbap.top",
@@ -121,8 +122,9 @@ function createUpdater({ isDev, sendStatus }) {
     }
 
     configureUpdateFeed(DEFAULT_UPDATE_FEED);
-    autoUpdater.autoDownload = false;
-    autoUpdater.autoInstallOnAppQuit = false;
+    // OTA 自动更新：后台增量下载（blockmap 只传差异块），退出应用时自动安装
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowDowngrade = false;
 
     autoUpdater.on("checking-for-update", () => {
@@ -213,11 +215,14 @@ function normalizeUpdateInfo(info) {
   };
 }
 
+// 探测用的清单文件名：mac 用 latest-mac.yml，其他平台用 latest.yml
+const UPDATE_MANIFEST_NAME = process.platform === "darwin" ? "latest-mac.yml" : "latest.yml";
+
 function probeUpdateFeed(candidate) {
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const cacheBust = `t=${Date.now()}`;
-    const url = `${candidate.url.replace(/\/$/, "")}/latest.yml?${cacheBust}`;
+    const url = `${candidate.url.replace(/\/$/, "")}/${UPDATE_MANIFEST_NAME}?${cacheBust}`;
     const req = https.request(
       url,
       {

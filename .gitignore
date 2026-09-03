@@ -94,3 +94,4 @@ chi_sim.traineddata
 
 # Generated exports (ranking images etc.)
 /data/exports/
+build-certs/
