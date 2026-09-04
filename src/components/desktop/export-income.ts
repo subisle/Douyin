@@ -315,6 +315,7 @@ interface XlsxCell {
   font?: Record<string, unknown>;
   alignment?: Record<string, unknown>;
   border?: Record<string, unknown>;
+  fill?: Record<string, unknown>;
   numFmt?: string;
   value?: unknown;
 }
@@ -365,6 +366,21 @@ const THIN_BORDER = {
 };
 
 const DATA_FONT = { name: "微软雅黑", size: 11 };
+
+/** 模板配色（取自鹏鹏传媒 .et 样表） */
+const FILL_TITLE = { type: "pattern", pattern: "solid", fgColor: { argb: "FF993366" } };
+const FILL_BAND = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFFCC" } };
+const FILL_NAME = { type: "pattern", pattern: "solid", fgColor: { argb: "FF99CCFF" } };
+const FILL_INCOME = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF8080" } };
+const FILL_TOTAL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+
+/** 数据列填充色：主播名称浅蓝、收益浅红、总收益黄，其余浅黄（同模板） */
+function columnFill(col: IncomeExportColumn) {
+  if (col.key === "name") return FILL_NAME;
+  if (col.key === "totalIncome") return FILL_TOTAL;
+  if (col.numeric) return FILL_INCOME;
+  return FILL_BAND;
+}
 
 /** "2026-06-01" → Date（解析失败返回 null，按文本写）。
  * exceljs 按 UTC 时间换算日期序列号，取当日正午可保证任何时区下都显示同一天 */
@@ -433,6 +449,7 @@ async function exportXlsx(
       cell.font = { name: "宋体", size: 14 };
       cell.alignment = { horizontal: "center", vertical: "middle" };
       cell.border = THIN_BORDER;
+      cell.fill = FILL_TITLE;
     }
 
     // 标题下的空白行（带边框，同模板）
@@ -440,6 +457,7 @@ async function exportXlsx(
     const blankRow = sheet.getRow(cursor);
     for (let c = firstDataCol; c <= lastColIndex; c++) {
       blankRow.getCell(c).border = THIN_BORDER;
+      blankRow.getCell(c).fill = FILL_BAND;
     }
     sheet.mergeCells(`B${cursor}:${lastColLetter}${cursor}`);
   }
@@ -453,6 +471,7 @@ async function exportXlsx(
     cell.font = { name: "仿宋", size: 11 };
     cell.alignment = { horizontal: "center", vertical: "middle" };
     cell.border = THIN_BORDER;
+    cell.fill = FILL_BAND;
   });
 
   // 数据区：女团行 → 空行 → 「男团个人收益明细」标签 → 男团行（同模板单表连排）
@@ -468,6 +487,7 @@ async function exportXlsx(
         cell.font = DATA_FONT;
         cell.alignment = { horizontal: "center", vertical: "middle" };
         cell.border = THIN_BORDER;
+        cell.fill = FILL_BAND;
       }
     }
 
@@ -480,6 +500,7 @@ async function exportXlsx(
         cell.font = DATA_FONT;
         cell.alignment = dataAlignment(col);
         cell.border = THIN_BORDER;
+        cell.fill = columnFill(col);
         if (
           (col.key === "startDate" || col.key === "endDate") &&
           cell.value instanceof Date
