@@ -72,6 +72,10 @@
         "filter": [
           "*.json"
         ]
+      },
+      {
+        "from": ".env",
+        "to": ".env"
       }
     ],
     "mac": {
