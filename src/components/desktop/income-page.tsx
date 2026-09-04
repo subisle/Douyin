@@ -186,7 +186,7 @@ interface ExportPrefs {
 }
 
 const DEFAULT_EXPORT_PREFS: ExportPrefs = {
-  format: "csv",
+  format: "xlsx",
   scope: "combined",
   columns: DEFAULT_INCOME_COLUMNS,
   company: "鹏仔传媒",
@@ -980,7 +980,7 @@ function ExportDialog({
                 onClick={() => setPrefs((prev) => ({ ...prev, columns: DEFAULT_INCOME_COLUMNS }))}
                 className="rounded border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
               >
-                样例版式
+                样例版式（同模板）
               </button>
               <button
                 type="button"
