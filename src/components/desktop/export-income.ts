@@ -6,6 +6,9 @@ import { formatDuration } from "./format";
 
 export type IncomeExportFormat = "csv" | "xlsx";
 
+/** XLSX 版式：template=样式1（同鹏鹏传媒样表）；modern=样式2（商务：藏青表头/斑马纹/分节合计） */
+export type IncomeExportStyle = "template" | "modern";
+
 /** combined=男女一起（一个文件）；separate=男女分开（两个文件） */
 export type IncomeExportScope = "combined" | "female" | "male" | "separate";
 
@@ -64,6 +67,8 @@ export const DEFAULT_INCOME_COLUMNS: IncomeExportColumnKey[] = [
 
 export interface IncomeExportOptions {
   format: IncomeExportFormat;
+  /** XLSX 版式，缺省=template */
+  style?: IncomeExportStyle;
   scope: IncomeExportScope;
   columns: IncomeExportColumnKey[];
   /** 公司抬头，用于标题行与文件名前缀 */
@@ -329,6 +334,7 @@ interface XlsxSheet {
   columns: XlsxColumn[];
   getRow: (n: number) => XlsxRowHandle;
   mergeCells: (range: string) => void;
+  views?: { state: string; ySplit?: number }[];
 }
 
 interface XlsxModule {
@@ -413,6 +419,151 @@ function dataAlignment(col: IncomeExportColumn) {
 }
 
 async function exportXlsx(
+  context: IncomeExportContext,
+  options: IncomeExportOptions,
+  columns: IncomeExportColumn[],
+  sections: typeof GENDER_SECTIONS
+) {
+  if (options.style === "modern") {
+    return exportXlsxModern(context, options, columns, sections);
+  }
+  return exportXlsxTemplate(context, options, columns, sections);
+}
+
+/* ---------------- 样式2：商务版式（藏青表头/斑马纹/分节合计） ---------------- */
+
+const MODERN_NAVY = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F5597" } };
+const MODERN_SECTION = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDEEBF7" } };
+const MODERN_ZEBRA = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F7FC" } };
+const MODERN_TOTAL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E2F3" } };
+
+async function exportXlsxModern(
+  context: IncomeExportContext,
+  options: IncomeExportOptions,
+  columns: IncomeExportColumn[],
+  sections: typeof GENDER_SECTIONS
+) {
+  const ExcelJS = await loadExcelJs();
+  const { period, rows } = context;
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("个人收入明细");
+
+  const lastColIndex = columns.length; // 样式2 无留白列，从 A 列开始
+  const lastColLetter = columnName(columns.length - 1);
+
+  sheet.columns = columns.map((col) => ({ width: col.width }));
+  let cursor = 0;
+
+  // 大标题
+  cursor += 1;
+  const titleText =
+    sections.length > 1
+      ? buildTitle(options.company, period, "个人收入明细")
+      : buildTitle(options.company, period, sections[0].label);
+  const titleRow = sheet.getRow(cursor);
+  titleRow.getCell(1).value = titleText;
+  sheet.mergeCells(`A${cursor}:${lastColLetter}${cursor}`);
+  titleRow.height = 30;
+  for (let c = 1; c <= lastColIndex; c++) {
+    const cell = titleRow.getCell(c);
+    cell.font = { name: "微软雅黑", size: 15, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.fill = MODERN_NAVY;
+  }
+
+  // 表头
+  cursor += 1;
+  const headerRowIndex = cursor;
+  const headerRow = sheet.getRow(cursor);
+  columns.forEach((col, i) => {
+    const cell = headerRow.getCell(1 + i);
+    cell.value = headerLabel(col, period);
+    cell.font = { name: "微软雅黑", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+    cell.fill = MODERN_NAVY;
+    cell.border = THIN_BORDER;
+  });
+  sheet.views = [{ state: "frozen", ySplit: headerRowIndex }];
+
+  // 分节数据：节色带 + 斑马纹 + 合计行
+  for (const section of sections) {
+    const sectionRows = sortedRows(pickRows(rows, section.key));
+
+    cursor += 1;
+    const labelRow = sheet.getRow(cursor);
+    labelRow.getCell(1).value = section.label;
+    sheet.mergeCells(`A${cursor}:${lastColLetter}${cursor}`);
+    for (let c = 1; c <= lastColIndex; c++) {
+      const cell = labelRow.getCell(c);
+      cell.font = { name: "微软雅黑", size: 11, bold: true, color: { argb: "FF1F3864" } };
+      cell.alignment = { horizontal: "left", vertical: "middle" };
+      cell.fill = MODERN_SECTION;
+      cell.border = THIN_BORDER;
+    }
+
+    const totals = new Map<IncomeExportColumnKey, number>();
+    sectionRows.forEach((row, index) => {
+      cursor += 1;
+      const sheetRow = sheet.getRow(cursor);
+      const zebra = index % 2 === 1 ? MODERN_ZEBRA : undefined;
+      columns.forEach((col, i) => {
+        const cell = sheetRow.getCell(1 + i);
+        cell.value = dataCellValue(row, col, options);
+        cell.font = DATA_FONT;
+        cell.alignment = dataAlignment(col);
+        cell.border = THIN_BORDER;
+        if (zebra) cell.fill = zebra;
+        if (col.numeric && typeof cell.value === "number") {
+          cell.numFmt = "#,##0.00";
+          totals.set(col.key, (totals.get(col.key) || 0) + cell.value);
+        }
+        if (
+          (col.key === "startDate" || col.key === "endDate") &&
+          cell.value instanceof Date
+        ) {
+          cell.numFmt = "yyyy/m/d";
+        }
+      });
+    });
+
+    // 合计行
+    if (sectionRows.length > 0) {
+      cursor += 1;
+      const totalRow = sheet.getRow(cursor);
+      columns.forEach((col, i) => {
+        const cell = totalRow.getCell(1 + i);
+        cell.font = { name: "微软雅黑", size: 11, bold: true };
+        cell.fill = MODERN_TOTAL;
+        cell.border = THIN_BORDER;
+        if (i === 0) {
+          cell.value = `合计（${sectionRows.length} 人）`;
+          cell.alignment = { horizontal: "left", vertical: "middle" };
+        } else if (col.numeric && totals.has(col.key)) {
+          cell.value = Math.round((totals.get(col.key) || 0) * 100) / 100;
+          cell.numFmt = "#,##0.00";
+          cell.alignment = { horizontal: "right", vertical: "middle" };
+        }
+      });
+    }
+
+    if (sections.length > 1 && section.key === "female") cursor += 1; // 段间空行
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const { label } = periodText(period);
+  const filename =
+    sections.length === 1
+      ? xlsxFileName(options.company, period, sections[0].label)
+      : `${companyText(options.company)}${label}_个人收入明细.xlsx`;
+  triggerDownload(blob, filename);
+}
+
+/* ---------------- 样式1：模板版式（同鹏鹏传媒 .et 样表） ---------------- */
+
+async function exportXlsxTemplate(
   context: IncomeExportContext,
   options: IncomeExportOptions,
   columns: IncomeExportColumn[],

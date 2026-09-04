@@ -34,6 +34,7 @@ import {
   type IncomeExportFormat,
   type IncomeExportOptions,
   type IncomeExportScope,
+  type IncomeExportStyle,
 } from "./export-income";
 import type {
   AnchorIncomeData,
@@ -178,6 +179,7 @@ function matchRow(row: IncomeImportRow, matchers: ReturnType<typeof buildMatcher
 
 interface ExportPrefs {
   format: IncomeExportFormat;
+  style: IncomeExportStyle;
   scope: IncomeExportScope;
   columns: IncomeExportColumnKey[];
   company: string;
@@ -187,6 +189,7 @@ interface ExportPrefs {
 
 const DEFAULT_EXPORT_PREFS: ExportPrefs = {
   format: "xlsx",
+  style: "template",
   scope: "combined",
   columns: DEFAULT_INCOME_COLUMNS,
   company: "鹏仔传媒",
@@ -209,6 +212,7 @@ function loadExportPrefs(): ExportPrefs {
       ...DEFAULT_EXPORT_PREFS,
       ...parsed,
       columns: columns.length ? columns : DEFAULT_INCOME_COLUMNS,
+      style: parsed.style === "modern" ? "modern" : "template",
     };
   } catch {
     return DEFAULT_EXPORT_PREFS;
@@ -948,6 +952,44 @@ function ExportDialog({
             ))}
           </div>
         </div>
+
+        {prefs.format === "xlsx" && (
+          <div className="space-y-2">
+            <p className="text-xs font-medium">表格样式</p>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setPrefs((prev) => ({ ...prev, style: "template" }))}
+                className={cn(
+                  "rounded-lg border px-3 py-2 text-left transition",
+                  prefs.style === "template"
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/40"
+                )}
+              >
+                <p className="text-xs font-medium">样式1 · 模板版式</p>
+                <p className="text-[11px] text-muted-foreground">
+                  同鹏鹏传媒样表：紫红标题、彩色列、男女连排
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrefs((prev) => ({ ...prev, style: "modern" }))}
+                className={cn(
+                  "rounded-lg border px-3 py-2 text-left transition",
+                  prefs.style === "modern"
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/40"
+                )}
+              >
+                <p className="text-xs font-medium">样式2 · 商务版式</p>
+                <p className="text-[11px] text-muted-foreground">
+                  藏青表头、斑马纹、分节合计、冻结表头
+                </p>
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2">
           <p className="text-xs font-medium">导出范围</p>
