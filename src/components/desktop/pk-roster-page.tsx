@@ -64,6 +64,7 @@ import {
   suggestNextGroupPresetName,
   syncBuiltInGroupsToPkStorage,
   syncAugustEndGroupsToPkStorage,
+  syncSnapshotGroupsToPkStorage,
   downloadPkGroupsCsv,
   exportPkGroupsToCsv,
   formatPkGroupsCopyText,
@@ -824,8 +825,19 @@ export function PkRosterPage() {
   useEffect(() => {
     // 挂载时同步内置分组存档（815 + 8月月底），确保预设列表可见
     syncAugustEndGroupsToPkStorage({ makeActive: false });
-    void loadRoster();
-  }, [loadRoster]);
+    // 本地无任何存档时，从主进程快照恢复（如「9.1分组」），保证 bot 与软件一致
+    void (async () => {
+      const restored = await syncSnapshotGroupsToPkStorage();
+      if (restored) {
+        setPresets(listSavedGroupPresets());
+        setActivePresetId(getActiveGroupPreset()?.id || null);
+        setActivePresetName(getActiveGroupPreset()?.name || null);
+        setActivePresetNote(getActiveGroupPreset()?.note || "");
+      }
+      await loadRoster();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 名单/月份/口径变化后自动分组（优先本地已保存布局）
   useEffect(() => {

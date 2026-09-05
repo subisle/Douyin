@@ -227,8 +227,61 @@ export function syncAugustEndGroupsToPkStorage(options?: {
   });
 }
 
-/** 815 晋级赛分组元信息（44 人 · 8 组 · 规模 [5,5,5,5,6,6,6,6] · 无四人组） */
-export const PRESET_PROMO_META = {
+/**
+ * 主进程快照 → 本地命名存档：仅在本地没有任何存档时恢复（换机/清数据后自动找回）。
+ * 快照由保存分组时同步（writePresetsStore → IPC），bot 出图也读同一份。
+ */
+export async function syncSnapshotGroupsToPkStorage(): Promise<SavedGroupPreset | null> {
+  if (typeof window === "undefined") return null;
+  if (readPresetsStoreRaw().presets.length > 0) return null; // 已有存档不覆盖
+  try {
+    const api = (
+      window as unknown as {
+        electronAPI?: {
+          readPkLayoutSnapshot?: () => Promise<{
+            success: boolean;
+            data?: {
+              name?: string;
+              note?: string;
+              period?: string;
+              mode?: string;
+              scoreDisplay?: string;
+              groupSize?: number;
+              firstStart?: string;
+              stepMinutes?: number;
+              reviveExtraMinutes?: number;
+              nameGroups?: string[][];
+              groupLabels?: string[];
+            } | null;
+          }>;
+        };
+      }
+    ).electronAPI;
+    const res = await api?.readPkLayoutSnapshot?.();
+    const snap = res?.data;
+    if (!snap?.nameGroups?.length) return null;
+    return (
+      saveNamedGroupPreset({
+        name: String(snap.name || "").trim() || "快照恢复分组",
+        note: String(snap.note || "").trim() || "从主进程快照恢复",
+        period: snap.period,
+        mode: snap.mode,
+        scoreDisplay: snap.scoreDisplay,
+        groupSize: snap.groupSize || undefined,
+        firstStart: snap.firstStart || undefined,
+        stepMinutes: snap.stepMinutes || undefined,
+        reviveExtraMinutes: snap.reviveExtraMinutes || undefined,
+        nameGroups: snap.nameGroups,
+        groupLabels: snap.groupLabels,
+        makeActive: true,
+      }) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** 815 晋级赛分组元信息（44 人 · 8 组 · 规模 [5,5,5,5,6,6,6,6] · 无四人组） */export const PRESET_PROMO_META = {
   label: String(SHARED_PRESET_PROMO_META.label || "晋级815"),
   source: String(SHARED_PRESET_PROMO_META.source || "815 晋级赛分组"),
   periodHint: String(SHARED_PRESET_PROMO_META.periodHint || "2026-08"),
