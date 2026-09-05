@@ -227,6 +227,76 @@ export function syncAugustEndGroupsToPkStorage(options?: {
   });
 }
 
+// ===== 9月1日内置分组（9.1分组 · 43人 · 6组）=====
+export const BUILTIN_SEPTEMBER_PRESET_NAME = "9.1分组";
+export const BUILTIN_SEPTEMBER_GROUPS: string[][] = [
+  // 第1组开头：浩泽 | 第3组中间：浩坤 | 第6组末尾：浩森（2026-09 · 组内顺序即展示顺序）
+  ["浩泽", "玖玥", "浩雨", "狼征", "狼哲", "狼佑", "啸阳"],
+  ["浩龙", "浩楠", "浩月", "狼途", "狼艺", "啸强", "浩宁"],
+  ["浩哲", "啸泽", "浩阳", "浩坤", "浩玟", "狼俊", "狼赫"],
+  ["狼澈", "浩冬", "浩鸣", "南方楠", "啸帆", "啸宇", "狼辉"],
+  ["狼兴", "狼辰", "啸安", "浩沐", "玖雪", "玖妹", "狼泽"],
+  ["狼小宝", "浩启", "啸辰", "啸森", "浩运", "浩杰", "狼仔", "浩森"],
+];
+export const BUILTIN_SEPTEMBER_META = {
+  period: "2026-09",
+  groupSize: 7,
+  firstStart: "12:15",
+  stepMinutes: 15,
+  reviveExtraMinutes: 0,
+};
+
+/** 当前代码锁定的 9.1分组名组（拷贝，避免外部 mutate） */
+export function getSeptemberNameGroups(): string[][] {
+  return (BUILTIN_SEPTEMBER_GROUPS || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
+
+/**
+ * 把代码内置 9.1分组 写入 PK 分组命名存档「9.1分组」。
+ * 已存在则不覆盖用户修改（持久化保护，同 815）；默认 makeActive=false。
+ */
+export function syncSeptemberGroupsToPkStorage(options?: {
+  makeActive?: boolean;
+  force?: boolean;
+}): SavedGroupPreset | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = getSeptemberNameGroups();
+  if (!nameGroups.length) return null;
+
+  const existing = listSavedGroupPresets().find(
+    (p) => String(p.name || "").trim() === BUILTIN_SEPTEMBER_PRESET_NAME
+  );
+  if (existing && options?.force !== true) {
+    if (options?.makeActive !== false) {
+      setActiveGroupPreset(existing.id);
+    }
+    return existing;
+  }
+
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  const note = [
+    "9月1日分组",
+    `${nameGroups.length} 组 · ${total} 人`,
+    `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+    `同步 ${new Date().toISOString()}`,
+  ].join(" · ");
+  return saveNamedGroupPreset({
+    id: existing?.id,
+    name: BUILTIN_SEPTEMBER_PRESET_NAME,
+    nameGroups,
+    period: BUILTIN_SEPTEMBER_META.period,
+    mode: "balanced",
+    groupSize: BUILTIN_SEPTEMBER_META.groupSize,
+    firstStart: BUILTIN_SEPTEMBER_META.firstStart,
+    stepMinutes: BUILTIN_SEPTEMBER_META.stepMinutes,
+    reviveExtraMinutes: BUILTIN_SEPTEMBER_META.reviveExtraMinutes,
+    note,
+    makeActive: options?.makeActive === true,
+  });
+}
+
 /**
  * 主进程快照 → 本地命名存档：仅在本地没有任何存档时恢复（换机/清数据后自动找回）。
  * 快照由保存分组时同步（writePresetsStore → IPC），bot 出图也读同一份。
