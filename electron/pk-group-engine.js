@@ -39,6 +39,28 @@ const {
 
 const DEFAULT_GROUP_SIZE = 8;
 
+/** FNV-1a 哈希：把名单变成稳定种子（同一份名单 → 同一结果） */
+function hashSeed(text) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** mulberry32 确定性伪随机：替代 Math.random，保证分组结果可复现 */
+function createSeededRandom(seed) {
+  let state = seed >>> 0;
+  return function seededRandom() {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 const MODE_LABELS = {
   high_to_low: "顺序分组",
   balanced: "均衡分组",
@@ -1194,12 +1216,12 @@ function balancedCost(groups) {
   return range(top4s) * 4 + range(avgs) * 2 + mono * 0.05;
 }
 
-function hillClimbBalance(groups, lockedNames, rounds = 8000) {
+function hillClimbBalance(groups, lockedNames, rounds = 8000, rand = Math.random) {
   const G = groups.length;
   let best = balancedCost(groups);
   for (let r = 0; r < rounds; r += 1) {
-    const g1 = Math.floor(Math.random() * G);
-    let g2 = Math.floor(Math.random() * G);
+    const g1 = Math.floor(rand() * G);
+    let g2 = Math.floor(rand() * G);
     if (g1 === g2) continue;
     const c1 = groups[g1]
       .map((m, mi) => ({ m, mi }))
@@ -1208,8 +1230,8 @@ function hillClimbBalance(groups, lockedNames, rounds = 8000) {
       .map((m, mi) => ({ m, mi }))
       .filter(({ m }) => !lockedNames.has(canonicalName(m.name)));
     if (!c1.length || !c2.length) continue;
-    const a = c1[Math.floor(Math.random() * c1.length)];
-    const b = c2[Math.floor(Math.random() * c2.length)];
+    const a = c1[Math.floor(rand() * c1.length)];
+    const b = c2[Math.floor(rand() * c2.length)];
     swapMembers(groups, { gi: g1, mi: a.mi }, { gi: g2, mi: b.mi });
     // 约束复检由调用方在 climb 外层做；这里只优化均衡
     const cost = balancedCost(groups);
@@ -1503,8 +1525,15 @@ function buildPkGroups(options = {}) {
 
   if (mode === "balanced") {
     // 爬山时暂时允许动非锁；每次后重新 enforce gap
+    // 随机源由名单哈希做种子：同一份名单每次分组结果完全一致（可复现）
+    const climbSeed = hashSeed(
+      `pk-balance:${rawGroups
+        .map((g) => g.map((m) => canonicalName(m.name)).sort().join(","))
+        .join("|")}`
+    );
+    const rand = createSeededRandom(climbSeed);
     for (let pass = 0; pass < 3; pass += 1) {
-      hillClimbBalance(rawGroups, locked, 5000);
+      hillClimbBalance(rawGroups, locked, 5000, rand);
       let broken = false;
       for (const { a, b, minGap: pairGap } of gapPairs) {
         const again = enforceGapPair(rawGroups, a, b, pairGap, locked);
