@@ -15,6 +15,8 @@ const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-dai
 const { toDailyReportImagePages, toNotLiveReportImagePages, sortNotLiveReportRows, buildNotLiveCsvRows } = require("./weixin-bot-report");
 const { renderDailyStarPng } = require("./weixin-bot-daily-star");
 const { parseBindCommand, formatBindReply, createAnchorBindService } = require("./bot-anchor-bind");
+const { renderPkGroupsPng } = require("./pk-group-image");
+const { readLayoutSnapshot } = require("./pk-layout-snapshot");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -266,6 +268,18 @@ function parseBotCommand(input) {
       query: simpleWaveMatch[1].trim(),
       dateSpec: null,
     };
+  }
+
+  // PK 分组：发组名（9.1 / 第1组 / 1组 / 组1）回对应分组图；发「分组 / 各组」回全部
+  const pkGroupLabel = original.match(/^\/?(\d{1,3}[.．]\d{1,3})$/);
+  if (pkGroupLabel) return { type: "pk-group-image", query: pkGroupLabel[1].replace("．", ".") };
+  const pkGroupIndex = withoutGender.match(/^(?:第\s*([0-9]{1,3})\s*组|([0-9]{1,3})\s*组|组\s*([0-9]{1,3}))$/);
+  if (pkGroupIndex) {
+    const index = Number(pkGroupIndex[1] || pkGroupIndex[2] || pkGroupIndex[3]);
+    return { type: "pk-group-image", query: String(index) };
+  }
+  if (/^\/?(?:分组图|全部分组|各组|分组)$/.test(original)) {
+    return { type: "pk-group-image", query: "" };
   }
 
   // 直接输入主播名/抖音号/主播 ID：返回库内全部相关数据
@@ -989,6 +1003,105 @@ async function handleBindCommand(args, command, bindService) {
   return true;
 }
 
+const PK_GROUP_CANON = (value) => String(value || "").replace(/\s+/g, "").replace(/[（(]/g, "(").replace(/[）)]/g, ")");
+
+/** 微信/QQ：发组名（9.1 / 第1组 / 分组）→ 回 PK 分组图 */
+async function handlePkGroupImage(args, command, db) {
+  const snapshot = readLayoutSnapshot();
+  if (!snapshot || !Array.isArray(snapshot.nameGroups) || !snapshot.nameGroups.length) {
+    await args.replyText("还没有保存分组。请先在软件「PK 分组」页保存一次分组，之后发组名（如 9.1 或 第1组）即可收到分组图。");
+    return;
+  }
+
+  const period = String(snapshot.period || "").trim();
+  const memberByCanon = new Map();
+  try {
+    const roster = await db.getPkRoster(period || undefined);
+    const all = [...(roster?.males || []), ...(roster?.females || [])];
+    for (const member of all) {
+      const key = PK_GROUP_CANON(member?.name);
+      if (key && !memberByCanon.has(key)) {
+        memberByCanon.set(key, {
+          name: member.name,
+          wave: Number(member.wave) || 0,
+          trimmedAvg: Number(member.trimmedAvg ?? member.trimmed ?? 0),
+          gender: member.gender || "",
+        });
+      }
+    }
+  } catch {
+    // 拿不到战力也能出图（显示 0）
+  }
+
+  const groups = snapshot.nameGroups.map((names, index) => {
+    const members = names
+      .map((name) => memberByCanon.get(PK_GROUP_CANON(name)) || { name, wave: 0, trimmedAvg: 0, gender: "" })
+      .sort((a, b) => (Number(b.wave) || 0) - (Number(a.wave) || 0));
+    const top4 = members.slice(0, 4).reduce((sum, m) => sum + (Number(m.wave) || 0), 0);
+    return {
+      label: String(snapshot.groupLabels?.[index] || "").trim() || `第${index + 1}组`,
+      members,
+      top4,
+      average: members.length ? members.reduce((s, m) => s + (Number(m.wave) || 0), 0) / members.length : 0,
+    };
+  });
+
+  const query = String(command.query || "").trim();
+  let targets = groups;
+  let matchedLabel = "";
+  if (query) {
+    if (/^\d{1,3}$/.test(query)) {
+      // 数字：优先按组序号（第N组），其次按「N」结尾的自定义组名
+      const index = Number(query) - 1;
+      targets = groups[index] ? [groups[index]] : [];
+      matchedLabel = groups[index]?.label || "";
+      if (!targets.length) {
+        targets = groups.filter((g) => PK_GROUP_CANON(g.label) === query);
+        matchedLabel = targets[0]?.label || "";
+      }
+    } else {
+      const key = PK_GROUP_CANON(query).toLowerCase();
+      targets = groups.filter((g) => PK_GROUP_CANON(g.label).toLowerCase() === key);
+      matchedLabel = targets[0]?.label || "";
+      if (!targets.length) {
+        // 容错：9.10 → 第10组 这类序号式组名
+        const tail = query.split(".")[1];
+        if (tail && /^\d{1,3}$/.test(tail)) {
+          const byIndex = groups[Number(tail) - 1];
+          if (byIndex) {
+            targets = [byIndex];
+            matchedLabel = byIndex.label;
+          }
+        }
+      }
+    }
+    if (!targets.length) {
+      const labels = groups.map((g) => g.label).join("、");
+      await args.replyText(`没有找到分组「${query}」。当前可用：${labels}（也可发「分组」看全部）`);
+      return;
+    }
+  }
+
+  try {
+    const buffer = await renderPkGroupsPng(
+      {
+        period,
+        groups: targets,
+        total: targets.reduce((sum, g) => sum + (g.members?.length || 0), 0),
+      },
+      { period, showWave: true, title: String(snapshot.name || "").trim() || "PK分组" }
+    );
+    const nameText = targets.map((g) => `${g.label}（${g.members.length}人）`).join("、");
+    await args.replyText(`PK分组 · ${nameText}`);
+    await args.replyImage({
+      buffer,
+      fileName: `PK分组_${matchedLabel || "全部"}_${localTodayIso()}.png`,
+    });
+  } catch (error) {
+    await args.replyText(`分组图生成失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics, bindService = null }) {
   if (!command) return false;
   if (command.type === "report") await sendReport(args, command, db, renderReportPng, { renderDailyStarPng });
@@ -998,6 +1111,7 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ren
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
+  else if (command.type === "pk-group-image") await handlePkGroupImage(args, command, db);
   else if (command.type === "bind" || command.type === "bind-status" || command.type === "unbind") {
     await handleBindCommand(args, command, bindService);
   }

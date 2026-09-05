@@ -1226,9 +1226,9 @@ test("CSV怎么导入 not fast-route as anchor profile", () => {
   assert.equal(matchFastRoute("业务日是什么", { parseBotCommand }), null);
 });
 
-test("5组 not parsed as anchor profile after group features removed", () => {
+test("组名解析为 PK 分组命令（组名不再落入主播查询）", () => {
   const { parseBotCommand } = require("./weixin-bot-commands");
-  assert.equal(parseBotCommand("5组"), null);
-  assert.equal(parseBotCommand("各组"), null);
+  assert.deepEqual(parseBotCommand("5组"), { type: "pk-group-image", query: "5" });
+  assert.deepEqual(parseBotCommand("各组"), { type: "pk-group-image", query: "" });
   assert.equal(parseBotCommand("第3组总分"), null);
 });

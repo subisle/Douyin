@@ -342,6 +342,9 @@ export function createHttpElectronApi(): ElectronAPI {
     getMonthlyReport: (month, gender) => request(`/reports/monthly${qs({ month, gender })}`),
     getPkRoster: (period, groupSize) => request(`/pk/roster${qs({ period, groupSize })}`),
     buildPkGroups: (payload) => request("/pk/groups", { method: "POST", body: payload }),
+    savePkLayoutSnapshot: async () => ({ success: true as const, data: null }),
+    readPkLayoutSnapshot: async () => ({ success: true as const, data: null }),
+    clearPkLayoutSnapshot: async () => ({ success: true as const, data: null }),
     getStarBattleScores: (period) => request(`/star-battle/scores${qs({ period })}`),
     saveStarBattleScore: (payload) =>
       request("/star-battle/scores", { method: "POST", body: payload }),

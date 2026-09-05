@@ -36,6 +36,7 @@ if (runtimeEnvPath) console.log(`[config] loaded ${runtimeEnvPath}`);
 
 const db = require("./db");
 const { createUpdater } = require("./updater");
+const pkLayoutSnapshot = require("./pk-layout-snapshot");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const { renderDailyReportPng } = require("./weixin-bot-report");
 const { createProjectBots } = require("./project-bots");
@@ -1276,6 +1277,31 @@ ipcMain.handle("auth:hasPassword", wrap(() => db.hasAppPassword()));
 // bot 日报图片渲染：通过渲染进程 Canvas 绘制，与桌面端导出完全一致
 ipcMain.handle("report:render-png", async (_event, report) => {
   return renderDailyReportViaRenderer(report);
+});
+
+// ── PK 分组快照（供微信/QQ bot 命令出图）──────────────────
+ipcMain.handle("pk:layout-snapshot-save", async (_event, snapshot) => {
+  try {
+    return { success: true, data: pkLayoutSnapshot.writeLayoutSnapshot(snapshot) };
+  } catch (error) {
+    console.error("[pk] 分组快照保存失败:", error?.message || error);
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+ipcMain.handle("pk:layout-snapshot-read", async () => {
+  try {
+    return { success: true, data: pkLayoutSnapshot.readLayoutSnapshot() };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+ipcMain.handle("pk:layout-snapshot-clear", async () => {
+  try {
+    pkLayoutSnapshot.clearLayoutSnapshot();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
 });
 
 // ── 自动更新 IPC ──────────────────────────────────────────

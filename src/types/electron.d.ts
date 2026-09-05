@@ -824,6 +824,27 @@ export interface PkRosterData {
 export type PkGroupMode = "high_to_low" | "balanced" | "score_capable" | "preset";
 export type PkScoreField = "wave" | "latestWave";
 
+/** PK 分组布局快照：同步给主进程，供微信/QQ bot 命令出图 */
+export interface PkLayoutSnapshotInput {
+  id?: string;
+  name?: string;
+  note?: string;
+  period?: string;
+  mode?: string;
+  scoreDisplay?: string;
+  groupSize?: number;
+  firstStart?: string;
+  stepMinutes?: number;
+  reviveExtraMinutes?: number;
+  nameGroups: string[][];
+  groupLabels?: string[];
+}
+
+export type PkLayoutSnapshot = Required<
+  Pick<PkLayoutSnapshotInput, "nameGroups">
+> &
+  Omit<PkLayoutSnapshotInput, "nameGroups"> & { updatedAt: string };
+
 export interface BuildPkGroupsPayload {
   members: Array<{
     personId?: number;
@@ -1314,6 +1335,11 @@ declare global {
     buildPkGroups: (
       payload: BuildPkGroupsPayload
     ) => Promise<IpcResult<BuildPkGroupsResult>>;
+    savePkLayoutSnapshot: (
+      snapshot: PkLayoutSnapshotInput
+    ) => Promise<IpcResult<PkLayoutSnapshot | null>>;
+    readPkLayoutSnapshot: () => Promise<IpcResult<PkLayoutSnapshot | null>>;
+    clearPkLayoutSnapshot: () => Promise<IpcResult<null>>;
     getStarBattleScores: (period: string) => Promise<IpcResult<StarBattleScore[]>>;
     saveStarBattleScore: (
       payload: SaveStarBattleScorePayload

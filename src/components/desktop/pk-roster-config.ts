@@ -745,7 +745,57 @@ function writePresetsStore(store: SavedGroupPresetsStore) {
     // 无激活存档时清掉旧单槽，避免模式重分后 preferSaved 又把旧布局拉回来
     window.localStorage.removeItem(GROUPS_LAYOUT_STORAGE_KEY);
   }
+  // 同步激活分组快照给主进程（微信/QQ bot 发组名出图用）
+  syncLayoutSnapshotToMain(active);
   return next;
+}
+
+/** 把激活分组快照同步给主进程（失败静默：bot 侧只会提示未保存分组） */
+function syncLayoutSnapshotToMain(active: SavedGroupPreset | null | undefined) {
+  try {
+    const api = (
+      window as unknown as {
+        electronAPI?: {
+          savePkLayoutSnapshot?: (snapshot: {
+            id: string;
+            name: string;
+            note?: string;
+            period?: string;
+            mode?: string;
+            scoreDisplay?: string;
+            groupSize?: number;
+            firstStart?: string;
+            stepMinutes?: number;
+            reviveExtraMinutes?: number;
+            nameGroups: string[][];
+            groupLabels?: string[];
+          }) => Promise<unknown>;
+          clearPkLayoutSnapshot?: () => Promise<unknown>;
+        };
+      }
+    ).electronAPI;
+    if (!api) return;
+    if (active) {
+      void api.savePkLayoutSnapshot?.({
+        id: active.id,
+        name: active.name,
+        note: active.note,
+        period: active.period,
+        mode: active.mode,
+        scoreDisplay: active.scoreDisplay,
+        groupSize: active.groupSize,
+        firstStart: active.firstStart,
+        stepMinutes: active.stepMinutes,
+        reviveExtraMinutes: active.reviveExtraMinutes,
+        nameGroups: active.nameGroups,
+        groupLabels: active.groupLabels,
+      });
+    } else {
+      void api.clearPkLayoutSnapshot?.();
+    }
+  } catch {
+    // 忽略同步失败
+  }
 }
 
 export function loadSavedGroupPresets(): SavedGroupPresetsStore {
