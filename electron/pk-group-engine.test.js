@@ -305,7 +305,8 @@ test("n<16 allows fewer than 4 groups with warning", () => {
 });
 
 test("preset mode loads 815 locked groups with 15-min schedule", () => {
-  const { PRESET_BATTLE_GROUPS } = require("../shared/pk-preset-battle-groups");
+  const { PRESET_BATTLE_GROUPS, PRESET_BATTLE_META } = require("../shared/pk-preset-battle-groups");
+  const { DEFAULT_GAP_PAIRS } = require("./pk-group-engine");
   const members = PRESET_BATTLE_GROUPS.flat().map((name, i) => ({
     name,
     personId: i + 1,
@@ -322,23 +323,42 @@ test("preset mode loads 815 locked groups with 15-min schedule", () => {
   assert.equal(result.ok, true);
   assert.equal(result.mode, "preset");
   assert.equal(result.modeLabel, "815");
-  assert.equal(result.groupCount, 8);
-  assert.deepEqual(result.sizes, [9, 7, 7, 7, 7, 7, 7, 7]);
-  assert.ok(result.groups.every((g) => g.members.length >= 7 && g.members.length <= 9));
-  assert.ok(result.groups[5].members.some((m) => m.name === "玖依"));
-  assert.ok(result.groups[7].members.some((m) => m.name === "狼影"));
-  assert.ok(result.groups[7].members.some((m) => m.name === "啸恒"));
-  assert.equal(result.groups[0].startTime, "12:15");
-  assert.equal(result.groups[1].startTime, "12:30");
-  assert.equal(result.groups[3].startTime, "13:00");
-  // 第4组后插两场 5 分钟复活赛 → 第5组起顺延 5 分钟（间隔 20）
-  assert.equal(result.groups[4].startTime, "13:20");
-  assert.equal(result.groups[6].startTime, "13:50");
-  assert.equal(result.groups[7].startTime, "14:05");
-  assert.ok(result.groups[2].members.some((m) => m.name === "浩月"));
-  assert.ok(result.groups[4].members.some((m) => m.name === "狼九"));
-  assert.ok(result.groups[4].members.some((m) => m.name === "浩鸣"));
-  assert.equal(result.groups[0].members.map((m) => m.name).join(","), PRESET_BATTLE_GROUPS[0].join(","));
+  assert.equal(result.groupCount, PRESET_BATTLE_GROUPS.length);
+  // 组规模与预设完全一致（预设数据调整后此处自动跟随，不再硬编码）
+  assert.deepEqual(result.sizes, PRESET_BATTLE_GROUPS.map((g) => g.length));
+  // 每组成员与预设一一对应
+  result.groups.forEach((g, i) => {
+    const expectedNames = [...PRESET_BATTLE_GROUPS[i].map((n) => String(n).trim())].sort();
+    const actualNames = g.members.map((m) => String(m.name).trim()).sort();
+    assert.deepEqual(actualNames, expectedNames);
+  });
+  // 间隔对约束满足（玖依/狼影、啸泽/啸帆等，按 DEFAULT_GAP_PAIRS 动态校验）
+  const groupIndexOf = (name) =>
+    result.groups.findIndex((g) =>
+      g.members.some((m) => String(m.name).trim() === String(name).trim())
+    );
+  for (const pair of DEFAULT_GAP_PAIRS) {
+    const ia = groupIndexOf(pair.a);
+    const ib = groupIndexOf(pair.b);
+    if (ia >= 0 && ib >= 0) {
+      assert.ok(
+        Math.abs(ia - ib) >= (pair.minGap || 1),
+        `${pair.a}/${pair.b} 间隔不足：${Math.abs(ia - ib)} < ${pair.minGap || 1}`
+      );
+    }
+  }
+  // 时间表：firstStart 起每组 +stepMinutes，第5组起顺延复活赛时间
+  const firstStart = String(PRESET_BATTLE_META.firstStart || "12:15");
+  const step = Number(PRESET_BATTLE_META.stepMinutes) || 15;
+  const revive = Number(PRESET_BATTLE_META.reviveExtraMinutes) || 0;
+  const [fh, fm] = firstStart.split(":").map(Number);
+  result.groups.forEach((g, i) => {
+    const totalMinutes = fh * 60 + fm + i * step + (i >= 4 ? revive : 0);
+    const expected = `${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(
+      totalMinutes % 60
+    ).padStart(2, "0")}`;
+    assert.equal(g.startTime, expected, `第${i + 1}组开始时间`);
+  });
   // test bumps G5 wave so strongest becomes 5
   assert.equal(result.strongestGroup, 5);
 });
