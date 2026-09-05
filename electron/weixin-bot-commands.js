@@ -1034,10 +1034,15 @@ async function handlePkGroupImage(args, command, db) {
   }
 
   const groups = snapshot.nameGroups.map((names, index) => {
-    const members = names
-      .map((name) => memberByCanon.get(PK_GROUP_CANON(name)) || { name, wave: 0, trimmedAvg: 0, gender: "" })
-      .sort((a, b) => (Number(b.wave) || 0) - (Number(a.wave) || 0));
-    const top4 = members.slice(0, 4).reduce((sum, m) => sum + (Number(m.wave) || 0), 0);
+    // 保留快照里的成员顺序（组内排位由保存时的顺序决定，不按战力重排）
+    const members = names.map(
+      (name) => memberByCanon.get(PK_GROUP_CANON(name)) || { name, wave: 0, trimmedAvg: 0, gender: "" }
+    );
+    const top4 = members
+      .map((m) => Number(m.wave) || 0)
+      .sort((a, b) => b - a)
+      .slice(0, 4)
+      .reduce((sum, v) => sum + v, 0);
     return {
       label: String(snapshot.groupLabels?.[index] || "").trim() || `第${index + 1}组`,
       members,
@@ -1091,11 +1096,10 @@ async function handlePkGroupImage(args, command, db) {
       },
       { period, showWave: true, title: String(snapshot.name || "").trim() || "PK分组" }
     );
-    const nameText = targets.map((g) => `${g.label}（${g.members.length}人）`).join("、");
-    await args.replyText(`PK分组 · ${nameText}`);
+    const nameText = targets.length === groups.length ? "" : `${matchedLabel || query}`;
     await args.replyImage({
       buffer,
-      fileName: `PK分组_${matchedLabel || "全部"}_${localTodayIso()}.png`,
+      fileName: `PK分组_${nameText || "全部"}_${localTodayIso()}.png`,
     });
   } catch (error) {
     await args.replyText(`分组图生成失败：${error instanceof Error ? error.message : String(error)}`);
