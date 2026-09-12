@@ -65,6 +65,7 @@ import {
   syncBuiltInGroupsToPkStorage,
   syncAugustEndGroupsToPkStorage,
   syncSeptemberGroupsToPkStorage,
+  syncSeptember6GroupsToPkStorage,
   syncSnapshotGroupsToPkStorage,
   downloadPkGroupsCsv,
   exportPkGroupsToCsv,
@@ -824,9 +825,10 @@ export function PkRosterPage() {
   );
 
   useEffect(() => {
-    // 挂载时同步内置分组存档（815 + 8月月底 + 9.1分组），确保预设列表可见
+    // 挂载时同步内置分组存档（815 + 8月月底 + 9.1分组 + 9.6分组），确保预设列表可见
     syncAugustEndGroupsToPkStorage({ makeActive: false });
     syncSeptemberGroupsToPkStorage({ makeActive: false });
+    syncSeptember6GroupsToPkStorage({ makeActive: false });
     // 本地无任何存档时，从主进程快照恢复（如「9.1分组」），保证 bot 与软件一致
     void (async () => {
       const restored = await syncSnapshotGroupsToPkStorage();

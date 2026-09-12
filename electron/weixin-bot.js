@@ -1146,7 +1146,25 @@ class WeixinBotService extends EventEmitter {
       await this.stopMonitoring(account.accountId, { updateStatus: false });
     }
 
-    this._acquireRunnerLease();
+    try {
+      this._acquireRunnerLease();
+    } catch (error) {
+      if (error?.code !== "BOT_RUNNER_LOCKED") throw error;
+      // 重启竞态：旧实例的锁可能还没过期（临终续约）→ 在一个 TTL 周期内等锁释放，不直接放弃
+      const deadline = Date.now() + this.runnerLeaseTtlMs + 5_000;
+      let acquired = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        try {
+          this._acquireRunnerLease();
+          acquired = true;
+          break;
+        } catch (retryError) {
+          if (retryError?.code !== "BOT_RUNNER_LOCKED") throw retryError;
+        }
+      }
+      if (!acquired) throw error;
+    }
 
     const controller = new AbortController();
     account.monitorController = controller;

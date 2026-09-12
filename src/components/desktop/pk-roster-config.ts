@@ -227,23 +227,24 @@ export function syncAugustEndGroupsToPkStorage(options?: {
   });
 }
 
-// ===== 9月1日内置分组（9.1分组 · 43人 · 6组）=====
+// ===== 9月1日内置分组（9.1分组 · 44人 · 6组）=====
 export const BUILTIN_SEPTEMBER_PRESET_NAME = "9.1分组";
 export const BUILTIN_SEPTEMBER_GROUPS: string[][] = [
-  // 第1组开头：浩泽 | 第3组中间：浩坤 | 第6组末尾：浩森（2026-09 · 组内顺序即展示顺序）
-  ["浩泽", "玖玥", "浩雨", "狼征", "狼哲", "狼佑", "啸阳"],
-  ["浩龙", "浩楠", "浩月", "狼途", "狼艺", "啸强", "浩宁"],
-  ["浩哲", "啸泽", "浩阳", "浩坤", "浩玟", "狼俊", "狼赫"],
+  // 第1组开头：浩泽 | 第3组中间：浩森 | 第6组末尾：浩坤·啸泽（2026-09 · 组内顺序即展示顺序）
+  // 狼途·狼俊同第1组 · 狼征避开狼澈/狼赫/浩雨（放第2组）· 狼兴后置（放第6组）· 玖玉补入第2组
+  ["狼途", "狼俊", "浩泽", "玖玥", "浩雨", "狼哲", "狼佑"],
+  ["浩龙", "浩楠", "浩月", "狼艺", "啸强", "浩宁", "狼征", "玖玉"],
+  ["浩森", "浩哲", "浩阳", "浩玟", "狼赫", "狼小宝", "啸阳"],
   ["狼澈", "浩冬", "浩鸣", "南方楠", "啸帆", "啸宇", "狼辉"],
-  ["狼兴", "狼辰", "啸安", "浩沐", "玖雪", "玖妹", "狼泽"],
-  ["狼小宝", "浩启", "啸辰", "啸森", "浩运", "浩杰", "狼仔", "浩森"],
+  ["狼辰", "啸安", "浩沐", "玖雪", "玖妹", "狼泽", "浩启"],
+  ["啸辰", "啸森", "浩运", "浩杰", "狼仔", "狼兴", "浩坤", "啸泽"],
 ];
 export const BUILTIN_SEPTEMBER_META = {
   period: "2026-09",
   groupSize: 7,
   firstStart: "12:15",
   stepMinutes: 15,
-  reviveExtraMinutes: 0,
+  reviveExtraMinutes: 10,
 };
 
 /** 当前代码锁定的 9.1分组名组（拷贝，避免外部 mutate） */
@@ -292,6 +293,86 @@ export function syncSeptemberGroupsToPkStorage(options?: {
     firstStart: BUILTIN_SEPTEMBER_META.firstStart,
     stepMinutes: BUILTIN_SEPTEMBER_META.stepMinutes,
     reviveExtraMinutes: BUILTIN_SEPTEMBER_META.reviveExtraMinutes,
+    note,
+    makeActive: options?.makeActive === true,
+  });
+}
+
+// ===== 9月6日内置分组（9.6分组 · 晋级赛 · 34人 · 5组）=====
+export const BUILTIN_SEPTEMBER6_PRESET_NAME = "9.6分组";
+export const BUILTIN_SEPTEMBER6_GROUPS: string[][] = [
+  // 晋级赛：08:15 起每 15 分钟一组，共 5 组（组内顺序即展示顺序）· 无复活赛
+  ["玖玥", "浩鸣", "啸帆", "浩沐", "浩泽", "玖雪", "狼佑"],
+  ["浩龙", "啸安", "浩楠", "啸强", "浩玟", "狼澈", "啸阳"],
+  ["浩哲", "玖玉", "狼哲", "浩冬", "浩宁", "浩阳"],
+  ["狼兴", "狼仔", "啸森", "浩运", "狼辉", "浩杰", "浩雨"],
+  ["南方楠", "浩启", "浩坤", "浩森", "啸泽", "啸宇", "狼小宝"],
+];
+/** 9.6分组的组名（晋级赛，组内顺序即展示顺序） */
+export const BUILTIN_SEPTEMBER6_GROUP_LABELS: string[] = [
+  "晋级1组",
+  "晋级2组",
+  "晋级3组",
+  "晋级4组",
+  "晋级5组",
+];
+
+export const BUILTIN_SEPTEMBER6_META = {
+  period: "2026-09",
+  groupSize: 7,
+  firstStart: "08:15",
+  stepMinutes: 15,
+  reviveExtraMinutes: 0,
+};
+
+/** 当前代码锁定的 9.6分组名组（拷贝，避免外部 mutate） */
+export function getSeptember6NameGroups(): string[][] {
+  return (BUILTIN_SEPTEMBER6_GROUPS || []).map((row) =>
+    (row || []).map((n) => String(n || "").trim()).filter(Boolean)
+  );
+}
+
+/**
+ * 把代码内置 9.6分组 写入 PK 分组命名存档「9.6分组」。
+ * 已存在则不覆盖用户修改（持久化保护，同 9.1分组）；默认 makeActive=false。
+ */
+export function syncSeptember6GroupsToPkStorage(options?: {
+  makeActive?: boolean;
+  force?: boolean;
+}): SavedGroupPreset | null {
+  if (typeof window === "undefined") return null;
+  const nameGroups = getSeptember6NameGroups();
+  if (!nameGroups.length) return null;
+
+  const existing = listSavedGroupPresets().find(
+    (p) => String(p.name || "").trim() === BUILTIN_SEPTEMBER6_PRESET_NAME
+  );
+  if (existing && options?.force !== true) {
+    if (options?.makeActive !== false) {
+      setActiveGroupPreset(existing.id);
+    }
+    return existing;
+  }
+
+  const total = nameGroups.reduce((s, g) => s + g.length, 0);
+  const note = [
+    "9月6日晋级赛分组",
+    `${nameGroups.length} 组 · ${total} 人`,
+    `规模 ${nameGroups.map((g) => g.length).join("+")}`,
+    `${BUILTIN_SEPTEMBER6_META.firstStart} 起 · 每组 ${BUILTIN_SEPTEMBER6_META.stepMinutes} 分钟`,
+    `同步 ${new Date().toISOString()}`,
+  ].join(" · ");
+  return saveNamedGroupPreset({
+    id: existing?.id,
+    name: BUILTIN_SEPTEMBER6_PRESET_NAME,
+    nameGroups,
+    groupLabels: BUILTIN_SEPTEMBER6_GROUP_LABELS.slice(0, nameGroups.length),
+    period: BUILTIN_SEPTEMBER6_META.period,
+    mode: "preset",
+    groupSize: BUILTIN_SEPTEMBER6_META.groupSize,
+    firstStart: BUILTIN_SEPTEMBER6_META.firstStart,
+    stepMinutes: BUILTIN_SEPTEMBER6_META.stepMinutes,
+    reviveExtraMinutes: BUILTIN_SEPTEMBER6_META.reviveExtraMinutes,
     note,
     makeActive: options?.makeActive === true,
   });
@@ -528,8 +609,9 @@ function resolveNamedBattleGroups(
       members.length > 0
         ? members.reduce((sum, item) => sum + memberStrength(item, scoreField), 0) / members.length
         : 0;
-    // 第4组后插复活赛：第5组起（index>=4）顺延 reviveExtraMinutes
-    const startTime = formatHm(startMin + index * stepMinutes + (index >= 4 ? reviveExtraMinutes : 0));
+    // 复活赛插在前半程（floor(组数/2) 组）之后：之后的组顺延 reviveExtraMinutes
+    const reviveAfter = Math.max(1, Math.floor(nameGroups.length / 2));
+    const startTime = formatHm(startMin + index * stepMinutes + (index >= reviveAfter ? reviveExtraMinutes : 0));
     return {
       key: `group-${index + 1}`,
       label: `${labelPrefix}${index + 1}组`,
@@ -870,6 +952,8 @@ function writePresetsStore(store: SavedGroupPresetsStore) {
   }
   // 同步激活分组快照给主进程（微信/QQ bot 发组名出图用）
   syncLayoutSnapshotToMain(active);
+  // 同步全部命名分组给主进程（bot 可直接发「9.6」取 9.6分组，不必先切成激活）
+  syncAllPresetsToMain(presets);
   return next;
 }
 
@@ -916,6 +1000,26 @@ function syncLayoutSnapshotToMain(active: SavedGroupPreset | null | undefined) {
     } else {
       void api.clearPkLayoutSnapshot?.();
     }
+  } catch {
+    // 忽略同步失败
+  }
+}
+
+/**
+ * 把全部命名分组同步给主进程（失败静默）。
+ * bot 侧按名字取用，因此 9.1分组 / 9.6分组 / 8月月底 可以并存。
+ */
+function syncAllPresetsToMain(presets: SavedGroupPreset[]) {
+  try {
+    const api = (
+      window as unknown as {
+        electronAPI?: {
+          savePkGroupsPresets?: (list: SavedGroupPreset[]) => Promise<unknown>;
+        };
+      }
+    ).electronAPI;
+    if (!api?.savePkGroupsPresets) return;
+    void api.savePkGroupsPresets(presets.map((p) => ({ ...p })));
   } catch {
     // 忽略同步失败
   }
@@ -1138,16 +1242,19 @@ export function normalizeGroupSize(value: number | string | undefined | null, fa
 /** 按开始时间 + 间隔给各组贴连麦时间（导出图 / 卡片共用） */
 export function attachScheduleToGroups<T extends { startTime?: string; scheduleLabel?: string }>(
   groups: T[],
-  options?: { firstStart?: string; stepMinutes?: number; reviveExtraMinutes?: number }
+  options?: { firstStart?: string; stepMinutes?: number; reviveExtraMinutes?: number; reviveAfterGroup?: number }
 ): T[] {
   const firstStart = normalizeFirstStart(options?.firstStart);
   const stepMinutes = normalizeStepMinutes(options?.stepMinutes);
   const reviveExtraMinutes = normalizeReviveExtraMinutes(options?.reviveExtraMinutes);
   const match = firstStart.match(/^(\d{1,2}):(\d{2})$/);
   const startMin = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
+  const defAfter = Math.max(1, Math.floor(groups.length / 2));
+  const rawAfter = Number(options?.reviveAfterGroup);
+  const reviveAfter = Number.isFinite(rawAfter) && rawAfter > 0 ? rawAfter : defAfter;
   return groups.map((g, i) => {
-    // 第4组后插复活赛：第5组起（index>=4）顺延 reviveExtraMinutes
-    const startTime = formatHm(startMin + i * stepMinutes + (i >= 4 ? reviveExtraMinutes : 0));
+    // 复活赛插在前半程（reviveAfter 组）之后：之后的组顺延 reviveExtraMinutes
+    const startTime = formatHm(startMin + i * stepMinutes + (i >= reviveAfter ? reviveExtraMinutes : 0));
     return {
       ...g,
       startTime,

@@ -295,7 +295,7 @@ function buildColumns(
 export interface DrawReportOptions {
   date: string;
   rows: DailyReportRow[];
-  gender: "male" | "female";
+  gender: "male" | "female" | "all";
   customTitle?: string;
   scale?: number;
   visibleColumns?: ColumnKey[];
@@ -395,10 +395,10 @@ export function drawReportToCanvas(
   const day   = parseInt(parts[2]) || 1;
   const formattedDate = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
-  const genderText = gender === "male" ? "男" : "女";
-  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑（与软件配置一致）
+  const genderText = gender === "male" ? "男" : gender === "female" ? "女" : "全团";
+  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑 / 全团（与软件配置一致）
   const titleBase = customTitle.trim()
-    || (gender === "female" ? "薇笑传媒主播数据统计" : "星嗨艺创主播数据统计");
+    || (gender === "female" ? "薇笑传媒主播数据统计" : gender === "male" ? "星嗨艺创主播数据统计" : "全团主播数据统计");
   const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
   const titleText = hideDateInTitle
     ? `${titleBase}${pageSuffix ? ` ${pageSuffix}` : ""}`
@@ -816,12 +816,12 @@ export function drawAppleReportToCanvas(
   } = opts;
   const font = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", sans-serif';
   const mono = '"SF Mono", "Menlo", "Consolas", monospace';
-  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑（不按样式反推）
+  // 未传自定义标题时按性别默认：男团星嗨 / 女队薇笑 / 全团（不按样式反推）
   const titleBaseRaw = customTitle.trim()
-    || (gender === "female" ? "薇笑传媒主播数据统计" : "星嗨艺创主播数据统计");
+    || (gender === "female" ? "薇笑传媒主播数据统计" : gender === "male" ? "星嗨艺创主播数据统计" : "全团主播数据统计");
   const pageSuffix = formatDailyReportPageSuffix(pageIndex, pageCount);
   const titleBase = pageSuffix ? `${titleBaseRaw} ${pageSuffix}` : titleBaseRaw;
-  const genderText = gender === "male" ? "男团" : "女队";
+  const genderText = gender === "male" ? "男团" : gender === "female" ? "女队" : "全团";
   const notLiveDaysLabel = formatMonthNotLiveDaysLabel(date);
   const dailyWaveLabel = formatDailyWaveLabel(date);
   const allRows = statsRows && statsRows.length ? statsRows : rows;

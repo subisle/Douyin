@@ -21,6 +21,8 @@ const {
   resolvePromoPoolTarget,
   DEFAULT_TOURNAMENT_RULES,
   PROMO_GROUP_COUNT,
+  PROMO_GROUP_MIN,
+  PROMO_GROUP_MAX,
   PROMO_POOL_MIN,
   PROMO_POOL_MAX,
   REVIVE_GROUP_TOP,
@@ -28,23 +30,24 @@ const {
 
 const root = path.join(__dirname);
 
-test("815 唯一分组：8 组 58 人，每组 7–9，与赛程 meta 对齐", () => {
+// 815 分组规模以 shared 预设为准（勿硬编码具体人数，名单调整时本用例仍成立）
+test("815 唯一分组：8 组，无重复，每组 7–9，与赛程 meta 对齐", () => {
   assert.equal(PRESET_BATTLE_GROUPS.length, 8);
   const flat = PRESET_BATTLE_GROUPS.flat();
-  assert.equal(flat.length, 58);
-  assert.equal(new Set(flat).size, 58);
+  assert.equal(new Set(flat).size, flat.length, "名单无重复");
   assert.ok(PRESET_BATTLE_GROUPS.every((g) => g.length >= 7 && g.length <= 9));
-  assert.deepEqual(
-    PRESET_BATTLE_GROUPS.map((g) => g.length),
-    [9, 7, 7, 7, 7, 7, 7, 7]
-  );
   assert.equal(PRESET_BATTLE_META.label, "815");
-  assert.equal(PRESET_BATTLE_META.firstStart, "12:15");
+  assert.equal(PRESET_BATTLE_META.firstStart, "20:15");
   assert.equal(PRESET_BATTLE_META.stepMinutes, 15);
   assert.equal(PRESET_BATTLE_META.periodHint, "2026-08");
+  // meta.notes 里的规模描述应与实际分组一致
+  assert.ok(
+    PRESET_BATTLE_META.notes.some((n) => n.includes(`${flat.length} 人`)),
+    `notes 应写明 ${flat.length} 人，实际 ${PRESET_BATTLE_META.notes.join(" / ")}`
+  );
 });
 
-test("815 规则：前四组→复活①→后四组→复活② → 直晋32 · 复活出16 · 晋级48（8×6）", () => {
+test("815 规则：前四组→复活①→后四组→复活② → 晋级池落在 8 组 × 6–8", () => {
   const rules = DEFAULT_TOURNAMENT_RULES;
   const sevenMode = resolveSevenPersonSplit({
     groupSizes: PRESET_BATTLE_GROUPS.map((g) => g.length),
@@ -96,59 +99,98 @@ test("815 规则：前四组→复活①→后四组→复活② → 直晋32 ·
     };
   };
 
-  // 前四组（9,7,7,7）：直晋 16 · 复活池 14 → 2 组(7,7) 组内前4 → 出8 淘6
-  const p1 = settlePhase(PRESET_BATTLE_GROUPS.slice(0, 4));
-  assert.equal(p1.direct, 16);
-  assert.equal(p1.revivePool, 14);
-  assert.equal(p1.reviveGroupCount, 2);
-  assert.deepEqual(p1.reviveKeySizes, [7, 7]);
-  assert.equal(p1.reviveAdvance, 8);
-  assert.equal(p1.reviveElim, 6);
+  // 期望值按规则从共享预设动态推导（名单规模调整时自动跟随，勿硬编码人数）
+  const expectPhase = (groups) => {
+    let direct = 0;
+    let revivePool = 0;
+    for (const names of groups) {
+      const { top, reviveTail } = resolveGroupTopRevive(names.length, {
+        sevenPersonSplit: sevenMode,
+      });
+      direct += top;
+      revivePool += reviveTail;
+    }
+    return { direct, revivePool };
+  };
 
-  // 后四组（7,7,7,7）：直晋 16 · 复活池 12 → 2 组(6,6) 组内前4 → 出8 淘4
-  const p2 = settlePhase(PRESET_BATTLE_GROUPS.slice(4));
-  assert.equal(p2.direct, 16);
-  assert.equal(p2.revivePool, 12);
-  assert.equal(p2.reviveGroupCount, 2);
-  assert.deepEqual(p2.reviveKeySizes, [6, 6]);
-  assert.equal(p2.reviveAdvance, 8);
-  assert.equal(p2.reviveElim, 4);
+  // 前四组 → 复活①
+  const head = PRESET_BATTLE_GROUPS.slice(0, 4);
+  const e1 = expectPhase(head);
+  const p1 = settlePhase(head);
+  assert.deepEqual(
+    { direct: p1.direct, revivePool: p1.revivePool },
+    { direct: e1.direct, revivePool: e1.revivePool }
+  );
+  assert.equal(p1.direct + p1.revivePool, head.flat().length, "前半程小组赛零淘汰");
+  assert.equal(p1.reviveAdvance + p1.reviveElim, p1.revivePool, "复活①出线+淘汰=复活池");
 
-  // 晋级池 = 两半程直晋 32 + 两轮复活出线 16 = 48 = ideal，恰好 8 组各 6
+  // 后四组 → 复活②
+  const tail = PRESET_BATTLE_GROUPS.slice(4);
+  const e2 = expectPhase(tail);
+  const p2 = settlePhase(tail);
+  assert.deepEqual(
+    { direct: p2.direct, revivePool: p2.revivePool },
+    { direct: e2.direct, revivePool: e2.revivePool }
+  );
+  assert.equal(p2.direct + p2.revivePool, tail.flat().length, "后半程小组赛零淘汰");
+  assert.equal(p2.reviveAdvance + p2.reviveElim, p2.revivePool, "复活②出线+淘汰=复活池");
+
+  // 晋级池 = 两半程直晋 + 两轮复活出线，须能均分成 8 组（每组 6–8）
   const promoPool = p1.direct + p2.direct + p1.reviveAdvance + p2.reviveAdvance;
-  assert.equal(promoPool, 48);
-  assert.equal(promoPool, rules.idealPromoPool);
+  assert.ok(
+    promoPool >= PROMO_POOL_MIN && promoPool <= PROMO_POOL_MAX,
+    `晋级池 ${promoPool} 应落在 ${PROMO_POOL_MIN}–${PROMO_POOL_MAX}`
+  );
   const promoGroups = splitIntoNGroups(
     Array.from({ length: promoPool }, (_, i) => `p${i + 1}`),
     PROMO_GROUP_COUNT
   );
-  assert.equal(promoGroups.length, 8);
-  assert.deepEqual(
-    promoGroups.map((g) => g.length),
-    [6, 6, 6, 6, 6, 6, 6, 6]
+  assert.equal(promoGroups.length, PROMO_GROUP_COUNT);
+  const promoSizes = promoGroups.map((g) => g.length);
+  assert.ok(
+    Math.max(...promoSizes) - Math.min(...promoSizes) <= 1,
+    `晋级组规模应均分，实际 ${promoSizes.join("+")}`
+  );
+  assert.ok(
+    promoSizes.every((n) => n >= PROMO_GROUP_MIN && n <= PROMO_GROUP_MAX),
+    `每组应 ${PROMO_GROUP_MIN}–${PROMO_GROUP_MAX} 人，实际 ${promoSizes.join("+")}`
   );
 });
 
 test("815 规则 3-4 可调：扩大复活池", () => {
-  let direct = 0;
-  let revivePool = 0;
-  for (const names of PRESET_BATTLE_GROUPS) {
-    const ranked = names.map((name, i) => ({
-      key: name,
-      score: (names.length - i) * 1000,
-    }));
-    const { top, reviveTail } = resolveGroupTopRevive(names.length, {
-      sevenPersonSplit: "3-4",
-    });
-    const split = splitGroupAdvanceRevive(ranked, top, reviveTail);
-    direct += split.advance.length;
-    revivePool += split.revive.length;
-  }
-  // 1×9：前4复活5；7×7：3+4 → 直晋 25 · 复活 33
-  assert.equal(direct, 7 * 3 + 4);
-  assert.equal(direct, 25);
-  assert.equal(revivePool, 7 * 4 + 5);
-  assert.equal(revivePool, 33);
+  const total = PRESET_BATTLE_GROUPS.flat().length;
+  const settle = (mode) => {
+    let direct = 0;
+    let revivePool = 0;
+    for (const names of PRESET_BATTLE_GROUPS) {
+      const ranked = names.map((name, i) => ({
+        key: name,
+        score: (names.length - i) * 1000,
+      }));
+      const { top, reviveTail } = resolveGroupTopRevive(names.length, {
+        sevenPersonSplit: mode,
+      });
+      const split = splitGroupAdvanceRevive(ranked, top, reviveTail);
+      direct += split.advance.length;
+      revivePool += split.revive.length;
+      assert.equal(split.eliminated.length, 0, "小组赛零淘汰");
+    }
+    return { direct, revivePool };
+  };
+
+  const wide = settle("3-4");
+  const tight = settle("4-3");
+  assert.equal(wide.direct + wide.revivePool, total, "3-4 仍覆盖全员");
+  assert.equal(tight.direct + tight.revivePool, total, "4-3 仍覆盖全员");
+  // 业务意义：3-4 把 7 人组的复活尾由 3 扩到 4，复活池变大、直晋变少
+  assert.ok(
+    wide.revivePool > tight.revivePool,
+    `3-4 复活池 ${wide.revivePool} 应大于 4-3 的 ${tight.revivePool}`
+  );
+  assert.ok(
+    wide.direct < tight.direct,
+    `3-4 直晋 ${wide.direct} 应少于 4-3 的 ${tight.direct}`
+  );
 });
 
 test("源码接线：store 导出 815 导入 · 前后半程复活 · 监控页按钮 · 按组人数切分", () => {

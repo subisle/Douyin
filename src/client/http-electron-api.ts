@@ -345,6 +345,8 @@ export function createHttpElectronApi(): ElectronAPI {
     savePkLayoutSnapshot: async () => ({ success: true as const, data: null }),
     readPkLayoutSnapshot: async () => ({ success: true as const, data: null }),
     clearPkLayoutSnapshot: async () => ({ success: true as const, data: null }),
+    savePkGroupsPresets: async () => ({ success: true as const, data: [] }),
+    readPkGroupsPresets: async () => ({ success: true as const, data: [] }),
     getStarBattleScores: (period) => request(`/star-battle/scores${qs({ period })}`),
     saveStarBattleScore: (payload) =>
       request("/star-battle/scores", { method: "POST", body: payload }),

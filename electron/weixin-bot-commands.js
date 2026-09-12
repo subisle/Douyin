@@ -15,8 +15,6 @@ const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-dai
 const { toDailyReportImagePages, toNotLiveReportImagePages, sortNotLiveReportRows, buildNotLiveCsvRows } = require("./weixin-bot-report");
 const { renderDailyStarPng } = require("./weixin-bot-daily-star");
 const { parseBindCommand, formatBindReply, createAnchorBindService } = require("./bot-anchor-bind");
-const { renderPkGroupsPng } = require("./pk-group-image");
-const { readLayoutSnapshot } = require("./pk-layout-snapshot");
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
@@ -48,8 +46,20 @@ function parseDateSpec(value) {
   if (full) return { type: "date", year: Number(full[1]), month: Number(full[2]), day: Number(full[3]) };
   const compact = text.match(/(20\d{2})(\d{2})(\d{2})/);
   if (compact) return { type: "date", year: Number(compact[1]), month: Number(compact[2]), day: Number(compact[3]) };
+  // 年月（2026年9月 / 2026-09）：月粒度查询
+  const yearMonth = text.match(/(20\d{2})\s*年\s*(\d{1,2})\s*月?$/);
+  if (yearMonth) return { type: "month", year: Number(yearMonth[1]), month: Number(yearMonth[2]) };
+  // 年（2026年 / 2026）：年粒度查询
+  const yearOnly = text.match(/^(20\d{2})\s*年?$/);
+  if (yearOnly) return { type: "year", year: Number(yearOnly[1]) };
   const monthDay = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/);
   if (monthDay) return { type: "month-day", month: Number(monthDay[1]), day: Number(monthDay[2]) };
+  // 点式月日（9.1 / 9.15 / 9.1日）：月粒度+日
+  const dotMonthDay = text.match(/^(\d{1,2})[.．](\d{1,3})[日号]?$/);
+  if (dotMonthDay) return { type: "month-day", month: Number(dotMonthDay[1]), day: Number(dotMonthDay[2]) };
+  // 仅月（9月）：月粒度查询（按当年）
+  const monthOnly = text.match(/^(\d{1,2})\s*月$/);
+  if (monthOnly) return { type: "month-only", month: Number(monthOnly[1]) };
   const day = text.match(/(?:^|\s)(\d{1,2})\s*[日号](?=$|\s|音浪|文件|日报|报告|数据|_|\.)/);
   if (day) return { type: "day", day: Number(day[1]) };
   // normalizeText 去空格后：24号数据 / 24号音浪
@@ -90,8 +100,20 @@ function resolveMonthSpec(spec, fallbackDate = null) {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
-/** 仅从用户文字解析导入日期；不读文件名，避免误把 22 号发的文件落到 22 */
-function parseExplicitImportDateFromText(text) {
+const TRAILING_DATE_RE =
+  /(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|20\d{2}[年./-]\d{1,2}[月./-]?|20\d{2}年?|\d{1,2}\s*月|\d{1,2}\s*[日号]|\d{1,2}[.．]\d{1,3})$/;
+
+/** 「艺名 9月」→ { query: "艺名", dateSpec: month-only }；无尾部日期则原样返回 */
+function splitTrailingDateSpec(text) {
+  const t = normalizeText(text);
+  const m = t.match(TRAILING_DATE_RE);
+  if (!m || !m.index) return { query: t, dateSpec: null };
+  const query = t.slice(0, m.index).trim();
+  if (!query) return { query: t, dateSpec: null };
+  return { query, dateSpec: parseDateSpec(m[1]) };
+}
+
+/** 仅从用户文字解析导入日期；不读文件名，避免误把 22 号发的文件落到 22 */function parseExplicitImportDateFromText(text) {
   const original = normalizeText(text);
   if (!original) return null;
   // 优先识别「24号数据 / 24号音浪数据 / 数据24号」
@@ -168,6 +190,10 @@ function resolveDateSpec(spec, fallbackDate = null) {
   if (spec.type === "date") return toIsoDate(spec.year, spec.month, spec.day);
   if (spec.type === "month-day") return toIsoDate(Number(fallback.slice(0, 4)), spec.month, spec.day);
   if (spec.type === "day") return toIsoDate(Number(fallback.slice(0, 4)), Number(fallback.slice(5, 7)), spec.day);
+  // 月粒度 → 当月 1 号；年粒度 → 当年 1 月 1 号（聚合查询在各自 handler 里另算）
+  if (spec.type === "month") return toIsoDate(spec.year, spec.month, 1);
+  if (spec.type === "month-only") return toIsoDate(Number(fallback.slice(0, 4)), spec.month, 1);
+  if (spec.type === "year") return toIsoDate(spec.year, 1, 1);
   return fallback;
 }
 
@@ -195,8 +221,12 @@ function parseBotCommand(input) {
 
   const withoutGender = original.replace(/(?:男团|男队|男性|女团|女队|女性)/g, "").trim();
 
+  // 报告/导出类命令只认「某一天」；月/年粒度 spec 对它们无意义 → 归一为 null（走默认日期）
+  const toDailySpec = (spec) =>
+    spec && (spec.type === "month" || spec.type === "month-only" || spec.type === "year") ? null : spec;
+
   const fileMatch = withoutGender.match(/^(?:\/?(?:音浪文件|导出音浪(?:文件)?))(?:\s*(.+))?$/i);
-  if (fileMatch) return { type: "export-wave-file", dateSpec: parseDateSpec(fileMatch[1] || "") };
+  if (fileMatch) return { type: "export-wave-file", dateSpec: toDailySpec(parseDateSpec(fileMatch[1] || "")) };
 
   if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
   if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
@@ -205,7 +235,7 @@ function parseBotCommand(input) {
     || withoutGender.match(/^(.+?)\s*(?:未开播天数报告|未开播报告|未播天数报告|未播报告)$/);
   if (notLiveMatch) {
     const rest = String(notLiveMatch[1] || "").trim();
-    const dateSpec = parseDateSpec(rest);
+    const dateSpec = toDailySpec(parseDateSpec(rest));
     const monthSpec = dateSpec ? null : parseMonthSpec(rest);
     return {
       type: "not-live-report",
@@ -220,7 +250,7 @@ function parseBotCommand(input) {
     return {
       type: "report",
       gender: parseReportGender(original),
-      dateSpec: parseDateSpec(reportMatch[1] || ""),
+      dateSpec: toDailySpec(parseDateSpec(reportMatch[1] || "")),
     };
   }
 
@@ -231,7 +261,7 @@ function parseBotCommand(input) {
     return {
       type: "report",
       gender: hasGender ? parseSingleGender(original) : "both",
-      dateSpec: parseDateSpec(dateOnlyReport[1]),
+      dateSpec: toDailySpec(parseDateSpec(dateOnlyReport[1])),
     };
   }
 
@@ -240,17 +270,23 @@ function parseBotCommand(input) {
     return {
       type: "report",
       gender: parseSingleGender(original),
-      dateSpec: parseDateSpec(dateOnlyWave[1]),
+      dateSpec: toDailySpec(parseDateSpec(dateOnlyWave[1])),
     };
   }
 
   const daysMatch = withoutGender.match(/^(.+?)\s*(?:多少日|多少天)音浪$/);
   if (daysMatch?.[1]?.trim()) return { type: "anchor-wave-days", query: daysMatch[1].trim() };
 
+  // 「艺名 9月时长 / 艺名 2026年直播时长」→ 时长查询可带年月日粒度
   const durationMatch = withoutGender.match(/^(.+?)\s*(?:直播)?时长$/);
-  if (durationMatch?.[1]?.trim()) return { type: "anchor-duration", query: durationMatch[1].trim() };
+  if (durationMatch?.[1]?.trim()) {
+    const durationSplit = splitTrailingDateSpec(durationMatch[1].trim());
+    return { type: "anchor-duration", query: durationSplit.query, dateSpec: durationSplit.dateSpec };
+  }
 
-  const namedWaveMatch = withoutGender.match(/^(.+?)\s*(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|\d{1,2}\s*[日号])\s*音浪$/);
+  const namedWaveMatch = withoutGender.match(
+    /^(.+?)\s*(今日|今天|昨日|昨天|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{6}|20\d{2}[年./-]\d{1,2}[月./-]?|20\d{2}年?|\d{1,2}\s*月|\d{1,2}\s*[日号]|\d{1,2}[.．]\d{1,3})\s*音浪$/
+  );
   if (namedWaveMatch?.[1]?.trim()) {
     return {
       type: "anchor-wave",
@@ -270,17 +306,11 @@ function parseBotCommand(input) {
     };
   }
 
-  // PK 分组：发组名（9.1 / 第1组 / 1组 / 组1）回对应分组图；发「分组 / 各组」回全部
-  const pkGroupLabel = original.match(/^\/?(\d{1,3}[.．]\d{1,3})$/);
-  if (pkGroupLabel) return { type: "pk-group-image", query: pkGroupLabel[1].replace("．", ".") };
-  const pkGroupIndex = withoutGender.match(/^(?:第\s*([0-9]{1,3})\s*组|([0-9]{1,3})\s*组|组\s*([0-9]{1,3}))$/);
-  if (pkGroupIndex) {
-    const index = Number(pkGroupIndex[1] || pkGroupIndex[2] || pkGroupIndex[3]);
-    return { type: "pk-group-image", query: String(index) };
-  }
-  if (/^\/?(?:分组图|全部分组|各组|分组)$/.test(original)) {
-    return { type: "pk-group-image", query: "" };
-  }
+  // 「9.1 / 9月1日 / 24号 / 2026-09-01」→ 预告导入日期（10 分钟内发 CSV 生效）
+  const importDateToken = original.match(
+    /^\/?(\d{1,2}[.．]\d{1,3}[日号]?|\d{1,2}月\d{1,3}[日号]?|\d{1,2}[日号]|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?|20\d{2}年\d{1,2}月)$/
+  );
+  if (importDateToken) return { type: "import-date", raw: importDateToken[1] };
 
   // 直接输入主播名/抖音号/主播 ID：返回库内全部相关数据
   if (
@@ -697,7 +727,105 @@ async function resolveAnchorOrReply(args, query, db) {
   return anchor;
 }
 
+/** 解析月粒度 dateSpec → "YYYY-MM" */
+function resolveMonthText(spec, db) {
+  if (spec?.type === "month") return `${spec.year}-${String(spec.month).padStart(2, "0")}`;
+  if (spec?.type === "month-only") {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(spec.month).padStart(2, "0")}`;
+  }
+  return null;
+}
+
+/** 「艺名 9月音浪 / 艺名 2026年音浪」→ 月/年聚合音浪 */
+async function handleAnchorWaveRange(args, command, db, spec) {
+  const anchor = await resolveAnchorOrReply(args, command.query, db);
+  if (!anchor) return;
+  const gender = anchor.gender === "female" ? "female" : "male";
+  const ids = [anchor.anchorId, ...(anchor.aliasIds || [])].map((v) => String(v || "").trim()).filter(Boolean);
+
+  if (spec.type === "year") {
+    const now = new Date();
+    const year = Number(spec.year);
+    const toDate = year === now.getFullYear() ? localTodayIso() : `${year}-12-31`;
+    if (typeof db.sumWaveSnapshotsForAccounts !== "function") {
+      await args.replyText("当前数据库不支持年度汇总。");
+      return;
+    }
+    const total = await db.sumWaveSnapshotsForAccounts(ids, `${year}-01-01`, toDate);
+    await args.replyText(
+      total > 0
+        ? `${anchor.name} ${year}年音浪合计：${formatWave(total)}（截至 ${dayToFriendly(toDate)}）。`
+        : `${anchor.name} ${year}年没有音浪数据。`
+    );
+    return;
+  }
+
+  const monthText = resolveMonthText(spec, db);
+  if (!monthText) {
+    await args.replyText("月份没看懂。请发「9月」或「2026年9月」。");
+    return;
+  }
+  const report = typeof db.getMonthlyReport === "function"
+    ? await db.getMonthlyReport(monthText, gender)
+    : null;
+  const row = (report?.rows || []).find((item) => rowMatchesAnchor(item, anchor));
+  if (!row) {
+    await args.replyText(`${anchor.name} ${monthText} 没有音浪数据。`);
+    return;
+  }
+  const liveDays = Math.max(0, (Number(report.summary?.daysInMonth) || 0) - (Number(row.notLiveDays) || 0));
+  await args.replyText(
+    `${anchor.name} ${monthText} 音浪合计：${formatWave(row.totalWave)}，有音浪 ${liveDays} 天。`
+  );
+}
+
+/** 「艺名 9月时长 / 艺名 2026年时长」→ 月/年粒度时长 */
+async function handleAnchorDurationRange(args, command, db, spec) {
+  const anchor = await resolveAnchorOrReply(args, command.query, db);
+  if (!anchor) return;
+  const gender = anchor.gender === "female" ? "female" : "male";
+
+  if (spec.type === "year") {
+    const now = new Date();
+    const year = Number(spec.year);
+    const asOf = year === now.getFullYear() ? localTodayIso() : `${year}-12-31`;
+    const rows = typeof db.exportDurationSnapshots === "function"
+      ? await db.exportDurationSnapshots(asOf)
+      : [];
+    const ids = new Set([anchor.anchorId, ...(anchor.aliasIds || [])].map((v) => String(v || "")));
+    const matches = rows.filter((row) => ids.has(String(row.抖音号 || "")));
+    if (!matches.length) {
+      await args.replyText(`${anchor.name} ${year}年没有时长快照。`);
+      return;
+    }
+    const best = matches.reduce((cur, row) => Number(row.时长分钟) > Number(cur.时长分钟) ? row : cur);
+    await args.replyText(`${anchor.name} 截至 ${dayToFriendly(asOf)} 的累计直播时长：${formatDuration(best.时长分钟)}。`);
+    return;
+  }
+
+  const monthText = resolveMonthText(spec, db);
+  if (!monthText) {
+    await args.replyText("月份没看懂。请发「9月」或「2026年9月」。");
+    return;
+  }
+  const report = typeof db.getMonthlyReport === "function"
+    ? await db.getMonthlyReport(monthText, gender)
+    : null;
+  const row = (report?.rows || []).find((item) => rowMatchesAnchor(item, anchor));
+  if (!row) {
+    await args.replyText(`${anchor.name} ${monthText} 没有时长数据。`);
+    return;
+  }
+  await args.replyText(`${anchor.name} ${monthText} 直播时长：${formatDuration(row.totalDuration)}。`);
+}
+
 async function handleAnchorDuration(args, command, db, analytics) {
+  const durationSpec = command.dateSpec;
+  if (durationSpec && (durationSpec.type === "month" || durationSpec.type === "month-only" || durationSpec.type === "year")) {
+    await handleAnchorDurationRange(args, command, db, durationSpec);
+    return;
+  }
   if (analytics) {
     const result = await analytics.getAnchorDuration({ query: command.query });
     if (!result.ok) {
@@ -779,6 +907,11 @@ async function handleAnchorWaveDays(args, command, db, analytics) {
 }
 
 async function handleAnchorWave(args, command, db, analytics) {
+  const waveSpec = command.dateSpec;
+  if (waveSpec && (waveSpec.type === "month" || waveSpec.type === "month-only" || waveSpec.type === "year")) {
+    await handleAnchorWaveRange(args, command, db, waveSpec);
+    return;
+  }
   if (analytics) {
     const date = command.dateSpec ? resolveDateSpec(command.dateSpec, await getLatestDate(db, "wave")) : null;
     const result = await analytics.getAnchorWaveProfile({ query: command.query, date });
@@ -1003,110 +1136,19 @@ async function handleBindCommand(args, command, bindService) {
   return true;
 }
 
-const PK_GROUP_CANON = (value) => String(value || "").replace(/\s+/g, "").replace(/[（(]/g, "(").replace(/[）)]/g, ")");
-
-/** 微信/QQ：发组名（9.1 / 第1组 / 分组）→ 回 PK 分组图 */
-async function handlePkGroupImage(args, command, db) {
-  const snapshot = readLayoutSnapshot();
-  if (!snapshot || !Array.isArray(snapshot.nameGroups) || !snapshot.nameGroups.length) {
-    await args.replyText("还没有保存分组。请先在软件「PK 分组」页保存一次分组，之后发组名（如 9.1 或 第1组）即可收到分组图。");
+/** 「9.1 / 9月1日 / 24号」→ 预告导入日期：10 分钟内收到的 CSV 导入该日 */
+async function handleImportDateAnnounce(args, command, pendingImportDates) {
+  const spec = parseDateSpec(String(command?.raw || ""));
+  if (!spec || !pendingImportDates) {
+    await args.replyText("日期格式没看懂。请发「9.1」「9月1日」「24号」或「2026-09-01」，再发 CSV 文件。");
     return;
   }
-
-  const period = String(snapshot.period || "").trim();
-  const memberByCanon = new Map();
-  try {
-    const roster = await db.getPkRoster(period || undefined);
-    const all = [...(roster?.males || []), ...(roster?.females || [])];
-    for (const member of all) {
-      const key = PK_GROUP_CANON(member?.name);
-      if (key && !memberByCanon.has(key)) {
-        memberByCanon.set(key, {
-          name: member.name,
-          wave: Number(member.wave) || 0,
-          trimmedAvg: Number(member.trimmedAvg ?? member.trimmed ?? 0),
-          gender: member.gender || "",
-        });
-      }
-    }
-  } catch {
-    // 拿不到战力也能出图（显示 0）
-  }
-
-  const groups = snapshot.nameGroups.map((names, index) => {
-    // 保留快照里的成员顺序（组内排位由保存时的顺序决定，不按战力重排）
-    const members = names.map(
-      (name) => memberByCanon.get(PK_GROUP_CANON(name)) || { name, wave: 0, trimmedAvg: 0, gender: "" }
-    );
-    const top4 = members
-      .map((m) => Number(m.wave) || 0)
-      .sort((a, b) => b - a)
-      .slice(0, 4)
-      .reduce((sum, v) => sum + v, 0);
-    return {
-      label: String(snapshot.groupLabels?.[index] || "").trim() || `第${index + 1}组`,
-      members,
-      top4,
-      average: members.length ? members.reduce((s, m) => s + (Number(m.wave) || 0), 0) / members.length : 0,
-    };
-  });
-
-  const query = String(command.query || "").trim();
-  let targets = groups;
-  let matchedLabel = "";
-  if (query) {
-    if (/^\d{1,3}$/.test(query)) {
-      // 数字：优先按组序号（第N组），其次按「N」结尾的自定义组名
-      const index = Number(query) - 1;
-      targets = groups[index] ? [groups[index]] : [];
-      matchedLabel = groups[index]?.label || "";
-      if (!targets.length) {
-        targets = groups.filter((g) => PK_GROUP_CANON(g.label) === query);
-        matchedLabel = targets[0]?.label || "";
-      }
-    } else {
-      const key = PK_GROUP_CANON(query).toLowerCase();
-      targets = groups.filter((g) => PK_GROUP_CANON(g.label).toLowerCase() === key);
-      matchedLabel = targets[0]?.label || "";
-      if (!targets.length) {
-        // 容错：9.10 → 第10组 这类序号式组名
-        const tail = query.split(".")[1];
-        if (tail && /^\d{1,3}$/.test(tail)) {
-          const byIndex = groups[Number(tail) - 1];
-          if (byIndex) {
-            targets = [byIndex];
-            matchedLabel = byIndex.label;
-          }
-        }
-      }
-    }
-    if (!targets.length) {
-      const labels = groups.map((g) => g.label).join("、");
-      await args.replyText(`没有找到分组「${query}」。当前可用：${labels}（也可发「分组」看全部）`);
-      return;
-    }
-  }
-
-  try {
-    const buffer = await renderPkGroupsPng(
-      {
-        period,
-        groups: targets,
-        total: targets.reduce((sum, g) => sum + (g.members?.length || 0), 0),
-      },
-      { period, showWave: true, title: String(snapshot.name || "").trim() || "PK分组" }
-    );
-    const nameText = targets.length === groups.length ? "" : `${matchedLabel || query}`;
-    await args.replyImage({
-      buffer,
-      fileName: `PK分组_${nameText || "全部"}_${localTodayIso()}.png`,
-    });
-  } catch (error) {
-    await args.replyText(`分组图生成失败：${error instanceof Error ? error.message : String(error)}`);
-  }
+  const date = resolveDateSpec(spec, localYesterdayIso());
+  pendingImportDates.set(args, date);
+  await args.replyText(`已记住导入日期 ${dayToFriendly(date)}（10 分钟内有效）。请现在发送 CSV 文件。`);
 }
 
-async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics, bindService = null }) {
+async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics, bindService = null, pendingImportDates = null }) {
   if (!command) return false;
   if (command.type === "report") await sendReport(args, command, db, renderReportPng, { renderDailyStarPng });
   else if (command.type === "not-live-report") await sendNotLiveReport(args, command, db, renderReportPng);
@@ -1115,7 +1157,7 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ren
   else if (command.type === "anchor-wave-days") await handleAnchorWaveDays(args, command, db, analytics);
   else if (command.type === "anchor-wave") await handleAnchorWave(args, command, db, analytics);
   else if (command.type === "export-wave-file") await handleExportWaveFile(args, command, db);
-  else if (command.type === "pk-group-image") await handlePkGroupImage(args, command, db);
+  else if (command.type === "import-date") await handleImportDateAnnounce(args, command, pendingImportDates);
   else if (command.type === "bind" || command.type === "bind-status" || command.type === "unbind") {
     await handleBindCommand(args, command, bindService);
   }
@@ -1130,7 +1172,7 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
   const modeStore = createModeStore();
   const analytics = sharedAnalytics || createWeixinAnalytics({ db, renderReportPng });
   const bindService = createAnchorBindService({ db });
-  const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics, bindService };
+  const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics, bindService, pendingImportDates };
 
   async function handleCommand(args) {
     try {

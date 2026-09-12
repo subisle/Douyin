@@ -66,7 +66,7 @@ import {
 } from "../../../shared/business-date.js";
 
 type GenderView = ReportGender;
-type ExportKind = "image" | "report" | "duration" | "durationImage" | "notLiveImage" | "notLiveCsv";
+type ExportKind = "image" | "report" | "duration" | "durationImage" | "durationImageAll" | "notLiveImage" | "notLiveCsv";
 type ReportViewMode = "daily" | "monthly";
 type ReportSortBy = "totalWave" | "duration" | "notLiveDays";
 
@@ -386,6 +386,7 @@ export function DailyReportPage() {
   const notLiveReportTitle = `${gender === "male" ? "男" : "女"}主播未开播天数报告`;
 
   // 时长精简图：序号 / 姓名 / 未播天数 / 当月时长
+  // override 用于「全团图」：男团+女团合并成一张（传入合并行、标题与合计统计）
   const drawDurationReport = useCallback(
     (
       canvas: HTMLCanvasElement,
@@ -394,25 +395,33 @@ export function DailyReportPage() {
         rankOffset?: number;
         pageIndex?: number;
         pageCount?: number;
+      },
+      override?: {
+        rows: typeof activeRows;
+        statsRows: typeof activeRows;
+        gender: GenderView | "all";
+        title: string;
+        notLiveCount: number;
+        notLiveDays: number;
       }
     ) => {
-      const pageRows = page?.rows ?? sortedRows;
+      const pageRows = page?.rows ?? override?.rows ?? sortedRows;
       const options = {
         date: activeDateLabel,
         rows: pageRows,
-        gender,
-        customTitle: durationReportTitle,
+        gender: override?.gender ?? gender,
+        customTitle: override?.title ?? durationReportTitle,
         subtitle: `Monthly Duration • ${month}`,
         hideDateInTitle: true,
-        notLiveCount: activeSummary?.notLiveCount ?? 0,
-        notLiveDays: activeSummary?.notLiveDays ?? 0,
+        notLiveCount: override?.notLiveCount ?? activeSummary?.notLiveCount ?? 0,
+        notLiveDays: override?.notLiveDays ?? activeSummary?.notLiveDays ?? 0,
         scale: 2,
         visibleColumns: DURATION_IMAGE_COLUMNS,
         columnWidths: {},
         rankOffset: page?.rankOffset ?? 0,
         pageIndex: page?.pageIndex ?? 1,
         pageCount: page?.pageCount ?? 1,
-        statsRows: sortedRows,
+        statsRows: override?.statsRows ?? sortedRows,
       };
       if (reportStyle === "apple") {
         drawAppleReportToCanvas(canvas, options);
@@ -714,6 +723,61 @@ export function DailyReportPage() {
       drawSelectedReport(canvas);
     } catch (e) {
       console.error("导出时长图片失败", e);
+      alert("导出失败: " + String(e));
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  // 时长精简图（全团）：男团+女团合并导出为一张图（仅月度报告）
+  const handleExportDurationImageAll = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || exporting || activeRows.length === 0) return;
+    setExporting("durationImageAll");
+    try {
+      const api = getDataApi();
+      if (!api) throw new Error("数据接口不可用");
+      const otherGender: GenderView = gender === "male" ? "female" : "male";
+      const res = await api.getMonthlyReport(month, otherGender);
+      if (!res.success) throw new Error(res.error || "加载另一团队月度数据失败");
+      const otherRows = res.data.rows ?? [];
+      const merged = [...sortedRows, ...otherRows];
+      // 与当前排序设置一致，对合并后的全团重新排序
+      const mergedSorted =
+        sortBy === "duration"
+          ? [...merged].sort((a, b) => b.totalDuration - a.totalDuration)
+          : sortBy === "notLiveDays"
+            ? [...merged].sort((a, b) => (Number(b.notLiveDays) || 0) - (Number(a.notLiveDays) || 0))
+            : [...merged].sort((a, b) => b.totalWave - a.totalWave);
+      const otherSummary = res.data.summary;
+      const notLiveCount = (activeSummary?.notLiveCount ?? 0) + (otherSummary?.notLiveCount ?? 0);
+      const notLiveDays = (activeSummary?.notLiveDays ?? 0) + (otherSummary?.notLiveDays ?? 0);
+      const allTitle = `全团主播${Number.isFinite(durationTitleMonth) ? durationTitleMonth : ""}月数据统计`;
+      const pages = splitDailyReportRowsForExport(mergedSorted, {
+        maxPages: exportImageSplit ? 2 : 1,
+      });
+      for (const page of pages) {
+        const pageTag =
+          page.pageCount > 1 ? `_${page.pageIndex}of${page.pageCount}` : "";
+        const filename = `${month}_全团_时长统计图_${mergedSorted.length}人${pageTag}.png`;
+        await downloadCanvasAsPng(canvas, filename, () => {
+          drawDurationReport(canvas, page, {
+            rows: mergedSorted,
+            statsRows: mergedSorted,
+            gender: "all",
+            title: allTitle,
+            notLiveCount,
+            notLiveDays,
+          });
+        });
+        if (pages.length > 1) {
+          await new Promise((r) => window.setTimeout(r, 350));
+        }
+      }
+      // 导出后恢复主图预览
+      drawSelectedReport(canvas);
+    } catch (e) {
+      console.error("导出全团时长图片失败", e);
       alert("导出失败: " + String(e));
     } finally {
       setExporting(null);
@@ -1103,6 +1167,15 @@ export function DailyReportPage() {
                     onClick: handleExportDurationImage,
                     disabled: exporting !== null || viewMode !== "monthly" || !activeSummary || activeRows.length === 0,
                     busy: exporting === "durationImage",
+                  },
+                  {
+                    key: "duration-image-all",
+                    label: "时长全团图",
+                    icon: Clock,
+                    hint: "男团+女团一张图 · 仅月度",
+                    onClick: handleExportDurationImageAll,
+                    disabled: exporting !== null || viewMode !== "monthly" || !activeSummary || activeRows.length === 0,
+                    busy: exporting === "durationImageAll",
                   },
                   {
                     key: "not-live-image",

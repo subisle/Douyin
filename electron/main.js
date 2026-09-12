@@ -37,6 +37,7 @@ if (runtimeEnvPath) console.log(`[config] loaded ${runtimeEnvPath}`);
 const db = require("./db");
 const { createUpdater } = require("./updater");
 const pkLayoutSnapshot = require("./pk-layout-snapshot");
+const pkGroupsPresets = require("./pk-groups-presets");
 const { LivePkWatcher } = require("./live-pk-watcher");
 const { renderDailyReportPng } = require("./weixin-bot-report");
 const { createProjectBots } = require("./project-bots");
@@ -1299,6 +1300,23 @@ ipcMain.handle("pk:layout-snapshot-clear", async () => {
   try {
     pkLayoutSnapshot.clearLayoutSnapshot();
     return { success: true };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+
+// ── PK 命名分组存档（多份，bot 按名出图）──────────────────
+ipcMain.handle("pk:groups-presets-save", async (_event, list) => {
+  try {
+    return { success: true, data: pkGroupsPresets.writePresets(list) };
+  } catch (error) {
+    console.error("[pk] 分组存档同步失败:", error?.message || error);
+    return { success: false, error: error?.message || String(error) };
+  }
+});
+ipcMain.handle("pk:groups-presets-read", async () => {
+  try {
+    return { success: true, data: pkGroupsPresets.readPresets() };
   } catch (error) {
     return { success: false, error: error?.message || String(error) };
   }

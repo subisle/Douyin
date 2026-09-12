@@ -95,3 +95,9 @@ chi_sim.traineddata
 # Generated exports (ranking images etc.)
 /data/exports/
 build-certs/
+
+# Agent workspace / memory
+.workbuddy/
+
+# Local export previews
+/*.xlsx

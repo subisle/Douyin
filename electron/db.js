@@ -986,6 +986,36 @@ async function exportWaveSnapshots(importDate) {
 }
 
 /**
+ * 按账号集合汇总区间内音浪（含边界）。
+ * 用于 bot 的「年音浪」等聚合查询：anchorIds 传主播主账号 + 合并副号。
+ */
+async function sumWaveSnapshotsForAccounts(anchorIds, fromDate, toDate) {
+  const db = getPool();
+  const ids = (Array.isArray(anchorIds) ? anchorIds : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!ids.length) return 0;
+  const from = normalizeSnapshotDate(fromDate);
+  const to = normalizeSnapshotDate(toDate);
+  const placeholders = ids.map(() => "?").join(",");
+  const conditions = [`anchor_id IN (${placeholders})`];
+  const params = [...ids];
+  if (from) {
+    conditions.push("import_date >= ?");
+    params.push(from);
+  }
+  if (to) {
+    conditions.push("import_date <= ?");
+    params.push(to);
+  }
+  const [rows] = await db.query(
+    `SELECT COALESCE(SUM(wave_value), 0) AS total FROM wave_snapshots WHERE ${conditions.join(" AND ")}`,
+    params
+  );
+  return Number(rows?.[0]?.total) || 0;
+}
+
+/**
  * 导出时长快照（关联主播名）。
  * 时长导入值是累计分钟；传 date 时导出“截至该日”的累计时长（取 <= date 最近一次快照）。
  * 不传 date 时导出每个账号最新累计时长。
@@ -3664,6 +3694,7 @@ module.exports = {
   getImportPreview,
   exportWaveSnapshots,
   exportDurationSnapshots,
+  sumWaveSnapshotsForAccounts,
   exportAnchors,
   addAnchor,
   batchImportAnchors,

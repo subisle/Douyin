@@ -173,6 +173,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   savePkLayoutSnapshot: (snapshot) => ipcRenderer.invoke("pk:layout-snapshot-save", snapshot),
   readPkLayoutSnapshot: () => ipcRenderer.invoke("pk:layout-snapshot-read"),
   clearPkLayoutSnapshot: () => ipcRenderer.invoke("pk:layout-snapshot-clear"),
+  savePkGroupsPresets: (list) => ipcRenderer.invoke("pk:groups-presets-save", list),
+  readPkGroupsPresets: () => ipcRenderer.invoke("pk:groups-presets-read"),
   getStarBattleScores: (period) => ipcRenderer.invoke("data:getStarBattleScores", period),
   saveStarBattleScore: (payload) => ipcRenderer.invoke("data:saveStarBattleScore", payload),
   getFlagWinner: (period) => ipcRenderer.invoke("data:getFlagWinner", period),

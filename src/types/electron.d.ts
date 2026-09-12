@@ -845,6 +845,11 @@ export type PkLayoutSnapshot = Required<
 > &
   Omit<PkLayoutSnapshotInput, "nameGroups"> & { updatedAt: string };
 
+/** 主进程侧的命名分组存档（多份，供 bot 按名出图） */
+export interface PkGroupsPreset extends PkLayoutSnapshotInput {
+  savedAt?: string;
+}
+
 export interface BuildPkGroupsPayload {
   members: Array<{
     personId?: number;
@@ -1340,6 +1345,10 @@ declare global {
     ) => Promise<IpcResult<PkLayoutSnapshot | null>>;
     readPkLayoutSnapshot: () => Promise<IpcResult<PkLayoutSnapshot | null>>;
     clearPkLayoutSnapshot: () => Promise<IpcResult<null>>;
+    savePkGroupsPresets: (
+      presets: PkGroupsPreset[]
+    ) => Promise<IpcResult<PkGroupsPreset[]>>;
+    readPkGroupsPresets: () => Promise<IpcResult<PkGroupsPreset[]>>;
     getStarBattleScores: (period: string) => Promise<IpcResult<StarBattleScore[]>>;
     saveStarBattleScore: (
       payload: SaveStarBattleScorePayload

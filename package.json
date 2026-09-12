@@ -28,7 +28,7 @@
     "db:tunnel:stop": "node scripts/ssh-tunnel-rk3318.js stop",
     "db:backup": "node scripts/backup-mysql.js",
     "electron": "electron .",
-    "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"cross-env PROJECT_BOTS=0 next dev\" \"wait-on tcp:3000 && electron .\"",
+    "electron:dev": "concurrently -k -n NEXT,ELECTRON -c yellow,cyan \"cross-env PROJECT_BOTS=0 next dev -p 3001\" \"wait-on tcp:3001 && cross-env ELECTRON_RENDERER_URL=http://localhost:3001 electron .\"",
     "electron:build": "node scripts/electron-next-build.mjs",
     "dist": "npm run electron:build && electron-builder --mac --win --x64",
     "dist:mac": "npm run electron:build && electron-builder --mac",

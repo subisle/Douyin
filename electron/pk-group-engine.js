@@ -1247,13 +1247,55 @@ function formatHm(totalMinutes) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function attachSchedule(groups, { firstStart = "08:15", stepMinutes = 15, reviveExtraMinutes = 0 } = {}) {
-  const match = String(firstStart).match(/^(\d{1,2}):(\d{2})$/);
+/**
+ * 计算 PK 分组时间表（含两场复活赛标注）。
+ * 赛制：前 reviveAfterGroup 组 → 复活赛① → 后 (groupCount - reviveAfterGroup) 组 → 复活赛②。
+ * @param {number} groupCount 组数
+ * @param {object} [options]
+ * @param {string} [options.firstStart]
+ * @param {number} [options.stepMinutes] 每组比赛时长（分钟）
+ * @param {number} [options.reviveExtraMinutes] 复活赛时长（分钟，0 = 无复活赛）
+ * @param {number} [options.reviveAfterGroup] 复活赛①插在第几组之后（默认前半程 = floor(groupCount/2)）
+ * @returns {{ startTimes: string[], reviveTimes: string[], reviveNotes: string[] }}
+ */
+function computePkSchedule(groupCount, options = {}) {
+  const firstStart = String(options.firstStart || "08:15");
+  const stepMinutes = Number(options.stepMinutes) || 15;
+  const reviveMinutes = Number(options.reviveExtraMinutes) || 0;
+  const match = firstStart.match(/^(\d{1,2}):(\d{2})$/);
   const start = match ? Number(match[1]) * 60 + Number(match[2]) : 8 * 60 + 15;
-  const extra = Number(reviveExtraMinutes) || 0;
+  const defAfter = Math.max(1, Math.floor(groupCount / 2));
+  const rawAfter = Number(options.reviveAfterGroup);
+  const reviveAfter =
+    Number.isFinite(rawAfter) && rawAfter > 0 && rawAfter <= groupCount ? rawAfter : defAfter;
+
+  const startTimes = [];
+  for (let i = 0; i < groupCount; i++) {
+    startTimes.push(formatHm(start + i * stepMinutes + (i >= reviveAfter ? reviveMinutes : 0)));
+  }
+
+  const reviveTimes = [];
+  const reviveNotes = [];
+  if (reviveMinutes > 0 && groupCount > 0) {
+    const r1 = formatHm(start + reviveAfter * stepMinutes);
+    const r2 = formatHm(start + groupCount * stepMinutes + reviveMinutes);
+    reviveTimes.push(r1, r2);
+    reviveNotes.push(
+      `复活赛①(前${reviveAfter}组) ${r1} · 复活赛②(后${groupCount - reviveAfter}组) ${r2} · 各${reviveMinutes}分`
+    );
+  }
+  return { startTimes, reviveTimes, reviveNotes };
+}
+
+function attachSchedule(groups, { firstStart = "08:15", stepMinutes = 15, reviveExtraMinutes = 0, reviveAfterGroup } = {}) {
+  const { startTimes } = computePkSchedule(groups.length, {
+    firstStart,
+    stepMinutes,
+    reviveExtraMinutes,
+    reviveAfterGroup,
+  });
   return groups.map((g, i) => {
-    // 第4组后插复活赛：第5组起（index>=4）顺延 extra 分钟
-    const startTime = formatHm(start + i * stepMinutes + (i >= 4 ? extra : 0));
+    const startTime = startTimes[i];
     return {
       ...g,
       startTime,
@@ -1752,6 +1794,7 @@ module.exports = {
   optimalStageOrder,
   buildPkGroups,
   buildPkGroupsFromNameGroups,
+  computePkSchedule,
   formatGroupsText,
   groupsToCsv,
 };

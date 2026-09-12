@@ -82,7 +82,12 @@ async function fetchAppAccessToken(input = {}) {
     throw new Error(`获取 QQ Bot token 失败：${msg}`);
   }
   const accessToken = trimStr(data.access_token);
-  if (!accessToken) throw new Error("QQ Bot token 响应缺少 access_token");
+  if (!accessToken) {
+    // 官方 token 接口常返回 HTTP 200 + 业务错误码（如 100016 invalid appid or secret）
+    const bizMsg = data.message || data.msg || data.error || rawText || "响应无 access_token";
+    const codeBit = data.code != null ? `（code ${data.code}）` : "";
+    throw new Error(`获取 QQ Bot token 失败：${bizMsg}${codeBit}`);
+  }
   const expiresIn = Math.max(60, Number(data.expires_in) || 7200);
   return {
     accessToken,

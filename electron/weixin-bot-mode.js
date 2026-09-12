@@ -16,11 +16,11 @@ const SYSTEM_HELP_RE = /^(?:\/?help|帮助|菜单|命令|指令)$/i;
 const INSTRUCTION_HELP = [
   "【纯指令模式】",
   "· 固定指令：每日报告、未开播报告、艺名音浪、音浪文件、帮助等",
-  "· PK分组：发组名（如 9.1、第1组）收分组图；发「分组」收全部",
+  "· 音浪/时长：艺名 + 日期（9月1日 / 9.1 / 9月 / 2026年），如「艺名 9月音浪」",
   "· 绑定：绑定 抖音号 / 我的绑定 / 解绑（仅主播列表内抖音号，一人一号）",
   "· 管理员：开启日报推送 / 关闭日报推送 / 日报推送状态",
-  "· 发 CSV → 默认昨天；先说「24号数据」可指定日",
-  "· 切换：发「智能模式」或「AI模式」→ 改用 AI 模型",
+  "· 发 CSV → 默认昨天；先发「9.1」即导入 9 月 1 日（10 分钟内有效）",
+  "· 切换：默认纯指令；发「智能模式」或「AI模式」→ 改用 AI 模型",
 ].join("\n");
 
 const AGENT_HELP = [
@@ -46,7 +46,7 @@ function createModeStore({
   ttlMs = 2 * 60 * 60_000,
   maxSessions = 50,
   /** @type {'instruction'|'agent'} */
-  defaultMode = "agent",
+  defaultMode = "instruction",
 } = {}) {
   /** @type {Map<string, { mode: 'instruction'|'agent', updatedAt: number }>} */
   const store = new Map();
@@ -83,8 +83,7 @@ function createModeStore({
       prune();
       const key = sessionKeyFromContext(context);
       const next = mode === "agent" ? "agent" : "instruction";
-      // Persist both modes: default agent means "no row" === agent, so
-      // instruction must be stored explicitly after 退出客服.
+      // 默认纯指令：no row === instruction；AI 模式由「智能模式」显式写入并持久
       store.set(key, { mode: next, updatedAt: Date.now() });
       return key;
     },

@@ -12,6 +12,13 @@ const MAX_THREAD_CHARS = 24_000;
 const THREAD_TTL_MS = 24 * 60 * 60_000;
 const SESSION_TTL_MS = 2 * 60 * 60_000;
 const MAX_THREADS = 200;
+// AI 熔断冷却：连接失败/超时后 5 分钟内跳过 AI 调用，立即回复提示，不再拖满超时堵队列
+const AI_BREAKER_COOLDOWN_MS = 5 * 60_000;
+
+/** 标记错误为「连接类失败」用（_chatCompletion 超时路径会把 error 打上标记） */
+function timedOutFlag(error) {
+  return Boolean(error && error.__aiTimedOut);
+}
 const MAX_SESSIONS = 200;
 const ALLOWED_AI_HTTP_HOSTS = new Set([
   "localhost",
@@ -126,6 +133,24 @@ class WeixinBotAgent {
     this.userMemory = options.userMemory || null;
     this.threads = new Map();
     this.sessions = new Map();
+    // AI 熔断：连接失败/超时后一段时间内跳过 AI 调用，避免每条消息都等满超时、堵死会话队列
+    this.aiBreakerUntil = 0;
+  }
+
+  /** 连接失败/超时 → 打开熔断（冷却期内直接快速失败）；服务恢复由冷却到期后重试探测 */
+  _noteAiFailure(error) {
+    const code = String(error?.cause?.code || error?.code || "").toUpperCase();
+    const connectLike =
+      timedOutFlag(error)
+      || ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ETIMEDOUT", "EAI_AGAIN", "ECONNRESET", "UND_ERR_CONNECT_TIMEOUT"].includes(code)
+      || /fetch failed|网络|超时|timeout/i.test(String(error?.message || ""));
+    if (connectLike) {
+      this.aiBreakerUntil = Date.now() + AI_BREAKER_COOLDOWN_MS;
+    }
+  }
+
+  _isAiBreakerOpen() {
+    return Date.now() < this.aiBreakerUntil;
   }
 
   isEnabled() {
@@ -328,6 +353,17 @@ class WeixinBotAgent {
     );
     const progressEnabled = isProgressEnabled(config);
 
+    // 熔断期：AI 服务刚连不上，直接快速失败，不再让每条消息等满超时
+    if (this._isAiBreakerOpen()) {
+      const restSec = Math.ceil((this.aiBreakerUntil - Date.now()) / 1000);
+      if (typeof args.replyText === "function") {
+        await args.replyText(
+          `AI 服务暂时无法连接（${baseUrl}），约 ${Math.ceil(restSec / 60)} 分钟后自动重试。\n期间可发「纯指令」改用固定命令。`
+        );
+      }
+      return { handled: true, reason: "ai-breaker-open" };
+    }
+
     const key = threadKeyFromContext(args);
     const thread = this._getThread(key);
     this._pushThread(thread, "user", text);
@@ -488,12 +524,20 @@ class WeixinBotAgent {
       });
       const text = await response.text();
       if (!response.ok) {
+        // 服务在线但报错（HTTP 4xx/5xx）→ 不开熔断，服务可能只是这一下抖动
         throw new Error(`AI 接口 HTTP ${response.status}: ${text.slice(0, 200)}`);
       }
+      this.aiBreakerUntil = 0;
       return safeJsonParse(text);
     } catch (error) {
       if (signal?.aborted) throw new Error("AI 请求已中止");
-      if (timedOut || error?.name === "AbortError") throw new Error("AI 请求超时");
+      if (timedOut || error?.name === "AbortError") {
+        const wrapped = new Error("AI 请求超时");
+        wrapped.__aiTimedOut = true;
+        this._noteAiFailure(wrapped);
+        throw wrapped;
+      }
+      this._noteAiFailure(error);
       throw new Error(compactError(error));
     } finally {
       clearTimeout(timer);

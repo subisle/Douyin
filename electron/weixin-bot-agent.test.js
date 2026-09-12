@@ -388,3 +388,70 @@ test("desktop agent restores thread from user memory store", async () => {
   assert.equal(result.text, "第二句");
   fs.rmSync(dir, { force: true, recursive: true });
 });
+
+test("AI 熔断：连接失败后冷却期内跳过 AI 并立即回复", async () => {
+  const failingFetch = async () => {
+    const error = new Error("fetch failed");
+    error.cause = { code: "ECONNREFUSED" };
+    throw error;
+  };
+  const agent = new WeixinBotAgent({
+    skills: { definitions: [] },
+    fetchImpl: failingFetch,
+    getConfig: () => ({
+      enabled: true,
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://example.test/v1",
+      progressEnabled: false,
+    }),
+  });
+
+  const context = { accountId: "acc", fromUserId: "user-x" };
+  agent.enableSession(context);
+
+  const firstReplies = [];
+  await assert.rejects(
+    () => agent.handleMessage({ ...context,
+      text: "在吗",
+      replyText: async (t) => { firstReplies.push(t); },
+    }),
+    /fetch failed/
+  );
+  assert.equal(agent._isAiBreakerOpen(), true);
+
+  // 冷却期内：不再发请求，直接回复提示
+  let fetchCalls = 0;
+  agent.fetchImpl = async () => { fetchCalls += 1; return jsonResponse({ choices: [{ message: { content: "ok" } }] }); };
+  const replies = [];
+  const result = await agent.handleMessage({ ...context,
+    text: "第二条",
+    replyText: async (t) => { replies.push(t); },
+  });
+  assert.equal(result.handled, true);
+  assert.equal(result.reason, "ai-breaker-open");
+  assert.equal(fetchCalls, 0);
+  assert.match(replies.at(-1) || "", /暂时无法连接/);
+});
+
+test("AI 熔断：HTTP 错误（服务在线）不触发熔断", async () => {
+  const agent = new WeixinBotAgent({
+    skills: { definitions: [] },
+    fetchImpl: async () => ({
+      ok: false,
+      status: 500,
+      text: async () => "boom",
+    }),
+    getConfig: () => ({
+      enabled: true,
+      apiKey: "k",
+      model: "m",
+      baseUrl: "https://example.test/v1",
+      progressEnabled: false,
+    }),
+  });
+  const breakerContext = { accountId: "acc", fromUserId: "user-y" };
+  agent.enableSession(breakerContext);
+  await assert.rejects(() => agent.handleMessage({ ...breakerContext, text: "hi", replyText: async () => {} }), /HTTP 500/);
+  assert.equal(agent._isAiBreakerOpen(), false);
+});
