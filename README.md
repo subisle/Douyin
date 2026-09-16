@@ -13,6 +13,7 @@
 | [docs/superpowers/plans/2026-07-24-next-execution-slice.md](docs/superpowers/plans/2026-07-24-next-execution-slice.md) | **近 1–2 周执行切片** |
 | [docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md](docs/superpowers/plans/2026-07-24-ilink-server-sequential-roadmap.md) | **按序路线 S0–S8**（多 Agent 仅 S8 后置） |
 | [docs/server-deployment.md](docs/server-deployment.md) | 部署与实验 env 开关 |
+| [docs/deployment-rk3318.md](docs/deployment-rk3318.md) | **RK3318 BOX（arm64 / Docker）部署**（分支 `3318`） |
 | [docs/ai-agent-production-plan.md](docs/ai-agent-production-plan.md) | 产品门禁与批次 |
 | [docs/ilink-server-agent-design.md](docs/ilink-server-agent-design.md) | iLink 服务器专项设计 |
 | [docs/local-storage-plan.md](docs/local-storage-plan.md) | 本地防爆满 |

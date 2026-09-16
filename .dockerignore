@@ -1,0 +1,47 @@
+# 构建上下文瘦身：RK3318 eMMC 有限，别把几百 MB 垃圾送进 daemon
+.git/
+.gitmodules
+.github/
+.workbuddy/
+.claude/
+.mimocode/
+DouyinLang/
+
+node_modules/
+.next/
+out/
+release/
+dist/
+.api-backup/
+.api-backup-electron-build/
+
+# 凭据：一律不进镜像，运行时用 env_file / 挂载卷
+.env
+.env.*
+!deploy/rk3318/.env.example
+
+# 本地运行态与导出物
+data/runtime/
+data/exports/
+data/backups/
+data/local-bench/
+backups/
+*.log
+npm-debug.log*
+
+# 大二进制 / 字体源（字体按需在部署机挂载 assets/fonts）
+captcha-slider.png
+assets/fonts/
+assets/posters/
+public/fonts/
+*.xlsx
+*.tar
+
+# 文档与测试（镜像内不需要）
+docs/
+electron/**/*.test.js
+electron/**/*-test.js
+shared/**/*.test.js
+shared/**/*-test.js
+scripts/**/*.test.js
+scripts/**/*.mjs.bak

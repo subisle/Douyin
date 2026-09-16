@@ -1,0 +1,5 @@
+# 部署到 Linux/arm64 盒子时必须 LF，否则 bash 报 bad interpreter、Dockerfile 续行断裂
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose*.yml text eol=lf
+deploy/** text eol=lf

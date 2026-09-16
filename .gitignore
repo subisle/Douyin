@@ -99,5 +99,9 @@ build-certs/
 # Agent workspace / memory
 .workbuddy/
 
+# Docker / RK3318 部署
+deploy/rk3318/.env
+release/*.tar
+
 # Local export previews
 /*.xlsx

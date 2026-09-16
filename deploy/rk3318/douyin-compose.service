@@ -1,0 +1,17 @@
+[Unit]
+Description=Douyin data manager (docker compose, RK3318 arm64)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/douyin/app
+Environment=DOUYIN_DATA_DIR=/srv/douyin
+ExecStart=/usr/bin/docker compose -f docker-compose.rk3318.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.rk3318.yml down
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
