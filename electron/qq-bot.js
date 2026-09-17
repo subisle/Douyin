@@ -3,7 +3,7 @@
 /**
  * 官方 QQ 机器人服务（桌面）
  * - 通道：QQ 开放平台 WebSocket + OpenAPI
- * - 业务：复用微信侧 commandHandler / agentHandler（同一 replyApi 契约）
+ * - 业务：复用微信侧 commandHandler（同一 replyApi 契约）
  */
 
 const { EventEmitter } = require("events");
@@ -120,10 +120,6 @@ class QqBotService extends EventEmitter {
     this.fetchImpl = options.fetchImpl || globalThis.fetch.bind(globalThis);
     this.WebSocketImpl = options.WebSocketImpl || WebSocket;
     this.commandHandler = null;
-    this.agentHandler = null;
-    this.modeStore = null;
-    this.getSharedAiSettings =
-      typeof options.getSharedAiSettings === "function" ? options.getSharedAiSettings : null;
     this.sessionQueues = createSessionQueues();
 
     this.settings = { ...DEFAULT_SETTINGS };
@@ -147,14 +143,6 @@ class QqBotService extends EventEmitter {
 
   setCommandHandler(handler) {
     this.commandHandler = typeof handler === "function" ? handler : null;
-  }
-
-  setAgentHandler(handler) {
-    this.agentHandler = typeof handler === "function" ? handler : null;
-  }
-
-  setModeStore(store) {
-    this.modeStore = store || null;
   }
 
   getStatus() {
@@ -581,17 +569,6 @@ class QqBotService extends EventEmitter {
           allowUserIds: this.settings.allowUserIds,
           allowGroupIds: this.settings.allowGroupIds,
           customCommands: [],
-          // 与微信共用桌面 AI 偏好；未注入时不伪造 enabled=true 以免误判
-          ai: (() => {
-            const shared = typeof this.getSharedAiSettings === "function"
-              ? this.getSharedAiSettings()
-              : null;
-            const enabled = shared?.enabled !== false;
-            return {
-              enabled,
-              progressEnabled: shared?.progressEnabled !== false,
-            };
-          })(),
         },
         signal: undefined,
         assertLease: () => {},
@@ -617,8 +594,7 @@ class QqBotService extends EventEmitter {
         },
       };
 
-      const modeKey =
-        this.modeStore?.key?.(replyApi) || inbound.conversationId || inbound.fromUserId;
+      const modeKey = inbound.conversationId || inbound.fromUserId;
       const queueKey = `qqbot:${modeKey}`;
 
       await this.sessionQueues.runSerial(queueKey, async () => {
@@ -630,15 +606,6 @@ class QqBotService extends EventEmitter {
           } catch (error) {
             handled = true;
             await this._replyText(inbound, `命令执行失败：${compactError(error)}`);
-          }
-        }
-        if (!handled && this.agentHandler) {
-          try {
-            const result = await this.agentHandler(replyApi);
-            handled = Boolean(result?.handled);
-          } catch (error) {
-            handled = true;
-            await this._replyText(inbound, `AI 处理失败：${compactError(error)}`);
           }
         }
         if (!handled && this.settings.autoReplyEnabled && this.settings.autoReplyText) {

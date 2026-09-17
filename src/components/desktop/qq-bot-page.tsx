@@ -201,7 +201,7 @@ export function QqBotPage({ embedded = false }: { embedded?: boolean } = {}) {
                 </Badge>
               )}
               <span className="text-xs text-muted-foreground">
-                凭证与消息日志在下方；AI Key 与微信共用
+                凭证与消息日志在下方；多机器人时每个配置一份文件
               </span>
             </div>
           ) : (
@@ -211,7 +211,7 @@ export function QqBotPage({ embedded = false }: { embedded?: boolean } = {}) {
                 QQ 机器人
               </h1>
               <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-                官方 QQ 开放平台通道。业务能力与微信机器人共用（Agent / 技能 / 日报）。任意用户私聊、任意群
+                官方 QQ 开放平台通道。业务能力与微信机器人共用（同一套指令 / 日报）。任意用户私聊、任意群
                 @ 均可使用。需在{" "}
                 <a
                   className="text-violet-600 underline underline-offset-2"
@@ -221,8 +221,9 @@ export function QqBotPage({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   q.qq.com
                 </a>{" "}
-                创建机器人，订阅「群聊@消息 / 私聊消息」，填入 AppID 与 ClientSecret。AI Key
-                与微信机器人为同一套桌面配置。
+                创建机器人，订阅「群聊@消息 / 私聊消息」，填入 AppID 与 ClientSecret。
+                需要同时跑多个机器人时，在 data/builtin/qq-bots/ 下每个机器人放一份 JSON 配置（appId +
+                clientSecret），启动时自动逐个连接。
               </p>
             </>
           )}
@@ -437,8 +438,8 @@ export function QqBotPage({ embedded = false }: { embedded?: boolean } = {}) {
             )}
           </div>
           <p className="mt-3 text-[11px] leading-5 text-muted-foreground">
-            能力说明：文字指令、CSV 导入与 AI 技能与微信侧一致；官方通道对主动推送/随意文件有限额，
-            图片（日报）走被动回复窗口更稳。发文件前可先说「24号数据」指定导入日。
+            能力说明：文字指令、CSV 导入与微信侧一致；官方通道对主动推送/随意文件有限额，
+            图片（日报）走被动回复窗口更稳。发文件前可先说「9.11」指定导入日，再连传音浪与时长两个 CSV。
           </p>
         </section>
       </div>

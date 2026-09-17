@@ -19,11 +19,11 @@ export default function BotStatusPage() {
       </pre>
       <p className="text-sm text-muted-foreground">
         服务端微信 Worker 为 P2 能力；当前请用桌面 Electron 连接微信。同一账号勿双开。
+        机器人只支持固定指令，已不再提供 AI 对话。
       </p>
-      <p className="text-sm">
-        <a className="text-primary underline" href="/agent">智能客服</a>
-        {" · "}
-        <a className="text-primary underline" href="/knowledge">知识库</a>
+      <p className="text-sm text-muted-foreground">
+        机器人运行状态见 <code className="rounded bg-muted px-1">GET /api/v1/bots</code>
+        （多 QQ 机器人列表见 <code className="rounded bg-muted px-1">GET /api/v1/bots/qq/bots</code>）。
       </p>
     </div>
   );

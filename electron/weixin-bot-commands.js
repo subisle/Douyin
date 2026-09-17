@@ -1,16 +1,7 @@
 const crypto = require("crypto");
 const Papa = require("papaparse");
 const { createWeixinAnalytics } = require("./weixin-bot-analytics");
-const {
-  createModeStore,
-  matchSystemToken,
-  matchFastRoute,
-  INSTRUCTION_HELP,
-  AGENT_HELP,
-  SYSTEM_ENABLE_RE: AGENT_ENABLE_RE,
-  SYSTEM_DISABLE_RE: AGENT_DISABLE_RE,
-} = require("./weixin-bot-mode");
-const { threadKeyFromContext } = require("./weixin-bot-agent");
+const { INSTRUCTION_HELP, SYSTEM_HELP_RE, sessionKeyFromContext } = require("./weixin-bot-mode");
 const { matchDailyPushCommand, buildGenderTop3Text } = require("./weixin-bot-daily-push");
 const { toDailyReportImagePages, toNotLiveReportImagePages, sortNotLiveReportRows, buildNotLiveCsvRows } = require("./weixin-bot-report");
 const { renderDailyStarPng } = require("./weixin-bot-daily-star");
@@ -18,6 +9,18 @@ const { parseBindCommand, formatBindReply, createAnchorBindService } = require("
 
 const HELP_TEXT = INSTRUCTION_HELP;
 const PENDING_IMPORT_DATE_TTL_MS = 10 * 60_000;
+/** 同一个日期口令最多可覆盖的几个文件：音浪 + 时长，正好两个 */
+const PENDING_IMPORT_MAX_FILES = 2;
+/**
+ * 已下线能力：AI 对话（人工客服 / 智能模式）与会话记忆口令。
+ * 这些口令曾经用于切换 AI 模式，现在给明确回复，避免被当成艺名解析。
+ */
+const RETIRED_AI_RE =
+  /^(?:人工客服|智能客服|客服|开启客服|打开客服|开启智能|打开智能|智能模式|AI模式|ai模式|纯指令|指令模式|仅指令|退出客服|关闭客服|结束客服|取消客服|关闭智能|退出智能|清空对话|清除记忆|清除对话|清除习惯|清除我的习惯|清空习惯)$/i;
+const RETIRED_AI_REPLY = [
+  "本系统已移除 AI 对话能力，现在只支持固定指令。",
+  "发「帮助」查看指令菜单；发「9.11」再接连传音浪、时长两个 CSV 即可导入该日数据。",
+].join("\n");
 
 function normalizeText(value) {
   return String(value || "")
@@ -227,9 +230,6 @@ function parseBotCommand(input) {
 
   const fileMatch = withoutGender.match(/^(?:\/?(?:音浪文件|导出音浪(?:文件)?))(?:\s*(.+))?$/i);
   if (fileMatch) return { type: "export-wave-file", dateSpec: toDailySpec(parseDateSpec(fileMatch[1] || "")) };
-
-  if (AGENT_ENABLE_RE.test(original)) return { type: "agent-enable" };
-  if (AGENT_DISABLE_RE.test(original)) return { type: "agent-disable" };
 
   const notLiveMatch = withoutGender.match(/^(?:\/?(?:未开播天数报告|未开播报告|未播天数报告|未播报告))(?:\s*(.+))?$/i)
     || withoutGender.match(/^(.+?)\s*(?:未开播天数报告|未开播报告|未播天数报告|未播报告)$/);
@@ -952,45 +952,64 @@ async function handleExportWaveFile(args, command, db) {
   await args.replyFile({ buffer, fileName: `${date}_音浪数据.csv` });
 }
 
-function pendingImportKey(args = {}) {
-  const accountId = String(args.accountId || "").trim() || "unknown";
-  const groupId = String(args.groupId || "").trim();
-  const userId = String(args.fromUserId || args.userId || "").trim();
-  const conversationId = String(args.conversationId || "").trim();
-  if (groupId) return `a:${accountId}|g:${groupId}|u:${userId || "unknown"}`;
-  if (userId) return `a:${accountId}|u:${userId}`;
-  return `a:${accountId}|c:${conversationId || "unknown"}`;
-}
+/** 会话键：与串行队列、导入日期预告共用同一套「账号 / 群 / 用户」隔离 */
+const pendingImportKey = sessionKeyFromContext;
 
-function createPendingImportDateStore() {
-  /** @type {Map<string, { date: string, expiresAt: number }>} */
+/**
+ * 日期口令窗口：先发「9.11」，再连发音浪 + 时长两个 CSV，两个都落到 9.11。
+ * 窗口内最多覆盖 PENDING_IMPORT_MAX_FILES 个文件，用满即失效（避免很久后误导入到旧日期）。
+ */
+function createPendingImportDateStore({ maxFiles = PENDING_IMPORT_MAX_FILES } = {}) {
+  const limit = Number.isFinite(maxFiles) && maxFiles > 0 ? Math.floor(maxFiles) : PENDING_IMPORT_MAX_FILES;
+  /** @type {Map<string, { date: string, expiresAt: number, remaining: number, kinds: Set<string> }>} */
   const store = new Map();
+
+  function read(args) {
+    const key = sessionKeyFromContext(args);
+    const item = store.get(key);
+    if (!item) return null;
+    if (Date.now() > item.expiresAt) {
+      store.delete(key);
+      return null;
+    }
+    return item;
+  }
+
   return {
+    maxFiles: limit,
     set(args, date) {
-      const key = pendingImportKey(args);
-      store.set(key, { date, expiresAt: Date.now() + PENDING_IMPORT_DATE_TTL_MS });
+      const key = sessionKeyFromContext(args);
+      store.set(key, {
+        date,
+        expiresAt: Date.now() + PENDING_IMPORT_DATE_TTL_MS,
+        remaining: limit,
+        kinds: new Set(),
+      });
       return key;
     },
-    take(args) {
-      const key = pendingImportKey(args);
-      const item = store.get(key);
+    /** 取用一次：返回当时快照，未用满则保留窗口供下一个文件继续用 */
+    consume(args) {
+      const item = read(args);
       if (!item) return null;
-      store.delete(key);
-      if (Date.now() > item.expiresAt) return null;
-      return item.date;
+      item.remaining -= 1;
+      const snapshot = {
+        date: item.date,
+        remaining: item.remaining,
+        kinds: new Set(item.kinds),
+      };
+      if (item.remaining <= 0) store.delete(sessionKeyFromContext(args));
+      return snapshot;
+    },
+    /** 记录本次导入的文件类型（音浪 / 时长），用于提示还缺哪个 */
+    noteKind(args, kind) {
+      const item = read(args);
+      if (item && kind) item.kinds.add(kind);
     },
     peek(args) {
-      const key = pendingImportKey(args);
-      const item = store.get(key);
-      if (!item) return null;
-      if (Date.now() > item.expiresAt) {
-        store.delete(key);
-        return null;
-      }
-      return item.date;
+      return read(args)?.date || null;
     },
     clear(args) {
-      store.delete(pendingImportKey(args));
+      store.delete(sessionKeyFromContext(args));
     },
   };
 }
@@ -998,7 +1017,7 @@ function createPendingImportDateStore() {
 /**
  * CSV 导入日期规则：
  * 1) 消息文字明确指定日期（如「24号数据」）→ 该日
- * 2) 否则若会话有 10 分钟内预告的导入日 → 预告日
+ * 2) 否则若会话有 10 分钟内预告的导入日 → 预告日（同一口令可覆盖 2 个文件）
  * 3) 否则默认「昨天」
  * 不再使用文件名里的日期，避免 22 号发送的 csv 误导入 22 号。
  */
@@ -1006,11 +1025,13 @@ function resolveInboundImportDate(args, pendingDates) {
   const fromText = parseExplicitImportDateFromText(args.text || "");
   if (fromText) {
     pendingDates.clear(args);
-    return { date: fromText, source: "message" };
+    return { date: fromText, source: "message", remaining: 0, receivedKinds: new Set() };
   }
-  const pending = pendingDates.take(args);
-  if (pending) return { date: pending, source: "pending" };
-  return { date: localYesterdayIso(), source: "yesterday" };
+  const pending = pendingDates.consume(args);
+  if (pending) {
+    return { date: pending.date, source: "pending", remaining: pending.remaining, receivedKinds: pending.kinds };
+  }
+  return { date: localYesterdayIso(), source: "yesterday", remaining: 0, receivedKinds: new Set() };
 }
 
 async function handleInboundFile(args, db, pendingDates, dailyPush = null) {
@@ -1050,7 +1071,32 @@ async function handleInboundFile(args, db, pendingDates, dailyPush = null) {
     : resolved.source === "pending"
       ? "（按你预告的日期）"
       : "（按消息指定日期）";
-  await args.replyText(`已导入 ${dayToFriendly(date)} 的${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`);
+  const alreadyKinds = resolved.receivedKinds || new Set();
+  const replyLines = [
+    `已导入 ${dayToFriendly(date)} 的${label}数据${sourceHint}：${matched.rows.length} 条；未匹配 ${matched.unmatched.length} 条，重复行 ${matched.duplicateRows} 条，非法行 ${parsed.skipped} 条。`,
+  ];
+  if (alreadyKinds.has(kind)) {
+    replyLines.push(`注意：该日期的${label}本次是第二次导入，已覆盖之前的数据。`);
+  }
+  if (resolved.source === "pending") {
+    const got = new Set(alreadyKinds);
+    got.add(kind);
+    const missing = [
+      got.has("wave") ? null : "音浪",
+      got.has("duration") ? null : "时长",
+    ].filter(Boolean);
+    if (resolved.remaining > 0) {
+      replyLines.push(
+        `该日期口令还剩 ${resolved.remaining} 个文件可用${missing.length ? `，还缺：${missing.join("、")}` : ""}。`
+      );
+    } else {
+      replyLines.push(
+        `该日期口令已用满 ${resolved.remaining + 1} 个文件${missing.length ? `（还缺：${missing.join("、")}，可重发日期再传）` : "，音浪与时长都已入库"}。`
+      );
+    }
+  }
+  await args.replyText(replyLines.join("\n"));
+  if (resolved.source === "pending") pendingDates.noteKind(args, kind);
   if (kind === "wave" && dailyPush && typeof dailyPush.notifyAfterImport === "function") {
     try {
       void dailyPush.notifyAfterImport(date, { delayMs: 1500 });
@@ -1136,16 +1182,18 @@ async function handleBindCommand(args, command, bindService) {
   return true;
 }
 
-/** 「9.1 / 9月1日 / 24号」→ 预告导入日期：10 分钟内收到的 CSV 导入该日 */
+/** 「9.11 / 9月11日 / 11号」→ 预告导入日期：10 分钟内可连传 2 个 CSV（音浪 + 时长），都导入该日 */
 async function handleImportDateAnnounce(args, command, pendingImportDates) {
   const spec = parseDateSpec(String(command?.raw || ""));
   if (!spec || !pendingImportDates) {
-    await args.replyText("日期格式没看懂。请发「9.1」「9月1日」「24号」或「2026-09-01」，再发 CSV 文件。");
+    await args.replyText("日期格式没看懂。请发「9.11」「9月11日」「11号」或「2026-09-11」，再发 CSV 文件。");
     return;
   }
   const date = resolveDateSpec(spec, localYesterdayIso());
   pendingImportDates.set(args, date);
-  await args.replyText(`已记住导入日期 ${dayToFriendly(date)}（10 分钟内有效）。请现在发送 CSV 文件。`);
+  await args.replyText(
+    `已记住导入日期 ${dayToFriendly(date)}（10 分钟内有效，可连传 ${pendingImportDates.maxFiles || PENDING_IMPORT_MAX_FILES} 个文件）。请依次发送音浪与时长 CSV。`
+  );
 }
 
 async function dispatchBusinessCommand(args, command, { db, renderReportPng, renderDailyStarPng = null, analytics, bindService = null, pendingImportDates = null }) {
@@ -1165,11 +1213,10 @@ async function dispatchBusinessCommand(args, command, { db, renderReportPng, ren
   return true;
 }
 
-function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt = null, agent = null, analytics: sharedAnalytics = null, dailyPush = null } = {}) {
+function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt = null, analytics: sharedAnalytics = null, dailyPush = null } = {}) {
   if (!db) throw new Error("微信机器人命令处理缺少数据库");
   if (typeof renderReportPng !== "function") throw new Error("微信机器人命令处理缺少图片渲染器");
   const pendingImportDates = createPendingImportDateStore();
-  const modeStore = createModeStore();
   const analytics = sharedAnalytics || createWeixinAnalytics({ db, renderReportPng });
   const bindService = createAnchorBindService({ db });
   const deps = { db, renderReportPng, renderDailyStarPng: renderDailyStarPngOpt, analytics, bindService, pendingImportDates };
@@ -1183,11 +1230,13 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
         return { handled: true };
       }
 
-      // 预告导入日：先说「24号数据」，再发 CSV（两种模式都允许）
+      // 预告导入日：先说「9.11」，再连传音浪 + 时长两个 CSV
       const importDateHint = parseExplicitImportDateFromText(args.text || "");
       if (importDateHint && /(?:数据|导入)/.test(normalizeText(args.text || ""))) {
         pendingImportDates.set(args, importDateHint);
-        await args.replyText(`已记住导入日期 ${importDateHint}（10 分钟内有效）。请现在发送 CSV 文件。`);
+        await args.replyText(
+          `已记住导入日期 ${importDateHint}（10 分钟内有效，可连传 ${pendingImportDates.maxFiles} 个文件）。请依次发送音浪与时长 CSV。`
+        );
         return { handled: true };
       }
 
@@ -1223,99 +1272,18 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
         }
       }
 
-      const systemToken = matchSystemToken(args.text);
-      const aiStatus = typeof agent?.getPublicStatus === "function" ? agent.getPublicStatus() : {};
-      const aiReady = Boolean(aiStatus.configured && aiStatus.enabled);
-      // 模式仅由用户显式切换；不因 AI 就绪与否自动改 mode。
-      // 无 agent 实例时无法进模型，按纯指令路径执行（不改写 modeStore）。
-      const agentMode = Boolean(agent) && modeStore.isAgent(args);
-
-      if (systemToken === "help") {
-        await args.replyText(agentMode ? AGENT_HELP : INSTRUCTION_HELP);
-        if (agentMode && !aiReady) {
-          await args.replyText(
-            "提示：当前是 AI 模式，但桌面 AI 未就绪；业务文本可能无法回答。可发「纯指令」切回固定指令，或去桌面配置 Key。"
-          );
-        }
-        return { handled: true };
-      }
-      if (systemToken === "enable") {
-        if (!agent || typeof agent.enableSession !== "function") {
-          await args.replyText("智能对话暂不可用。请检查桌面 AI 配置。");
-          return { handled: true };
-        }
-        if (!aiReady) {
-          await args.replyText(
-            "AI 未就绪：请确认桌面已保存接口地址、模型与 API Key，并开启 AI。配置好后再发「智能模式」。"
-          );
-          return { handled: true };
-        }
-        modeStore.setMode(args, "agent");
-        agent.enableSession(args);
-        await args.replyText([
-          "已切换到【AI 模型模式】。",
-          "业务文本由 AI 处理；发「纯指令」可切回固定指令。",
-          "模式不会自动切换。",
-        ].join("\n"));
-        return { handled: true };
-      }
-      if (systemToken === "disable") {
-        modeStore.setMode(args, "instruction");
-        if (agent && typeof agent.disableSession === "function") agent.disableSession(args);
-        await args.replyText([
-          "已切换到【纯指令模式】。",
-          "只认固定指令（每日报告、艺名音浪等），不调 AI 模型。",
-          "发「智能模式」可再开 AI。",
-        ].join("\n"));
-        return { handled: true };
-      }
-      if (systemToken === "clear-memory") {
-        // 仅清对话记忆，不改当前模式
-        const keep = modeStore.getMode(args);
-        if (agent && typeof agent.clearThread === "function") {
-          agent.clearThread(threadKeyFromContext(args));
-        } else if (agent && typeof agent.disableSession === "function") {
-          agent.disableSession(args);
-        }
-        modeStore.setMode(args, keep);
-        await args.replyText(
-          keep === "agent"
-            ? "已清空本会话对话记忆。当前仍为 AI 模式。"
-            : "已清空本会话对话记忆。当前仍为纯指令模式。"
-        );
-        return { handled: true };
-      }
-      if (systemToken === "clear-habits") {
-        const key = threadKeyFromContext(args);
-        if (agent && typeof agent.clearProfile === "function") {
-          agent.clearProfile(key);
-        } else if (agent?.userMemory && typeof agent.userMemory.clearProfile === "function") {
-          try {
-            agent.userMemory.clearProfile(key);
-          } catch {
-            // ignore
-          }
-        }
-        await args.replyText("已清除本会话习惯画像；对话记忆与模式未改。");
+      if (SYSTEM_HELP_RE.test(args.text)) {
+        await args.replyText(INSTRUCTION_HELP);
         return { handled: true };
       }
 
-      // AI 模式：高置信短指令走确定性路径；其余交 Agent
-      if (agentMode && aiReady) {
-        const custom = matchCustomCommand(args.text, args.settings?.customCommands);
-        if (custom) {
-          await handleCustomCommand(args, custom, db, renderReportPng, { renderDailyStarPng: renderDailyStarPngOpt });
-          return { handled: true, via: "fast-route" };
-        }
-        const fast = matchFastRoute(args.text, { parseBotCommand });
-        if (fast) {
-          const ok = await dispatchBusinessCommand(args, fast, deps);
-          return { handled: ok, via: "fast-route" };
-        }
-        return { handled: false, via: "ai" };
+      // 已下线的 AI 相关口令：明确说明，避免被当成艺名去查库
+      if (RETIRED_AI_RE.test(normalizeText(args.text || ""))) {
+        await args.replyText(RETIRED_AI_REPLY);
+        return { handled: true };
       }
 
-      // 纯指令模式（或 AI 未就绪兜底）：确定性命令
+      // 自定义指令（用户自己配的触发词）
       const custom = matchCustomCommand(args.text, args.settings?.customCommands);
       if (custom) {
         await handleCustomCommand(args, custom, db, renderReportPng, { renderDailyStarPng: renderDailyStarPngOpt });
@@ -1323,26 +1291,15 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
       }
 
       const command = parseBotCommand(args.text);
-      if (!command) {
-        if (agentMode && !aiReady) {
-          await args.replyText(
-            "当前是 AI 模式，但 AI 未就绪。请配置桌面 AI，或发「纯指令」改用固定指令。"
-          );
-          return { handled: true };
-        }
-        return { handled: false };
-      }
+      if (!command) return { handled: false };
 
       if (command.type === "help") {
-        await args.replyText(agentMode ? AGENT_HELP : INSTRUCTION_HELP);
+        await args.replyText(INSTRUCTION_HELP);
         return { handled: true };
-      }
-      if (command.type === "agent-enable" || command.type === "agent-disable") {
-        return { handled: false };
       }
 
       const ok = await dispatchBusinessCommand(args, command, deps);
-      return { handled: ok, via: agentMode && !aiReady ? "instruction-fallback" : undefined };
+      return { handled: ok };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (typeof args.replyText === "function") {
@@ -1352,16 +1309,12 @@ function createWeixinCommandHandler({ db, renderReportPng, renderDailyStarPng: r
     }
   }
 
-  handleCommand.modeStore = modeStore;
   handleCommand.analytics = analytics;
   return handleCommand;
 }
 
 module.exports = {
   HELP_TEXT,
-  AGENT_HELP,
-  AGENT_ENABLE_RE,
-  AGENT_DISABLE_RE,
   normalizeText,
   parseDateSpec,
   resolveDateSpec,
@@ -1379,9 +1332,9 @@ module.exports = {
   matchImportRows,
   buildImportMeta,
   pendingImportKey,
+  createPendingImportDateStore,
+  resolveInboundImportDate,
   createWeixinCommandHandler,
-  createModeStore,
-  matchFastRoute,
-  matchSystemToken,
   matchDailyPushCommand,
+  RETIRED_AI_RE,
 };

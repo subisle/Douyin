@@ -167,11 +167,6 @@ function main() {
       estimate: "加密 token + settings + contacts；通常 < 200KB，上限建议 2MB",
       risk: "低",
     },
-    agentSessions: {
-      pathPattern: "BOT_STORAGE_DIR/weixin-agent-sessions.json 或 tmp",
-      estimate: "每会话最多约 40 条 × 2KB ≈ 80KB；200 会话 ≈ 16MB",
-      risk: "中（若落系统盘 tmp 会挤占）",
-    },
     electronPartitions: {
       pathPattern: "userData/Partitions (Chromium)",
       estimate: "实测 douyin 相关合计可达 0.5–1.2GB",
@@ -180,11 +175,6 @@ function main() {
     reportPngTmp: {
       pathPattern: "临时 Buffer，一般不落盘",
       estimate: "单张报告图约 0.5–3MB 内存",
-      risk: "低",
-    },
-    rag: {
-      pathPattern: "data/rag/*.json",
-      estimate: "种子 KB 级；custom 建议 cap 5MB",
       risk: "低",
     },
   };

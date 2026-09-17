@@ -42,16 +42,6 @@ const HISTORY_LIMIT = 200;
 const SEEN_MESSAGE_LIMIT = 500;
 const RUNNER_LEASE_TTL_MS = 120_000;
 
-const DEFAULT_AI_BASE_URL = "http://192.168.5.12/v1";
-const DEFAULT_AI_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
-const ALLOWED_AI_HTTP_HOSTS = new Set([
-  "localhost",
-  "127.0.0.1",
-  "::1",
-  "192.168.5.12",
-  "162.243.93.40",
-]);
-
 const DEFAULT_SETTINGS = Object.freeze({
   autoReplyEnabled: false,
   autoReplyText: "消息已收到。",
@@ -59,79 +49,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
-  ai: {
-    enabled: true,
-    baseUrl: DEFAULT_AI_BASE_URL,
-    model: DEFAULT_AI_MODEL,
-    timeoutMs: 90_000,
-    maxToolRounds: 4,
-    progressEnabled: true,
-  },
   dailyReportPush: { ...DEFAULT_DAILY_REPORT_PUSH },
 });
-
-function isAllowedAiBaseUrl(url) {
-  if (url.protocol === "https:") return true;
-  if (url.protocol !== "http:") return false;
-  return ALLOWED_AI_HTTP_HOSTS.has(url.hostname);
-}
-
-function normalizeAiBaseUrl(value, fallback = DEFAULT_AI_BASE_URL) {
-  const raw = String(value || fallback).trim() || fallback;
-  const url = new URL(raw);
-  if (!isAllowedAiBaseUrl(url)) {
-    throw new Error("AI 接口仅允许 HTTPS，或已放行的 HTTP 主机");
-  }
-  return url.toString().replace(/\/$/, "");
-}
-
-function environmentAiApiKey(env = process.env) {
-  return String(env.AI_API_KEY || env.OPENAI_API_KEY || "").trim();
-}
-
-function environmentAiEnabled(env = process.env) {
-  const raw = String(env.AI_ENABLED ?? "").trim().toLowerCase();
-  if (!raw) return null;
-  if (["0", "false", "no", "off"].includes(raw)) return false;
-  if (["1", "true", "yes", "on"].includes(raw)) return true;
-  return null;
-}
-
-function environmentAiBaseUrl(env = process.env) {
-  return String(env.AI_BASE_URL || "").trim();
-}
-
-function environmentAiModel(env = process.env) {
-  return String(env.AI_MODEL || "").trim();
-}
-
-function clampAiTimeoutMs(value, fallback = 90_000) {
-  const raw = Number(value);
-  if (!Number.isFinite(raw) || raw <= 0) return fallback;
-  return Math.min(120_000, Math.max(5_000, raw));
-}
-
-function environmentAiTimeoutMs(env = process.env) {
-  const raw = String(env.AI_TIMEOUT_MS ?? "").trim();
-  if (!raw) return null;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return clampAiTimeoutMs(value);
-}
-
-function environmentAiProgressEnabled(env = process.env) {
-  const raw = String(env.AI_PROGRESS ?? "").trim().toLowerCase();
-  if (!raw) return null;
-  if (["0", "false", "no", "off"].includes(raw)) return false;
-  if (["1", "true", "yes", "on"].includes(raw)) return true;
-  return null;
-}
-
-function resolveProgressEnabled(settingsValue, env = process.env) {
-  const envProgress = environmentAiProgressEnabled(env);
-  if (envProgress !== null) return envProgress;
-  return settingsValue !== false;
-}
 
 function compactError(error) {
   const message = error instanceof Error ? error.message : String(error || "未知错误");
@@ -280,8 +199,6 @@ class WeixinBotService extends EventEmitter {
     this.decryptToken = options.decryptToken;
     this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl || CDN_BASE_URL);
     this.commandHandler = null;
-    this.agentHandler = null;
-    this.modeStore = null;
     this.sessionQueues = createSessionQueues();
     const runnerLock = options.runnerLock || {};
     this.runnerLockApi = {
@@ -304,7 +221,6 @@ class WeixinBotService extends EventEmitter {
     this.outboundOperations = new Map();
     this.runnerWorkControllers = new Set();
     this.runnerWorkOperations = new Map();
-    this.encryptedAiKey = "";
     this.knownContacts = new Map();
     this.dailyPushDb = options.db || null;
     this.dailyPushRenderReportPng = options.renderReportPng || null;
@@ -356,7 +272,6 @@ class WeixinBotService extends EventEmitter {
       ...DEFAULT_SETTINGS,
       dailyReportPush: normalizeDailyReportPushSettings(DEFAULT_SETTINGS.dailyReportPush),
       customCommands: [],
-      ai: { ...DEFAULT_SETTINGS.ai },
     };
     this.messages = [];
     this.contexts = new Map();
@@ -542,18 +457,6 @@ class WeixinBotService extends EventEmitter {
       throw new Error("微信机器人命令处理器必须是函数");
     }
     this.commandHandler = handler;
-    if (handler?.modeStore) this.modeStore = handler.modeStore;
-  }
-
-  setModeStore(store) {
-    this.modeStore = store || null;
-  }
-
-  setAgentHandler(handler) {
-    if (handler !== null && typeof handler !== "function") {
-      throw new Error("微信机器人 AI 处理器必须是函数");
-    }
-    this.agentHandler = handler;
   }
 
   getMessages() {
@@ -587,18 +490,6 @@ class WeixinBotService extends EventEmitter {
       allowUserIds: [],
       allowGroupIds: [],
       customCommands: (this.settings.customCommands || []).map((item) => ({ ...item })),
-      ai: {
-        // 回显用户勾选/填写偏好，不回写 runtime 有效态
-        // 否则 AI_ENABLED=1 / AI_PROGRESS=1 会在点保存后把 UI 开关顶回勾选
-        enabled: this.settings.ai?.enabled !== false,
-        baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
-        model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
-        timeoutMs: clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
-        maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
-        progressEnabled: this.settings.ai?.progressEnabled !== false,
-        // 仅表示本机已保存的加密 Key；env 中的 Key 只影响 runtime，避免「清除」后仍显示已保存
-        hasApiKey: Boolean(this.encryptedAiKey),
-      },
       contacts: this.getContacts().filter((item) => !targetAccountId || item.accountId === targetAccountId),
       dailyReportPush: normalizeDailyReportPushSettings(this.settings.dailyReportPush),
     };
@@ -621,44 +512,6 @@ class WeixinBotService extends EventEmitter {
       }));
   }
 
-  getAiRuntimeConfig() {
-    let apiKey = "";
-    if (this.encryptedAiKey) {
-      try {
-        apiKey = this.decryptToken(this.encryptedAiKey) || "";
-      } catch {
-        apiKey = "";
-      }
-    }
-    if (!apiKey) apiKey = environmentAiApiKey();
-    const envEnabled = environmentAiEnabled();
-    const envBase = environmentAiBaseUrl();
-    const envModel = environmentAiModel();
-    let baseUrl = String(envBase || this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL);
-    try {
-      baseUrl = normalizeAiBaseUrl(baseUrl);
-    } catch {
-      baseUrl = DEFAULT_AI_BASE_URL;
-    }
-    const model = String(envModel || this.settings.ai?.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
-    // 用户勾选优先；env AI_ENABLED=0 可强制关；=1 只表示「允许开启」不覆盖 UI 关闭
-    // 真正可用还需要 Key + 模型 + 地址
-    const preferenceOn = this.settings.ai?.enabled !== false;
-    const enabled = envEnabled === false
-      ? false
-      : Boolean(preferenceOn && apiKey && model && baseUrl);
-    const envTimeoutMs = environmentAiTimeoutMs();
-    return {
-      enabled,
-      baseUrl,
-      model,
-      timeoutMs: envTimeoutMs ?? clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
-      maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
-      progressEnabled: resolveProgressEnabled(this.settings.ai?.progressEnabled),
-      apiKey,
-    };
-  }
-
   saveSettings(input = {}) {
     const autoReplyText = String(input.autoReplyText ?? this.settings.autoReplyText ?? "").trim().slice(0, 1000);
     const autoReplyEnabled = Boolean(input.autoReplyEnabled ?? this.settings.autoReplyEnabled);
@@ -677,47 +530,6 @@ class WeixinBotService extends EventEmitter {
       this.settings.dailyReportPush
     );
 
-    const prevAi = this.settings.ai || {};
-    const nextAiInput = input.ai && typeof input.ai === "object" ? input.ai : {};
-    const hasAiEnabledInput = Object.prototype.hasOwnProperty.call(nextAiInput, "enabled");
-    const hasProgressInput = Object.prototype.hasOwnProperty.call(nextAiInput, "progressEnabled");
-    const ai = {
-      // 默认开启；仅显式 false 关闭。无关保存不得把 undefined 收成 false
-      enabled: hasAiEnabledInput ? Boolean(nextAiInput.enabled) : prevAi.enabled !== false,
-      baseUrl: String(nextAiInput.baseUrl ?? prevAi.baseUrl ?? DEFAULT_AI_BASE_URL).trim() || DEFAULT_AI_BASE_URL,
-      model: String(nextAiInput.model ?? prevAi.model ?? DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
-      timeoutMs: clampAiTimeoutMs(nextAiInput.timeoutMs ?? prevAi.timeoutMs, 90_000),
-      maxToolRounds: Math.min(6, Math.max(1, Number(nextAiInput.maxToolRounds ?? prevAi.maxToolRounds) || 4)),
-      progressEnabled: hasProgressInput
-        ? Boolean(nextAiInput.progressEnabled)
-        : prevAi.progressEnabled !== false,
-    };
-    try {
-      ai.baseUrl = normalizeAiBaseUrl(ai.baseUrl);
-    } catch (error) {
-      throw new Error(error instanceof Error ? error.message : "AI 接口地址无效");
-    }
-    if (Object.prototype.hasOwnProperty.call(nextAiInput, "apiKey")) {
-      const apiKey = String(nextAiInput.apiKey || "").trim();
-      if (apiKey) {
-        const encrypted = this.encryptToken(apiKey);
-        if (!encrypted) throw new Error("AI Key 加密失败");
-        this.encryptedAiKey = encrypted;
-      } else if (nextAiInput.clearApiKey) {
-        this.encryptedAiKey = "";
-      }
-    }
-    // 无 Key 时 runtime 本来就不可用；UI 偏好保持用户选择。
-    // 仅在「显式打开启用」且无 Key 时拒绝，避免无关保存把开关静默关掉。
-    if (
-      hasAiEnabledInput
-      && nextAiInput.enabled
-      && !this.encryptedAiKey
-      && !environmentAiApiKey()
-    ) {
-      throw new Error("启用 AI 前请先填写 API Key");
-    }
-
     const nextPolicy = { accessMode, allowUserIds, allowGroupIds };
     if (targetAccountId && this.accounts.has(targetAccountId)) {
       this.accountPolicies.set(targetAccountId, nextPolicy);
@@ -731,7 +543,6 @@ class WeixinBotService extends EventEmitter {
       allowUserIds: [],
       allowGroupIds: [],
       customCommands,
-      ai,
       dailyReportPush,
     };
     this._writeStore();
@@ -1495,7 +1306,7 @@ class WeixinBotService extends EventEmitter {
 
     if (!contextToken) return;
 
-    const modeKey = this.modeStore?.key?.(replyApi) || conversationId;
+    const modeKey = conversationId;
     const queueKey = `account:${encodeURIComponent(accountId)}:${modeKey}`;
     await this.sessionQueues.runSerial(queueKey, async () => {
       this._assertRunnerWork(work);
@@ -1508,30 +1319,6 @@ class WeixinBotService extends EventEmitter {
           if (work.controller.signal.aborted || this.runnerLeaseLost) throw error;
           commandHandled = true;
           const message = `命令执行失败：${compactError(error)}`;
-          try {
-            await this._sendTextWithContext(
-              conversationId,
-              message,
-              context,
-              owner,
-              { runnerWork: work }
-            );
-          } catch (sendError) {
-            this._setStatus({ error: `${message}；回复失败：${compactError(sendError)}` });
-          }
-        }
-      }
-
-      if (!commandHandled && this.agentHandler) {
-        try {
-          this._assertRunnerWork(work);
-          const result = await this.agentHandler(replyApi);
-          this._assertRunnerWork(work);
-          commandHandled = Boolean(result?.handled);
-        } catch (error) {
-          if (work.controller.signal.aborted || this.runnerLeaseLost) throw error;
-          commandHandled = true;
-          const message = `AI 处理失败：${compactError(error)}`;
           try {
             await this._sendTextWithContext(
               conversationId,
@@ -1873,7 +1660,6 @@ class WeixinBotService extends EventEmitter {
       throw new Error("微信机器人存储版本不受支持");
     }
 
-    const ai = parsed.settings?.ai || {};
     this.accountPolicies = new Map();
     if (parsed.version === 4) {
       this.defaultAccessPolicy = normalizeAccessPolicy(parsed.defaultAccessPolicy);
@@ -1906,28 +1692,8 @@ class WeixinBotService extends EventEmitter {
       allowUserIds: [],
       allowGroupIds: [],
       customCommands: normalizeCustomCommands(parsed.settings?.customCommands),
-      ai: {
-        // 默认开启智能；仅显式 false 时关闭
-        enabled: ai.enabled === undefined ? true : Boolean(ai.enabled),
-        baseUrl: String(ai.baseUrl || DEFAULT_AI_BASE_URL),
-        model: String(ai.model || DEFAULT_AI_MODEL),
-        // 旧默认 45s 对 grok-4.5 tool-call 过紧，加载时抬到 90s
-        timeoutMs: clampAiTimeoutMs(
-          Number(ai.timeoutMs) === 45_000 ? 90_000 : ai.timeoutMs,
-          90_000
-        ),
-        maxToolRounds: Number(ai.maxToolRounds) || 4,
-        // 旧 store 无该字段时默认开启进度回执
-        progressEnabled: ai.progressEnabled !== false,
-      },
       dailyReportPush: normalizeDailyReportPushSettings(parsed.settings?.dailyReportPush),
     };
-    try {
-      this.settings.ai.baseUrl = normalizeAiBaseUrl(this.settings.ai.baseUrl);
-    } catch {
-      this.settings.ai.baseUrl = DEFAULT_AI_BASE_URL;
-    }
-    this.encryptedAiKey = String(parsed.encryptedAiKey || "");
     this.knownContacts = new Map();
     for (const item of Array.isArray(parsed.contacts) ? parsed.contacts : []) {
       const id = String(item?.id || "").trim();
@@ -2320,14 +2086,6 @@ class WeixinBotService extends EventEmitter {
         allowGroupIds: [],
         customCommands: this.settings.customCommands,
         dailyReportPush: normalizeDailyReportPushSettings(this.settings.dailyReportPush),
-        ai: {
-          enabled: this.settings.ai?.enabled !== false,
-          baseUrl: String(this.settings.ai?.baseUrl || DEFAULT_AI_BASE_URL),
-          model: String(this.settings.ai?.model || DEFAULT_AI_MODEL),
-          timeoutMs: clampAiTimeoutMs(this.settings.ai?.timeoutMs, 90_000),
-          maxToolRounds: Number(this.settings.ai?.maxToolRounds) || 4,
-          progressEnabled: this.settings.ai?.progressEnabled !== false,
-        },
       },
       defaultAccessPolicy: this.defaultAccessPolicy,
       accountPolicies: Object.fromEntries(
@@ -2336,7 +2094,6 @@ class WeixinBotService extends EventEmitter {
           normalizeAccessPolicy(policy),
         ])
       ),
-      encryptedAiKey: this.encryptedAiKey || "",
       contacts: [...this.knownContacts.values()].map((item) => ({
         accountId: item.accountId,
         id: item.id,

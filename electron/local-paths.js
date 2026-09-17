@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Local runtime paths — keep sessions/locks off system /tmp when possible.
+ * Local runtime paths — keep locks/artifacts off system /tmp when possible.
  * Runtime locations are configurable so development and packaged processes can
  * keep bounded state on an application-owned volume.
  */
@@ -9,10 +9,6 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-
-const DEFAULT_SESSION_MAX_BYTES = 20 * 1024 * 1024;
-const DEFAULT_RAG_CUSTOM_MAX_BYTES = 5 * 1024 * 1024;
-const DEFAULT_SESSION_MAX_SESSIONS = 200;
 
 function projectRoot() {
   // electron/ → project root (dev). Packaged asar: still resolve sibling.
@@ -51,18 +47,6 @@ function resolveRuntimeDir(env = process.env) {
   } catch {
     return os.tmpdir();
   }
-}
-
-function resolveSessionPath(env = process.env) {
-  const fromEnv = String(env.AGENT_SESSION_PATH || "").trim();
-  if (fromEnv) {
-    const abs = path.resolve(fromEnv);
-    ensureDir(path.dirname(abs));
-    return abs;
-  }
-  const dir = path.join(resolveRuntimeDir(env), "sessions");
-  ensureDir(dir);
-  return path.join(dir, "weixin-agent-sessions.json");
 }
 
 function resolveLockPath(env = process.env) {
@@ -120,49 +104,6 @@ function resolveLocalTmpDir(env = process.env) {
   return ensureDir(path.join(resolveRuntimeDir(env), "tmp"));
 }
 
-/**
- * Per-user Weixin agent memory (threads + habit profiles).
- * Priority: AI_USER_MEMORY_PATH → <runtime>/memory/weixin-user-memory.json
- */
-function resolveUserMemoryPath(env = process.env) {
-  const fromEnv = String(env.AI_USER_MEMORY_PATH || "").trim();
-  if (fromEnv) {
-    const abs = path.resolve(fromEnv);
-    ensureDir(path.dirname(abs));
-    return abs;
-  }
-  const dir = path.join(resolveRuntimeDir(env), "memory");
-  ensureDir(dir);
-  return path.join(dir, "weixin-user-memory.json");
-}
-
-function resolveRagCustomPath(env = process.env) {
-  const fromEnv = String(env.RAG_CUSTOM_PATH || "").trim();
-  if (fromEnv) {
-    const abs = path.resolve(fromEnv);
-    ensureDir(path.dirname(abs));
-    return abs;
-  }
-  const dir = path.join(resolveRuntimeDir(env), "rag");
-  ensureDir(dir);
-  return path.join(dir, "custom.json");
-}
-
-function sessionMaxBytes(env = process.env) {
-  const n = Number(env.AGENT_SESSION_MAX_BYTES);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SESSION_MAX_BYTES;
-}
-
-function sessionMaxSessions(env = process.env) {
-  const n = Number(env.AGENT_SESSION_MAX_SESSIONS);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_SESSION_MAX_SESSIONS;
-}
-
-function ragCustomMaxBytes(env = process.env) {
-  const n = Number(env.RAG_CUSTOM_MAX_BYTES);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_RAG_CUSTOM_MAX_BYTES;
-}
-
 function diskFreeBytes(targetPath) {
   try {
     // Node 18.15+ ; fallback null
@@ -193,12 +134,10 @@ function formatBytes(n) {
  */
 function getStorageReport(env = process.env) {
   const runtimeDir = resolveRuntimeDir(env);
-  const sessionPath = resolveSessionPath(env);
   const lockPath = resolveLockPath(env);
   const workerStatusPath = resolveWorkerStatusPath(env);
   const artifactRoot = resolveArtifactRoot(env);
   const tmpDir = resolveLocalTmpDir(env);
-  const ragCustom = resolveRagCustomPath(env);
   const freeRuntime = diskFreeBytes(runtimeDir);
   const freeHome = diskFreeBytes(os.homedir());
   const freeArtifacts = diskFreeBytes(artifactRoot);
@@ -206,25 +145,21 @@ function getStorageReport(env = process.env) {
   if (freeHome != null && freeHome < 5 * 1024 * 1024 * 1024) {
     warnings.push(`系统盘可用 ${formatBytes(freeHome)} < 5GB，避免写 /tmp`);
   }
-  if (sessionPath.startsWith(os.tmpdir()) || lockPath.startsWith(os.tmpdir())) {
-    warnings.push("会话或锁仍落在系统临时目录");
+  if (lockPath.startsWith(os.tmpdir())) {
+    warnings.push("锁文件仍落在系统临时目录");
   }
   if (artifactRoot.startsWith(os.tmpdir())) {
     warnings.push("Artifact 根目录落在系统临时目录；请设置 ARTIFACT_ROOT 或 BOT_STORAGE_DIR");
   }
   return {
     runtimeDir,
-    sessionPath,
     lockPath,
     workerStatusPath,
     artifactRoot,
     tmpDir,
-    ragCustomPath: ragCustom,
     freeRuntime: formatBytes(freeRuntime),
     freeHome: formatBytes(freeHome),
     freeArtifacts: formatBytes(freeArtifacts),
-    sessionMaxBytes: sessionMaxBytes(env),
-    ragCustomMaxBytes: ragCustomMaxBytes(env),
     artifactMaxBytes: artifactMaxBytes(env),
     artifactTtlMs: artifactTtlMs(env),
     warnings,
@@ -233,7 +168,7 @@ function getStorageReport(env = process.env) {
 
 function logStorageReport(env = process.env, logger = console) {
   const r = getStorageReport(env);
-  const line = `[storage] runtime=${r.runtimeDir} session=${r.sessionPath} lock=${r.lockPath} artifacts=${r.artifactRoot} homeFree=${r.freeHome} runtimeFree=${r.freeRuntime}`;
+  const line = `[storage] runtime=${r.runtimeDir} lock=${r.lockPath} artifacts=${r.artifactRoot} homeFree=${r.freeHome} runtimeFree=${r.freeRuntime}`;
   if (typeof logger.log === "function") logger.log(line);
   for (const w of r.warnings) {
     if (typeof logger.warn === "function") logger.warn(`[storage] WARN ${w}`);
@@ -244,22 +179,13 @@ function logStorageReport(env = process.env, logger = console) {
 module.exports = {
   projectRoot,
   resolveRuntimeDir,
-  resolveSessionPath,
   resolveLockPath,
   resolveWorkerStatusPath,
   resolveArtifactRoot,
   resolveLocalTmpDir,
-  resolveUserMemoryPath,
-  resolveRagCustomPath,
-  sessionMaxBytes,
-  sessionMaxSessions,
-  ragCustomMaxBytes,
   artifactMaxBytes,
   artifactTtlMs,
   getStorageReport,
   logStorageReport,
   formatBytes,
-  DEFAULT_SESSION_MAX_BYTES,
-  DEFAULT_RAG_CUSTOM_MAX_BYTES,
-  DEFAULT_SESSION_MAX_SESSIONS,
 };

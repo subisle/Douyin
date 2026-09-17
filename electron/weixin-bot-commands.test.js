@@ -4,6 +4,7 @@ const sharp = require("sharp");
 
 const {
   buildImportMeta,
+  createPendingImportDateStore,
   createWeixinCommandHandler,
   getLatestDate,
   matchImportRows,
@@ -22,7 +23,6 @@ async function mockDailyStarPng(date, gender) {
   };
 }
 
-const { threadKeyFromContext } = require("./weixin-bot-agent");
 const {
   buildMediaItem,
   decryptAesEcb,
@@ -98,8 +98,6 @@ test("Chinese bot commands resolve reports, anchors, dates, and files", () => {
     gender: "both",
     dateSpec: { type: "day", day: 18 },
   });
-  assert.deepEqual(parseBotCommand("人工客服"), { type: "agent-enable" });
-  assert.deepEqual(parseBotCommand("退出客服"), { type: "agent-disable" });
   assert.deepEqual(parseBotCommand("音浪文件18号"), {
     type: "export-wave-file",
     dateSpec: { type: "day", day: 18 },
@@ -990,121 +988,25 @@ test("command handler replies instead of throwing when summary fails hard", asyn
   assert.match(replies[0], /没有音浪快照|处理失败/);
 });
 
-test("mode store + matchFastRoute unit", () => {
-  const {
-    createModeStore,
-    matchFastRoute,
-    matchSystemToken,
-  } = require("./weixin-bot-mode");
-  const store = createModeStore();
-  const ctx = { fromUserId: "u1", conversationId: "u1" };
-  // 默认纯指令：AI 需发「智能模式」显式开启
-  assert.equal(store.getMode(ctx), "instruction");
-  assert.equal(store.isAgent(ctx), false);
-  store.setMode(ctx, "agent");
-  assert.equal(store.isAgent(ctx), true);
-  store.setMode(ctx, "instruction");
-  assert.equal(store.isAgent(ctx), false);
-
-  const agentDefault = createModeStore({ defaultMode: "agent" });
-  assert.equal(agentDefault.getMode(ctx), "agent");
-
-  assert.equal(matchSystemToken("人工客服"), "enable");
-  assert.equal(matchSystemToken("退出客服"), "disable");
-  assert.equal(matchSystemToken("清除习惯"), "clear-habits");
-  assert.equal(matchSystemToken("帮助"), "help");
-  assert.equal(matchSystemToken("每日报告"), null);
-
-  assert.deepEqual(matchFastRoute("每日报告", { parseBotCommand }), {
-    type: "report",
-    gender: "both",
-    dateSpec: null,
-  });
-  assert.deepEqual(matchFastRoute("未开播报告", { parseBotCommand }), {
-    type: "not-live-report",
-    gender: "both",
-    dateSpec: null,
-    monthSpec: null,
-  });
-  assert.deepEqual(matchFastRoute("小张", { parseBotCommand }), {
-    type: "anchor-profile",
-    query: "小张",
-  });
-  // 口语问句不进 FastRoute
-  assert.equal(matchFastRoute("帮我对比一下最近谁音浪好", { parseBotCommand }), null);
-  assert.equal(matchFastRoute("对比一下小张和小李", { parseBotCommand }), null);
-});
-
-test("mode, AI thread, and pending import keys isolate bot accounts", () => {
-  const { createModeStore, sessionKeyFromContext } = require("./weixin-bot-mode");
+test("session and pending import keys isolate bot accounts", () => {
+  const { sessionKeyFromContext } = require("./weixin-bot-mode");
   const accountA = {
     accountId: "account-a@im.bot",
     fromUserId: "shared-user@im.wechat",
     conversationId: "shared-user@im.wechat",
   };
   const accountB = { ...accountA, accountId: "account-b@im.bot" };
-  const store = createModeStore();
 
-  store.setMode(accountA, "instruction");
-  assert.equal(store.getMode(accountA), "instruction");
-  // 另一账号未写入时默认纯指令
-  assert.equal(store.getMode(accountB), "instruction");
   assert.notEqual(sessionKeyFromContext(accountA), sessionKeyFromContext(accountB));
-  assert.notEqual(threadKeyFromContext(accountA), threadKeyFromContext(accountB));
   assert.notEqual(pendingImportKey(accountA), pendingImportKey(accountB));
+  // 导入日期预告也按账号隔离：A 的预告不会影响 B
+  const pending = createPendingImportDateStore();
+  pending.set(accountA, "2026-09-11");
+  assert.equal(pending.peek(accountA), "2026-09-11");
+  assert.equal(pending.peek(accountB), null);
 });
 
-test("agent mode: AI-ready 每日报告 uses FastRoute", async () => {
-  const replies = [];
-  const mockAgent = {
-    enableSession() {},
-    disableSession() {},
-    getPublicStatus() {
-      return { enabled: true, configured: true };
-    },
-  };
-  const handler = createWeixinCommandHandler({
-    db: {
-      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
-      exportWaveSnapshots: async () => [{ 音浪: 100 }],
-      getDailyWaveReport: async (date, gender) => ({
-        date,
-        gender,
-        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
-        rows: [{ name: "甲", isLive: true, dailyWave: 1, totalWave: 1, dailyDuration: 1 }],
-      }),
-    },
-    renderReportPng: async () => Buffer.from("PNG"),
-    renderDailyStarPng: mockDailyStarPng,
-    agent: mockAgent,
-  });
-  const ctx = { fromUserId: "agent-user", conversationId: "agent-user" };
-  // 默认纯指令：先显式切到 AI 模式
-  handler.modeStore.setMode(ctx, "agent");
-  assert.equal(handler.modeStore.isAgent(ctx), true);
-
-  const report = await handler({
-    ...ctx,
-    text: "每日报告",
-    items: [],
-    replyText: async (text) => { replies.push(text); },
-    replyImage: async () => {},
-  });
-  assert.equal(report.handled, true);
-  assert.equal(report.via, "fast-route");
-  assert.match(replies[0], /每日报告/);
-
-  const enable = await handler({
-    ...ctx,
-    text: "人工客服",
-    items: [],
-    replyText: async (text) => { replies.push(text); },
-  });
-  assert.equal(enable.handled, true);
-  assert.match(replies.at(-1), /智能对话|全部|AI/);
-});
-
-test("agent mode: free text returns handled false for agent fallback", async () => {
+test("free text without a matching command stays unmatched", async () => {
   const handler = createWeixinCommandHandler({
     db: {
       getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18" }),
@@ -1112,37 +1014,6 @@ test("agent mode: free text returns handled false for agent fallback", async () 
     },
     renderReportPng: async () => Buffer.alloc(0),
     renderDailyStarPng: mockDailyStarPng,
-    agent: {
-      enableSession() {},
-      disableSession() {},
-      getPublicStatus() { return { enabled: true, configured: true }; },
-    },
-  });
-  const ctx = { fromUserId: "agent-user-2", conversationId: "agent-user-2" };
-  handler.modeStore.setMode(ctx, "agent");
-  const free = await handler({
-    ...ctx,
-    text: "帮我对比一下最近谁音浪好",
-    items: [],
-    replyText: async () => {},
-  });
-  assert.equal(free.handled, false);
-  assert.equal(free.via, "ai");
-});
-
-test("default instruction: free text stays unmatched without touching AI", async () => {
-  const handler = createWeixinCommandHandler({
-    db: {
-      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18" }),
-      getAnchors: async () => [],
-    },
-    renderReportPng: async () => Buffer.alloc(0),
-    renderDailyStarPng: mockDailyStarPng,
-    agent: {
-      enableSession() {},
-      disableSession() {},
-      getPublicStatus() { return { enabled: true, configured: true }; },
-    },
   });
   const ctx = { fromUserId: "agent-user-3", conversationId: "agent-user-3" };
   const free = await handler({
@@ -1155,104 +1026,28 @@ test("default instruction: free text stays unmatched without touching AI", async
   assert.equal(free.via, undefined);
 });
 
-test("AI not ready still runs deterministic commands as fallback", async () => {
+test("已下线的 AI 口令返回固定说明，不再被当成艺名查库", async () => {
   const replies = [];
   const handler = createWeixinCommandHandler({
     db: {
-      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18", latestDataDate: "2026-07-18" }),
-      exportWaveSnapshots: async () => [{ 音浪: 1 }],
-      getDailyWaveReport: async (date, gender) => ({
-        date,
-        gender,
-        summary: { total: 1, notLiveCount: 0, notLiveDays: 0 },
-        rows: [{ name: "甲", isLive: true, dailyWave: 1, totalWave: 1, dailyDuration: 1 }],
-      }),
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-07-18" }),
+      getAnchors: async () => [{ anchorId: "anchor-a", name: "甲", anchorName: "甲", aliasIds: [] }],
     },
-    renderReportPng: async (report) => Buffer.from(`PNG-${report.gender}`),
-    renderDailyStarPng: mockDailyStarPng,
-    agent: {
-      enableSession() {},
-      disableSession() {},
-      getPublicStatus() { return { enabled: false, configured: true }; },
-    },
-  });
-  const ctx = { fromUserId: "no-ai-user", conversationId: "no-ai-user" };
-  const report = await handler({
-    ...ctx,
-    text: "每日报告",
-    items: [],
-    replyText: async (t) => { replies.push(t); },
-    replyImage: async () => {},
-  });
-  assert.equal(report.handled, true);
-  // AI 未就绪时走固定指令兜底
-  assert.notEqual(report.via, "ai");
-  assert.notEqual(report.via, "fast-route");
-});
-
-test("退出客服 switches to instruction mode", async () => {
-  const replies = [];
-  let disabled = false;
-  const handler = createWeixinCommandHandler({
-    db: { getDashboardSummary: async () => ({}) },
     renderReportPng: async () => Buffer.alloc(0),
     renderDailyStarPng: mockDailyStarPng,
-    agent: {
-      enableSession() {},
-      disableSession() { disabled = true; },
-      getPublicStatus() { return { enabled: true, configured: true }; },
-    },
   });
-  const ctx = { fromUserId: "mem-user", conversationId: "mem-user" };
-  await handler({
-    ...ctx,
-    text: "退出客服",
-    items: [],
-    replyText: async (t) => { replies.push(t); },
-  });
-  assert.equal(disabled, true);
-  assert.equal(handler.modeStore.isAgent(ctx), false);
-  assert.match(replies.at(-1), /纯指令模式|固定指令/);
-});
-
-test("清除习惯 clears profile without changing conversation mode", async () => {
-  const replies = [];
-  const cleared = [];
-  const handler = createWeixinCommandHandler({
-    db: { getDashboardSummary: async () => ({}) },
-    renderReportPng: async () => Buffer.alloc(0),
-    renderDailyStarPng: mockDailyStarPng,
-    agent: {
-      enableSession() {},
-      disableSession() {},
-      clearProfile(key) { cleared.push(key); },
-      getPublicStatus() { return { enabled: true, configured: true }; },
-    },
-  });
-  const ctx = { accountId: "acc-1", fromUserId: "habit-user", conversationId: "habit-user" };
-  handler.modeStore.setMode(ctx, "agent");
-  const { matchSystemToken } = require("./weixin-bot-mode");
-  assert.equal(matchSystemToken("清除习惯"), "clear-habits");
-  assert.equal(matchSystemToken("清除我的习惯"), "clear-habits");
-  assert.equal(matchSystemToken("清空习惯"), "clear-habits");
-
-  await handler({
-    ...ctx,
-    text: "清除习惯",
-    items: [],
-    replyText: async (t) => { replies.push(t); },
-  });
-  assert.equal(cleared.length, 1);
-  assert.equal(cleared[0], threadKeyFromContext(ctx));
-  assert.equal(handler.modeStore.isAgent(ctx), true);
-  assert.match(replies.at(-1), /习惯画像/);
-  assert.match(replies.at(-1), /对话记忆与模式未改/);
-});
-
-test("CSV怎么导入 not fast-route as anchor profile", () => {
-  const { matchFastRoute, parseBotCommand } = require("./weixin-bot-commands");
-  assert.equal(matchFastRoute("CSV怎么导入", { parseBotCommand }), null);
-  assert.equal(matchFastRoute("业务日是什么", { parseBotCommand }), null);
+  for (const text of ["人工客服", "智能模式", "纯指令", "清空对话", "清除习惯"]) {
+    replies.length = 0;
+    const result = await handler({
+      fromUserId: "u-legacy",
+      conversationId: "u-legacy",
+      text,
+      items: [],
+      replyText: async (reply) => { replies.push(reply); },
+    });
+    assert.equal(result.handled, true, `${text} 应被拦截`);
+    assert.match(replies.join("\n"), /已移除 AI 对话能力/);
+  }
 });
 
 test("PK 分组命令已移除（组号/各组不再出分组图）", () => {
@@ -1332,6 +1127,97 @@ test("「9.1」预告后发 CSV → 导入到 9 月 1 日", async () => {
   }));
   assert.equal(importCall.date, "2026-09-01");
   assert.deepEqual(importCall.rows, [{ anchorId: "anchor-a", waveValue: 1200, rank: 1 }]);
+});
+
+test("日期口令可连传两个 CSV：音浪与时长都落到同一天", async () => {
+  const waveCsv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\n", "utf8");
+  const durationCsv = Buffer.from("主播ID,主播昵称,时长\nanchor-a,甲,120\n", "utf8");
+  const calls = [];
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-09-10", latestDataDate: "2026-09-10" }),
+      getAnchors: async () => [
+        { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+      ],
+      importWaveSnapshots: async (date, rows) => { calls.push({ kind: "wave", date, rows }); return { inserted: rows.length }; },
+      importDurationSnapshots: async (date, rows) => { calls.push({ kind: "duration", date, rows }); return { inserted: rows.length }; },
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+
+  const base = (extra = {}) => ({
+    text: "",
+    fromUserId: "dual-tester",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+    ...extra,
+  });
+  const sendFile = (buffer, fileName) => base({
+    items: [{ type: 4, file_item: { file_name: fileName } }],
+    downloadMedia: async () => ({ buffer, fileName }),
+  });
+
+  // 1) 先说日期：告知可连传 2 个文件
+  await handler(base({ text: "9.11", items: [{ type: 1, text_item: { text: "9.11" } }] }));
+  assert.match(replies.at(-1), /已记住导入日期 11号/);
+  assert.match(replies.at(-1), /可连传 2 个文件/);
+
+  // 2) 第一个文件（音浪）→ 9.11，且提示还剩 1 个
+  await handler(sendFile(waveCsv, "wave.csv"));
+  assert.equal(calls.at(-1).date, "2026-09-11");
+  assert.equal(calls.at(-1).kind, "wave");
+  assert.match(replies.at(-1), /已导入 11号 的音浪数据/);
+  assert.match(replies.at(-1), /还剩 1 个文件可用，还缺：时长/);
+
+  // 3) 第二个文件（时长）→ 仍落到 9.11（旧实现这里会被消费掉、回落昨天）
+  await handler(sendFile(durationCsv, "duration.csv"));
+  assert.equal(calls.at(-1).date, "2026-09-11");
+  assert.equal(calls.at(-1).kind, "duration");
+  assert.deepEqual(calls.at(-1).rows, [{ anchorId: "anchor-a", totalMinutes: 120 }]);
+  assert.match(replies.at(-1), /已导入 11号 的时长数据/);
+  assert.match(replies.at(-1), /已用满/);
+
+  // 4) 第三个文件超出额度 → 回落昨天，并提示需要重发日期
+  await handler(sendFile(waveCsv, "wave.csv"));
+  const yesterday = (() => {
+    const now = new Date();
+    now.setDate(now.getDate() - 1);
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  })();
+  assert.equal(calls.at(-1).date, yesterday);
+  assert.match(replies.at(-1), /默认昨天/);
+});
+
+test("同一日期重复导入同类文件会明确提示覆盖", async () => {
+  const waveCsv = Buffer.from("主播ID,主播昵称,音浪,排名\nanchor-a,甲,1200,1\n", "utf8");
+  const replies = [];
+  const handler = createWeixinCommandHandler({
+    db: {
+      getDashboardSummary: async () => ({ latestWaveDate: "2026-09-10" }),
+      getAnchors: async () => [
+        { anchorId: "anchor-a", douyinNo: "", name: "甲", anchorName: "甲", aliasIds: [] },
+      ],
+      importWaveSnapshots: async (date, rows) => ({ inserted: rows.length }),
+    },
+    renderReportPng: async () => Buffer.alloc(0),
+  });
+  const base = (extra = {}) => ({
+    text: "",
+    fromUserId: "dup-tester",
+    items: [],
+    replyText: async (text) => { replies.push(text); },
+    ...extra,
+  });
+  const sendFile = () => base({
+    items: [{ type: 4, file_item: { file_name: "wave.csv" } }],
+    downloadMedia: async () => ({ buffer: waveCsv, fileName: "wave.csv" }),
+  });
+
+  await handler(base({ text: "9.12", items: [{ type: 1, text_item: { text: "9.12" } }] }));
+  await handler(sendFile());
+  await handler(sendFile());
+  assert.match(replies.at(-1), /第二次导入，已覆盖/);
 });
 
 test("「甲 9月音浪」→ 返回月度汇总", async () => {

@@ -39,7 +39,39 @@ test("shouldSkipProjectBots honors PROJECT_BOTS=0", () => {
   assert.equal(shouldSkipProjectBots({}), false);
 });
 
-test("createProjectBots wires the same agent onto weixin and qq", async () => {
+test("createProjectBots wires the same command handler onto weixin and every qq bot", async () => {
+  const dir = makeDir();
+  const bots = createProjectBots({
+    weixinStoragePath: () => path.join(dir, "weixin-bot.v1.json"),
+    qqStoragePath: () => path.join(dir, "qq-bot.v1.json"),
+    qqBots: () => [
+      { key: "primary", label: "主机器人", appId: "10001", storagePath: path.join(dir, "qq-primary.json") },
+      { key: "backup", label: "备用机器人", appId: "10002", storagePath: path.join(dir, "qq-backup.json") },
+    ],
+    encryptToken: (value) => Buffer.from(String(value)).toString("base64"),
+    decryptToken: (value) => Buffer.from(String(value), "base64").toString("utf8"),
+    db: {},
+    renderReportPng: async () => Buffer.from("png"),
+    logger: { log() {}, warn() {}, error() {} },
+    runner: "test",
+    runnerLockFile: path.join(dir, "runner.lock"),
+  });
+  assert.equal(typeof bots.weixinBot.commandHandler, "function");
+  assert.equal(typeof bots.qqBot.commandHandler, "function");
+  // 多机器人：每个实例都挂同一个 commandHandler
+  assert.equal(bots.qqBots.length, 2);
+  for (const item of bots.qqBots) {
+    assert.equal(typeof item.service.commandHandler, "function");
+    assert.equal(item.service.commandHandler, bots.weixinBot.commandHandler);
+  }
+  // qqBot 兼容旧调用，指向第一个实例
+  assert.equal(bots.qqBot, bots.qqBots[0].service);
+  const statuses = bots.listQqBotStatuses();
+  assert.deepEqual(statuses.map((item) => item.key), ["primary", "backup"]);
+  await bots.shutdown();
+});
+
+test("createProjectBots falls back to a single qq bot when qqBots is absent", async () => {
   const dir = makeDir();
   const bots = createProjectBots({
     weixinStoragePath: () => path.join(dir, "weixin-bot.v1.json"),
@@ -52,9 +84,7 @@ test("createProjectBots wires the same agent onto weixin and qq", async () => {
     runner: "test",
     runnerLockFile: path.join(dir, "runner.lock"),
   });
-  assert.equal(typeof bots.weixinBot.agentHandler, "function");
-  assert.equal(typeof bots.qqBot.agentHandler, "function");
-  assert.equal(typeof bots.weixinBot.commandHandler, "function");
-  assert.equal(bots.weixinBot.agentHandler, bots.qqBot.agentHandler);
+  assert.equal(bots.qqBots.length, 1);
+  assert.equal(bots.qqBots[0].key, "default");
   await bots.shutdown();
 });

@@ -20,7 +20,7 @@
     "test:ilink-adapter": "node --test shared/ilink-adapter.test.js",
     "test:ilink-db": "node --test scripts/ilink-crypto.test.js scripts/ilink-db-lease.test.js scripts/ilink-inbox-cursor.test.js scripts/ilink-outbox.test.js scripts/ilink-account-credentials.test.js scripts/ilink-login-control.test.js scripts/ilink-login-poller.test.js scripts/ilink-artifact-store.test.js scripts/ilink-media-policy.test.js",
     "test:bot-worker": "node --test scripts/bot-worker.test.js scripts/ilink-text-transport.test.js scripts/ilink-crypto.test.js scripts/ilink-db-lease.test.js scripts/ilink-inbox-cursor.test.js scripts/ilink-outbox.test.js scripts/ilink-account-credentials.test.js scripts/ilink-login-control.test.js scripts/ilink-login-poller.test.js scripts/ilink-artifact-store.test.js scripts/ilink-media-policy.test.js",
-    "test:weixin-bot": "node --test electron/weixin-bot*.test.js electron/project-bots.test.js shared/business-date.test.js src/server/bots/store-crypto.test.js",
+    "test:weixin-bot": "node --test electron/weixin-bot*.test.js electron/project-bots.test.js electron/qq-bot-configs.test.js shared/business-date.test.js src/server/bots/store-crypto.test.js",
     "db:migrate": "node scripts/migrate.js up",
     "db:migrate:status": "node scripts/migrate.js status",
     "db:tunnel": "node scripts/ssh-tunnel-rk3318.js start",
@@ -69,7 +69,6 @@
       "assets/**/*",
       "!assets/fonts/**/*",
       "!assets/posters/**/*",
-      "data/rag/bot_help.json",
       ".env",
       "out/**/*",
       "package.json"
@@ -79,7 +78,8 @@
         "from": "data/builtin",
         "to": "builtin-config",
         "filter": [
-          "*.json"
+          "*.json",
+          "qq-bots/*.json"
         ]
       },
       {

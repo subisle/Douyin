@@ -32,6 +32,8 @@ x-app: &app
     - ${DOUYIN_DATA_DIR:-/srv/douyin}/runtime:/app/data/runtime
     - ${DOUYIN_DATA_DIR:-/srv/douyin}/artifacts:/var/lib/douyin/artifacts
     - ${DOUYIN_DATA_DIR:-/srv/douyin}/exports:/app/data/exports
+    # 机器人配置与状态（微信凭据、QQ 多机器人配置、绑定用户）——挂出来才不会随容器重建丢失
+    - ${DOUYIN_DATA_DIR:-/srv/douyin}/builtin:/app/data/builtin
     # 仓库不含字体（assets/fonts 被 gitignore），出图需要自己挂
     - ${DOUYIN_FONT_DIR:-./assets/fonts}:/app/assets/fonts:ro
   extra_hosts:

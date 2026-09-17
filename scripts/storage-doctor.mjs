@@ -34,9 +34,7 @@ const report = {
   paths: {
     tmpdir: os.tmpdir(),
     runtimeDefault: path.join(root, "data", "runtime"),
-    artifactsDefault: path.join(root, "data", "runtime", "artifacts"),
-    rag: path.join(root, "data", "rag"),
-  },
+    artifactsDefault: path.join(root, "data", "runtime", "artifacts"),  },
   sizes: {
     projectData: du(path.join(root, "data")),
     projectNext: du(path.join(root, ".next")),
@@ -46,9 +44,7 @@ const report = {
   },
   env: {
     BOT_STORAGE_DIR: process.env.BOT_STORAGE_DIR || "(unset → should use data/runtime)",
-    ARTIFACT_ROOT: process.env.ARTIFACT_ROOT || "(unset → BOT_STORAGE_DIR/artifacts or data/runtime/artifacts)",
-    AGENT_SESSION_PATH: process.env.AGENT_SESSION_PATH || "(unset)",
-    DB_HOST: process.env.DB_HOST || "(unset)",
+    ARTIFACT_ROOT: process.env.ARTIFACT_ROOT || "(unset → BOT_STORAGE_DIR/artifacts or data/runtime/artifacts)",    DB_HOST: process.env.DB_HOST || "(unset)",
     DB_PORT: process.env.DB_PORT || "(unset)",
   },
   warnings: [],

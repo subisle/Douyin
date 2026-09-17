@@ -23,11 +23,13 @@
 
 **硬规则（详见 [`CLAUDE.md`](CLAUDE.md)）：**
 
-- **唯一用户通道：微信 iLink**（收发文字、收文件、发文件/图片均走 iLink；不接其他 IM 作主聊天口）
-- **一个 Agent + 多技能**；不加多 Agent 实时问答
+- **用户通道：微信 iLink**（收发文字、收文件、发文件/图片均走 iLink）+ **QQ 开放平台官方机器人**（群 @ / 私聊）
+- **无 AI 能力**：没有模型调用、没有 Agent、没有知识库与会话记忆；只有固定指令 + 确定性技能
 - 桌面为用户主路径；服务器 Worker 实验且未达生产前不得标生产
 
-- **用户智能对话：** 桌面 Electron 微信 Bot · 配置 AI → 微信发「人工客服」→ 自然语言问数据；默认指令模式不调模型
-- 服务器：`npm run bot:worker` — 实验文本/DB 通道，**不**替代桌面单 Agent 定义
-- 规格：`docs/superpowers/specs/2026-07-24-weixin-single-agent-skills-design.md`
+- **指令示例：** 「每日报告」「艺名 9.11音浪」「音浪文件 18号」，发「帮助」看全部
+- **当日数据导入：** 先发「9.11」，再连传音浪、时长两个 CSV；同一日期口令 10 分钟内可覆盖 2 个文件
+- **多 QQ 机器人：** `data/builtin/qq-bots/*.json` 一份配置一个机器人（`appId` / `clientSecret` / 可选 `label`）
+- 服务器：`npm run bot:worker` — 实验文本/DB 通道
+- RK3318 盒子（arm64 / Docker）部署：`docs/deployment-rk3318.md`
 - 测试：`npm run test:weixin-bot` · `npm run test:bot-worker` · `npm run test:ilink-db`

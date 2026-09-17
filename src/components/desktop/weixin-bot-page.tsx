@@ -10,7 +10,6 @@ import {
   CirclePlay,
   Clock3,
   HelpCircle,
-  KeyRound,
   Loader2,
   LogOut,
   MessageCircle,
@@ -18,7 +17,6 @@ import {
   QrCode,
   Save,
   Settings2,
-  Sparkles,
   Trash2,
   UserRound,
   UsersRound,
@@ -88,15 +86,6 @@ const DEFAULT_SETTINGS: WeixinBotSettings = {
   allowUserIds: [],
   allowGroupIds: [],
   customCommands: [],
-  ai: {
-    enabled: true,
-    baseUrl: "http://162.243.93.40:8317/v1",
-    model: "grok-4.5",
-    timeoutMs: 90_000,
-    maxToolRounds: 4,
-    progressEnabled: true,
-    hasApiKey: false,
-  },
   contacts: [],
   dailyReportPush: DEFAULT_DAILY_PUSH,
 };
@@ -111,7 +100,7 @@ const COMMAND_HINTS: { example: string; desc: string }[] = [
   { example: "开启日报推送", desc: "任意用户可开关" },
   { example: "关闭日报推送", desc: "任意用户可开关" },
   { example: "日报推送状态", desc: "查看开关" },
-  { example: "清空对话", desc: "清会话记忆" },
+  { example: "9.11", desc: "先发日期再传两个 CSV" },
 ];
 
 const CUSTOM_ACTION_OPTIONS: { value: WeixinBotCustomCommandAction; label: string }[] = [
@@ -142,7 +131,6 @@ type BusyAction =
   | "stop"
   | "disconnect"
   | "save"
-  | "save-ai"
   | "save-commands"
   | "save-reply"
   | "save-push";
@@ -150,7 +138,6 @@ type BusyAction =
 type ConfirmAction = { kind: "disconnect"; accountId: string } | null;
 
 function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBotSettings {
-  const ai = input?.ai || DEFAULT_SETTINGS.ai;
   return {
     accountId: input?.accountId ? String(input.accountId) : null,
     autoReplyEnabled: Boolean(input?.autoReplyEnabled),
@@ -169,16 +156,6 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
           enabled: item?.enabled !== false,
         }))
       : [],
-    ai: {
-      // 与后端一致：默认开启；仅显式 false 视为关闭，避免保存后被默认值顶回勾选语义混乱
-      enabled: ai.enabled !== false,
-      baseUrl: String(ai.baseUrl || DEFAULT_SETTINGS.ai.baseUrl),
-      model: String(ai.model || DEFAULT_SETTINGS.ai.model),
-      timeoutMs: Number(ai.timeoutMs) || DEFAULT_SETTINGS.ai.timeoutMs,
-      maxToolRounds: Number(ai.maxToolRounds) || DEFAULT_SETTINGS.ai.maxToolRounds,
-      progressEnabled: ai.progressEnabled !== false,
-      hasApiKey: Boolean(ai.hasApiKey),
-    },
     contacts: Array.isArray(input?.contacts)
       ? input!.contacts.map((item) => ({
           accountId: String(item?.accountId || ""),
@@ -223,13 +200,10 @@ function normalizeSettings(input?: Partial<WeixinBotSettings> | null): WeixinBot
 export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {}) {
   const api = getDataApi();
   const [status, setStatus] = useState<WeixinBotStatus>(EMPTY_STATUS);
-  const [settings, setSettings] = useState<WeixinBotSettings>(DEFAULT_SETTINGS);
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
+  const [settings, setSettings] = useState<WeixinBotSettings>(DEFAULT_SETTINGS);  const [busyAction, setBusyAction] = useState<BusyAction | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
   const [feedback, setFeedback] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [settingsTab, setSettingsTab] = useState<"push" | "commands" | "ai">("push");
+  const [loading, setLoading] = useState(true);  const [settingsTab, setSettingsTab] = useState<"push" | "commands">("push");
 
   useEffect(() => {
     if (!api) return;
@@ -348,9 +322,7 @@ export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {})
         accountId: patch.accountId || status.accountId || undefined,
       });
       if (result.success) {
-        setSettings(normalizeSettings(result.data));
-        if (action === "save-ai") setApiKeyDraft("");
-      } else {
+        setSettings(normalizeSettings(result.data));      } else {
         setFeedback(result.error);
       }
     } catch (error) {
@@ -381,30 +353,6 @@ export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {})
   async function handleSaveCommands() {
     await saveSettingsPatch("save-commands", {
       customCommands: settings.customCommands,
-    });
-  }
-
-  async function handleSaveAi() {
-    await saveSettingsPatch("save-ai", {
-      ai: {
-        enabled: settings.ai.enabled,
-        baseUrl: settings.ai.baseUrl,
-        model: settings.ai.model,
-        timeoutMs: settings.ai.timeoutMs,
-        maxToolRounds: settings.ai.maxToolRounds,
-        progressEnabled: settings.ai.progressEnabled !== false,
-        ...(apiKeyDraft.trim() ? { apiKey: apiKeyDraft.trim() } : {}),
-      },
-    });
-  }
-
-  async function handleClearApiKey() {
-    await saveSettingsPatch("save-ai", {
-      ai: {
-        enabled: false,
-        clearApiKey: true,
-        apiKey: "",
-      },
     });
   }
 
@@ -630,7 +578,6 @@ export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {})
                 [
                   { id: "push" as const, label: "推送提醒", icon: MessageCircle },
                   { id: "commands" as const, label: "命令能力", icon: HelpCircle },
-                  { id: "ai" as const, label: "智能兜底", icon: Sparkles },
                 ] as const
               ).map(({ id, label, icon: Icon }) => (
                 <button
@@ -671,21 +618,6 @@ export function WeixinBotPage({ embedded = false }: { embedded?: boolean } = {})
                     onChange={updateCustomCommand}
                     onRemove={removeCustomCommand}
                     onSave={handleSaveCommands}
-                    bare
-                  />
-                </>
-              ) : null}
-
-              {settingsTab === "ai" ? (
-                <>
-                  <AiSettingsPanel
-                    settings={settings}
-                    apiKeyDraft={apiKeyDraft}
-                    busy={busyAction === "save-ai"}
-                    onSettingsChange={setSettings}
-                    onApiKeyChange={setApiKeyDraft}
-                    onSave={handleSaveAi}
-                    onClearKey={handleClearApiKey}
                     bare
                   />
                   <AutoReplySettings
@@ -1104,165 +1036,6 @@ function CustomCommandsPanel({
   );
 }
 
-function AiSettingsPanel({
-  settings,
-  apiKeyDraft,
-  busy,
-  onSettingsChange,
-  onApiKeyChange,
-  onSave,
-  onClearKey,
-  bare = false,
-}: {
-  settings: WeixinBotSettings;
-  apiKeyDraft: string;
-  busy: boolean;
-  onSettingsChange: (settings: WeixinBotSettings) => void;
-  onApiKeyChange: (value: string) => void;
-  onSave: () => void;
-  onClearKey: () => void;
-  bare?: boolean;
-}) {
-  const ai = settings.ai;
-  return (
-    <div className={cn(!bare && "overflow-hidden rounded-xl border bg-card shadow-sm")}>
-      <div className={cn("flex h-9 items-center justify-between", bare ? "px-0.5" : "border-b px-3")}>
-        <div className="flex items-center gap-2">
-          <Sparkles className="size-3.5 text-muted-foreground" />
-          <span className="text-xs font-semibold">AI 接口</span>
-          <span className="text-[10px] text-muted-foreground">微信 / QQ 共用</span>
-        </div>
-        <IconAction
-          label="保存 AI 设置"
-          icon={busy ? Loader2 : Save}
-          loading={busy}
-          variant="ghost"
-          size="icon-sm"
-          onClick={onSave}
-          disabled={busy}
-        />
-      </div>
-      <div className={cn("space-y-2.5", bare ? "pt-1" : "p-3")}>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-lg border bg-muted/20 px-2.5 py-2 text-xs font-medium">
-            <input
-              type="checkbox"
-              checked={ai.enabled}
-              onChange={(event) =>
-                onSettingsChange({
-                  ...settings,
-                  ai: { ...ai, enabled: event.target.checked },
-                })
-              }
-              className="size-4 accent-[#07c160]"
-            />
-            启用智能对话
-          </label>
-          <label className="flex items-center gap-2 rounded-lg border bg-muted/20 px-2.5 py-2 text-xs font-medium">
-            <input
-              type="checkbox"
-              checked={ai.progressEnabled !== false}
-              onChange={(event) =>
-                onSettingsChange({
-                  ...settings,
-                  ai: { ...ai, progressEnabled: event.target.checked },
-                })
-              }
-              className="size-4 accent-[#07c160]"
-            />
-            发送进度回执
-          </label>
-        </div>
-        <Field
-          label="接口地址"
-          value={ai.baseUrl}
-          onChange={(value) =>
-            onSettingsChange({ ...settings, ai: { ...ai, baseUrl: value } })
-          }
-          placeholder="http://162.243.93.40:8317/v1"
-        />
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Field
-            label="模型"
-            value={ai.model}
-            onChange={(value) =>
-              onSettingsChange({ ...settings, ai: { ...ai, model: value } })
-            }
-            placeholder="grok-4.5"
-          />
-          <Field
-            label="单次请求超时（秒）"
-            value={String(Math.round((Number(ai.timeoutMs) || 90_000) / 1000))}
-            onChange={(value) => {
-              const seconds = Number(value);
-              const timeoutMs = Number.isFinite(seconds) && seconds > 0
-                ? Math.min(120, Math.max(5, Math.round(seconds))) * 1000
-                : 90_000;
-              onSettingsChange({ ...settings, ai: { ...ai, timeoutMs } });
-            }}
-            placeholder="90"
-          />
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span className="inline-flex items-center gap-1">
-              <KeyRound className="size-3" />
-              API Key
-            </span>
-            <span>{ai.hasApiKey ? "已保存（不回显）" : "未配置"}</span>
-          </div>
-          <input
-            type="password"
-            value={apiKeyDraft}
-            onChange={(event) => onApiKeyChange(event.target.value)}
-            placeholder={ai.hasApiKey ? "输入新 Key 以覆盖" : "sk-..."}
-            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:border-ring"
-            autoComplete="off"
-          />
-          {ai.hasApiKey && (
-            <button
-              type="button"
-              className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-              onClick={onClearKey}
-              disabled={busy}
-            >
-              清除已保存 Key
-            </button>
-          )}
-        </div>
-        <p className="text-[10px] leading-5 text-muted-foreground">
-          业务文本由 AI 选技能处理（查数/日报图/导出）；CSV 导入走确定性路径。
-          Key 加密保存在本机，界面不回显明文。
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <label className="block space-y-1">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:border-ring"
-      />
-    </label>
-  );
-}
-
 function AutoReplySettings({
   settings,
   busy,
@@ -1350,7 +1123,6 @@ function StatusStrip({ status }: { status: WeixinBotStatus }) {
   );
 }
 
-
 function PhaseBadge({ phase }: { phase: WeixinBotPhase }) {
   const active = phase === "running";
   const pending = ["connecting", "awaiting_scan", "scanned"].includes(phase);
@@ -1371,7 +1143,6 @@ function PhaseBadge({ phase }: { phase: WeixinBotPhase }) {
     </Badge>
   );
 }
-
 
 function IconAction({
   label,
@@ -1398,7 +1169,6 @@ function IconAction({
     </Tooltip>
   );
 }
-
 
 function contactTitle(contact: Pick<WeixinBotContact, "kind" | "id" | "groupId">) {
   if (contact.kind === "group") return `群聊 ${compactId(contact.groupId || contact.id)}`;

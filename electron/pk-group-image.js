@@ -8,7 +8,7 @@
 let sharp;
 
 function getSharp() {
-  if (!sharp) sharp = require("sharp");
+  if (!sharp) sharp = require("./sharp-tuning").loadSharp();
   return sharp;
 }
 

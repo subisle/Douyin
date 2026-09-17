@@ -4,31 +4,27 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
 const requiredEvidence = [
-  "data/rag/bot_help.json",
   "electron/local-paths.js",
   "electron/runtime-env.js",
   "electron/db-config.js",
   "electron/weixin-bot-analytics.js",
   "electron/weixin-bot-mode.js",
-  "electron/weixin-bot-rag.js",
   "electron/weixin-bot-runner-lock.js",
-  "electron/weixin-bot-server-agent.js",
-  "electron/weixin-bot-session-store.js",
+  "electron/qq-bot.js",
+  "electron/qq-bot-configs.js",
+  "electron/project-bots.js",
   "shared/ilink-adapter.js",
+  "shared/qqbot-adapter.js",
   "scripts/bot-worker.js",
   "scripts/migrate.js",
   "scripts/migration-runner.js",
   "migrations/001_ilink_runtime.js",
   "migrations/002_outbox_tenant_fk.js",
-  "src/app/agent/page.tsx",
   "src/app/bot/page.tsx",
-  "src/app/knowledge/page.tsx",
-  "src/app/api/agent/chat/route.ts",
   "src/app/api/bot/status/route.ts",
-  "src/app/api/rag/documents/route.ts",
-  "src/app/api/rag/search/route.ts",
-  "src/server/bot-core/rag.js",
   "src/server/api/auth.ts",
+  "src/server/bots/http.js",
+  "src/server/bots/runtime.js",
 ];
 
 const requiredIgnoredPaths = [
@@ -37,7 +33,7 @@ const requiredIgnoredPaths = [
   "data/runtime/release-check.json",
   "data/local-bench/release-check.json",
   "data/backups/release-check.sql",
-  "data/rag/custom.json",
+  "data/builtin/release-check.json",
   "release/release-check.app",
 ];
 
@@ -52,7 +48,6 @@ const requiredPackagePatterns = [
   "assets/**/*",
   "!assets/fonts/**/*",
   "!assets/posters/**/*",
-  "data/rag/bot_help.json",
   "out/**/*",
   "package.json",
 ];
