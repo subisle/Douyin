@@ -48,7 +48,9 @@ FROM build-tools AS build
 ARG BUILD_NODE_OPTIONS="--max-old-space-size=2048"
 ENV NODE_OPTIONS=${BUILD_NODE_OPTIONS}
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+# 必须显式带 devDependencies：base 阶段设了 NODE_ENV=production，
+# npm ci 会因此跳过 devDeps，导致 next build 中途再联网安装 typescript（A53 上白白多花几分钟）
+RUN npm ci --ignore-scripts --include=dev --no-audit --no-fund
 COPY . .
 RUN npm run build \
  && rm -rf node_modules .next/cache
