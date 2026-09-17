@@ -41,8 +41,10 @@ function listJsonFiles(dir) {
 
 function readConfig(file) {
   const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-  const appId = String(raw?.appId || "").trim();
-  const clientSecret = String(raw?.clientSecret || "").trim();
+  // 兼容两种写法：扁平 { appId, clientSecret }（推荐手写）
+  // 与 QqBotService 存储格式 { settings: { appId, clientSecret } }（桌面导出的旧文件）
+  const appId = String(raw?.appId ?? raw?.settings?.appId ?? "").trim();
+  const clientSecret = String(raw?.clientSecret ?? raw?.settings?.clientSecret ?? "").trim();
   return { raw, appId, clientSecret };
 }
 
@@ -80,7 +82,7 @@ function discoverQqBotConfigs(options = {}) {
     }
     const { raw, appId, clientSecret } = parsed;
     if (!appId || !clientSecret) {
-      skipped.push({ file, reason: "缺少 appId 或 clientSecret" });
+      skipped.push({ file, reason: "缺少 appId 或 clientSecret（顶层或 settings 下都可）" });
       continue;
     }
     if (raw?.enabled === false) {
@@ -93,9 +95,10 @@ function discoverQqBotConfigs(options = {}) {
     }
     seenAppIds.add(appId);
     const key = path.basename(file, path.extname(file));
+    const label = String(raw?.label ?? raw?.name ?? raw?.settings?.label ?? "").trim() || key;
     configs.push({
       key,
-      label: String(raw?.label || raw?.name || key).trim() || key,
+      label,
       storagePath: file,
       appId,
     });

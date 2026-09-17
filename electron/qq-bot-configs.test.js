@@ -76,3 +76,18 @@ test("discoverQqBotConfigs returns empty list when nothing is configured", () =>
   assert.deepEqual(configs, []);
   assert.deepEqual(skipped, []);
 });
+
+test("discoverQqBotConfigs reads credentials from QqBotService store format", () => {
+  const dir = makeDir();
+  // 桌面导出的旧格式：凭据在 settings 下面（服务端读不到就会漏掉机器人）
+  writeConfig(dir, "qq-bot.v1.json", {
+    version: 1,
+    settings: { appId: "1905320810", clientSecret: "secret-from-desktop", label: "老配置" },
+    messages: [],
+  });
+  const { configs, skipped } = discoverQqBotConfigs({ env: {}, builtinDir: dir, runtimeDir: "" });
+  assert.equal(skipped.length, 0);
+  assert.equal(configs.length, 1);
+  assert.equal(configs[0].appId, "1905320810");
+  assert.equal(configs[0].label, "老配置");
+});

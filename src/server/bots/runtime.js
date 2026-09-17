@@ -8,8 +8,18 @@ const { resolveBuiltinConfigDir } = require("../../../electron/builtin-config.js
 const { discoverQqBotConfigs } = require("../../../electron/qq-bot-configs.js");
 const { encryptToken, decryptToken } = require("./store-crypto.js");
 
-let starting = null;
-let state = null;
+/**
+ * Next 会把本模块分别打进 instrumentation 与各 route chunk，形成多份副本。
+ * 若各自持有 state，就会各建一套机器人（重复连接微信/QQ）。用 globalThis 共享单例。
+ */
+const GLOBAL_KEY = Symbol.for("douyin.project-bots.runtime");
+
+function sharedState() {
+  if (!globalThis[GLOBAL_KEY]) {
+    globalThis[GLOBAL_KEY] = { starting: null, state: null };
+  }
+  return globalThis[GLOBAL_KEY];
+}
 
 /**
  * Bot 存储文件解析（服务器侧）：
@@ -48,13 +58,16 @@ function shouldSkipProjectBots(env = process.env) {
 }
 
 async function startProjectBots(options = {}) {
-  if (state) return state;
-  if (starting) return starting;
-  if (shouldSkipProjectBots(options.env || process.env)) {    console.log("[project-bots] skipped (desktop or PROJECT_BOTS=0)");
+  const shared = sharedState();
+  if (shared.state) return shared.state;
+  if (shared.starting) return shared.starting;
+
+  if (shouldSkipProjectBots(options.env || process.env)) {
+    console.log("[project-bots] skipped (desktop 或 PROJECT_BOTS=0)");
     return null;
   }
 
-  starting = (async () => {
+  shared.starting = (async () => {
     const { applyBuiltInDbEnv } = require("../../../electron/db-config.js");
     applyBuiltInDbEnv();
     const runtimeDir = resolveRuntimeDir();
@@ -67,12 +80,21 @@ async function startProjectBots(options = {}) {
     if (!qqConfigs.length) {
       console.log("[project-bots] 未发现 QQ 多机器人配置，退回单机器人存储");
     }
+
+    const weixinStore = resolveBotStorePath("weixin", { env, runtimeDir });
+    const qqStore = resolveBotStorePath("qq", { env, runtimeDir });
+    // 启动诊断：机器人起不来时，先看这行就能定位是配置目录 / 存储路径的问题
+    console.log(
+      `[project-bots] 诊断 cwd=${process.cwd()} runtimeDir=${runtimeDir} builtinDir=${builtinDir} ` +
+      `微信存储=${weixinStore} QQ 配置=${qqConfigs.length} 个`
+    );
+
     const bots = createProjectBots({
-      weixinStoragePath: () => resolveBotStorePath("weixin", { env, runtimeDir }),
-      qqStoragePath: () => resolveBotStorePath("qq", { env, runtimeDir }),
+      weixinStoragePath: () => weixinStore,
+      qqStoragePath: () => qqStore,
       qqBots: () => (qqConfigs.length
         ? qqConfigs
-        : [{ key: "default", label: "default", storagePath: resolveBotStorePath("qq", { env, runtimeDir }) }]),
+        : [{ key: "default", label: "default", storagePath: qqStore }]),
       encryptToken: (plain) => encryptToken(plain),
       decryptToken: (payload) => decryptToken(payload),
       db: require("../../../electron/db.js"),
@@ -81,17 +103,18 @@ async function startProjectBots(options = {}) {
       runnerOwnerId: `${require("os").hostname()}:${process.pid}`,
       logger: console,
     });
+
     await bots.initialize({ autoStart: options.autoStart !== false });
-    state = bots;    console.log(
-      `[project-bots] weixin + ${bots.qqBots.length} 个 QQ 机器人已启动`
-    );
-    return state;
+    shared.state = bots;
+    console.log(`[project-bots] weixin + ${bots.qqBots.length} 个 QQ 机器人已启动`);
+    return shared.state;
   })();
 
   try {
-    return await starting;
+    return await shared.starting;
   } catch (error) {
-    starting = null;    console.error("[project-bots] start failed", error?.message || error);
+    shared.starting = null;
+    console.error("[project-bots] start failed", error?.message || error);
     throw error;
   }
 }
@@ -102,13 +125,16 @@ async function getProjectBots() {
     error.code = "BOTS_SKIPPED";
     throw error;
   }
-  if (state) return state;
+  const shared = sharedState();
+  if (shared.state) return shared.state;
   return startProjectBots();
 }
 
 async function stopProjectBots() {
-  const current = state;
-  state = null;  starting = null;
+  const shared = sharedState();
+  const current = shared.state;
+  shared.state = null;
+  shared.starting = null;
   if (current) await current.shutdown();
 }
 

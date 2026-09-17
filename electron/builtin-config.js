@@ -23,6 +23,7 @@ function builtinConfigCandidates({
   isPackaged = false,
   projectDir = path.resolve(__dirname, ".."),
   resourcesPath = process.resourcesPath,
+  cwd = process.cwd(),
 } = {}) {
   if (isPackaged) {
     return uniquePaths([
@@ -30,7 +31,11 @@ function builtinConfigCandidates({
       resourcesPath && path.join(resourcesPath, "..", "builtin-config"),
     ]);
   }
+  // 服务器（Next 打包）场景：本模块会被 webpack 内联进 .next/server，
+  // __dirname 此时指向 .next/server，算出的 projectDir 是错的（曾导致机器人读不到凭据）。
+  // next start / electron 开发态的 cwd 都是项目根，因此优先用 cwd。
   return uniquePaths([
+    path.join(cwd, "data", "builtin"),
     path.join(projectDir, "data", "builtin"),
   ]);
 }

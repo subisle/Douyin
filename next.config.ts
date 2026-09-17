@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   images: { unoptimized: true },
   // 资源用相对路径，避免 file:// 下根路径 404
   assetPrefix: isElectron ? "./" : undefined,
+  // 这些包含原生扩展或运行时探测的包不要打进 bundle：
+  // ws 被打包后探测不到原生 bufferutil，会在运行时报 “bufferUtil.mask is not a function”。
+  serverExternalPackages: ["ws", "sharp", "mysql2", "better-sqlite3"],
 };
 
 export default nextConfig;
