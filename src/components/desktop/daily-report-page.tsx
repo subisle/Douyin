@@ -2,6 +2,7 @@
 
 import { getDataApi } from "@/client/http-electron-api";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -14,11 +15,13 @@ import {
   FileSpreadsheet,
   FileText,
   Image as ImageIcon,
+  Loader2,
   Mars,
   Palette,
   RotateCcw,
   Save,
   Settings,
+  Trash2,
   Venus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -607,6 +610,88 @@ export function DailyReportPage() {
     }
   }, []);
 
+  // ---- 删除当前报告区间的数据（删除前自动备份）----
+  const [deleteTarget, setDeleteTarget] = useState<{
+    from: string;
+    to: string;
+    label: string;
+  } | null>(null);
+  const [deleteSummary, setDeleteSummary] = useState<{
+    total: number;
+    items: { label: string; count: number }[];
+  } | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deletePreviewing, setDeletePreviewing] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteResult, setDeleteResult] = useState<string | null>(null);
+
+  const openDeleteDialog = useCallback(async () => {
+    const api = getDataApi();
+    if (!api) return;
+    const range =
+      viewMode === "monthly"
+        ? (() => {
+            const m = /^(\d{4})-(\d{2})$/.exec(month);
+            if (!m) return null;
+            const last = new Date(Number(m[1]), Number(m[2]), 0).getDate();
+            return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, "0")}` };
+          })()
+        : { from: date, to: date };
+    if (!range) return;
+
+    setDeleteError(null);
+    setDeleteResult(null);
+    setDeleteSummary(null);
+    setDeleteTarget({
+      ...range,
+      label: viewMode === "monthly" ? `${month} 整月` : `${date} 当日`,
+    });
+
+    setDeletePreviewing(true);
+    try {
+      const res = await api.getDataCleanupSummary(range.from, range.to);
+      if (res.success) {
+        setDeleteSummary({
+          total: res.data.total,
+          items: (res.data.items ?? []).map((i) => ({
+            label: i.label,
+            count: Number(i.count) || 0,
+          })),
+        });
+      } else {
+        setDeleteError(typeof res.error === "string" ? res.error : "预览失败");
+      }
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletePreviewing(false);
+    }
+  }, [viewMode, month, date]);
+
+  const confirmDeleteRange = useCallback(async () => {
+    if (!deleteTarget) return;
+    const api = getDataApi();
+    if (!api) return;
+    setDeleteLoading(true);
+    setDeleteError(null);
+    try {
+      const res = await api.deleteDataByDateRange(deleteTarget.from, deleteTarget.to);
+      if (res.success) {
+        setDeleteResult(`已删除 ${res.data.total} 行，已自动备份`);
+        setDeleteTarget(null);
+        setDeleteSummary(null);
+        if (viewMode === "monthly") void fetchMonthlyReport(month, gender);
+        else void fetchReport(date, gender);
+      } else {
+        setDeleteError(typeof res.error === "string" ? res.error : "删除失败");
+      }
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleteLoading(false);
+    }
+  }, [deleteTarget, viewMode, month, date, gender, fetchMonthlyReport, fetchReport]);
+
   // 默认日期：库里最近有音浪数据的那天；没有则用昨天（业务日）
   useEffect(() => {
     let cancelled = false;
@@ -1111,6 +1196,22 @@ export function DailyReportPage() {
                 )}
               </div>
 
+              {/* 删除当前区间数据 */}
+              <Button
+                variant="outline"
+                onClick={() => void openDeleteDialog()}
+                disabled={deletePreviewing || deleteLoading}
+                title={viewMode === "monthly" ? "删除本月数据" : "删除本日数据"}
+                className="h-9 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                {deletePreviewing || deleteLoading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4" />
+                )}
+                {viewMode === "monthly" ? "删除本月数据" : "删除本日数据"}
+              </Button>
+
               {/* 设置菜单：导出设置 / 字段设置 / 等级设置（导出标题在导出设置里） */}
               <HeaderMenu
                 label="设置"
@@ -1218,6 +1319,92 @@ export function DailyReportPage() {
             </div>
           </div>
         </CardHeader>
+
+        {deleteResult || deleteError ? (
+          <div
+            className={cn(
+              "mt-3 flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm",
+              deleteError
+                ? "border border-destructive/30 bg-destructive/5 text-destructive"
+                : "border border-border bg-muted/40 text-foreground"
+            )}
+          >
+            <span>{deleteError ?? deleteResult}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteResult(null);
+                setDeleteError(null);
+              }}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              关闭
+            </button>
+          </div>
+        ) : null}
+
+        {/* 删除数据确认弹窗 */}
+        {deleteTarget ? (
+          <div
+            className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+            onClick={() => setDeleteTarget(null)}
+          >
+            <Card className="w-full max-w-md border border-border shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <CardContent className="space-y-4 pt-6 pb-6">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                    <Trash2 className="size-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-semibold">删除 {deleteTarget.label} 的数据？</h4>
+                    <p className="text-sm text-muted-foreground">删除前会自动备份，但业务数据不可再恢复</p>
+                  </div>
+                </div>
+
+                {deleteError ? (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    {deleteError}
+                  </div>
+                ) : null}
+
+                <div className="space-y-1 rounded-lg border border-border px-3 py-2 text-sm">
+                  {deleteSummary ? (
+                    <>
+                      {deleteSummary.items.map((item) => (
+                        <div key={item.label} className="flex justify-between">
+                          <span className="text-muted-foreground">{item.label}</span>
+                          <span className="font-medium">{item.count.toLocaleString()} 行</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between border-t border-border pt-1">
+                        <span className="font-medium">合计</span>
+                        <span className="font-semibold text-destructive">
+                          {deleteSummary.total.toLocaleString()} 行
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">正在统计…</span>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteLoading}>
+                    取消
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => void confirmDeleteRange()}
+                    disabled={deleteLoading || !deleteSummary || deleteSummary.total === 0}
+                  >
+                    {deleteLoading ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                    确认删除
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
 
         {/* 导出设置弹窗 */}
         {showExportSettings && (

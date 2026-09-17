@@ -59,6 +59,10 @@ function resetPool() {
 function getPool() {
   if (!pool) {
     const { host, user, password, database, port } = resolveDbConfig();
+    const positiveInt = (value, fallback) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+    };
     pool = mysql.createPool({
       host,
       port,
@@ -66,13 +70,14 @@ function getPool() {
       password,
       database,
       waitForConnections: true,
-      connectionLimit: 5,
+      // 低配设备（如 RK3318 盒子）可用 DB_POOL_LIMIT 收到 2，显著降低常驻内存
+      connectionLimit: positiveInt(process.env.DB_POOL_LIMIT, 5),
       connectTimeout: 10000,
       // 远程 MySQL 防断连：开启 TCP keepalive + 缩短空闲超时，避免被服务端 wait_timeout 踢掉
       enableKeepAlive: true,
       keepAliveInitialDelay: 10000,
-      idleTimeout: 30000,
-      maxIdle: 1,
+      idleTimeout: positiveInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 30000),
+      maxIdle: positiveInt(process.env.DB_POOL_MAX_IDLE, 1),
       // DATE/DATETIME 直接返回字符串，避免 JS Date 经 UTC 转换导致日期回退一天
       dateStrings: true,
     });
@@ -3681,6 +3686,129 @@ async function deleteAnchorIncome(periodInput, personIds) {
   return { period, deleted: Number(result.affectedRows) || 0 };
 }
 
+// ---- 数据清理（按日期区间备份后删除）----
+
+const CLEANUP_TARGETS = [
+  { table: "wave_snapshots", label: "音浪快照", kind: "range", column: "import_date" },
+  { table: "duration_snapshots", label: "时长快照", kind: "range", column: "import_date" },
+  { table: "import_records", label: "导入记录", kind: "range", column: "import_date" },
+  { table: "anchor_income", label: "收入结算", kind: "period", column: "period" },
+];
+
+function normalizeCleanupRange(fromInput, toInput) {
+  const from = String(fromInput ?? "").trim();
+  const to = String(toInput ?? "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new Error("日期格式应为 YYYY-MM-DD");
+  }
+  if (from > to) throw new Error("开始日期不能晚于结束日期");
+  return { from, to, periodFrom: from.slice(0, 7), periodTo: to.slice(0, 7) };
+}
+
+function cleanupCondition(target, range) {
+  if (target.kind === "period") {
+    return {
+      sql: "`period` BETWEEN ? AND ?",
+      params: [range.periodFrom, range.periodTo],
+    };
+  }
+  return {
+    sql: `\`${target.column}\` BETWEEN ? AND ?`,
+    params: [range.from, range.to],
+  };
+}
+
+function cleanupBackupName(table) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `backup_purge_${table}_${stamp}`;
+}
+
+/** 按日期区间统计将被清理的数据量（只读，不做任何修改） */
+async function getDataCleanupSummary(fromInput, toInput) {
+  const range = normalizeCleanupRange(fromInput, toInput);
+  const db = getPool();
+  const [tables] = await db.query(
+    `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()`
+  );
+  const existing = new Set(tables.map((t) => t.name));
+
+  const items = [];
+  for (const target of CLEANUP_TARGETS) {
+    if (!existing.has(target.table)) continue;
+    const cond = cleanupCondition(target, range);
+    const [[row]] = await db.query(
+      `SELECT COUNT(*) AS c FROM \`${target.table}\` WHERE ${cond.sql}`,
+      cond.params
+    );
+    items.push({
+      table: target.table,
+      label: target.label,
+      kind: target.kind,
+      count: Number(row?.c) || 0,
+    });
+  }
+
+  return {
+    from: range.from,
+    to: range.to,
+    items,
+    total: items.reduce((sum, item) => sum + item.count, 0),
+  };
+}
+
+/** 按日期区间清理数据：先把待删数据整行备份，再删除 */
+async function deleteDataByDateRange(fromInput, toInput) {
+  const range = normalizeCleanupRange(fromInput, toInput);
+  const db = getPool();
+  const [tables] = await db.query(
+    `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()`
+  );
+  const existing = new Set(tables.map((t) => t.name));
+
+  const items = [];
+  const backups = [];
+
+  for (const target of CLEANUP_TARGETS) {
+    if (!existing.has(target.table)) continue;
+    const cond = cleanupCondition(target, range);
+    const [[countRow]] = await db.query(
+      `SELECT COUNT(*) AS c FROM \`${target.table}\` WHERE ${cond.sql}`,
+      cond.params
+    );
+    const count = Number(countRow?.c) || 0;
+    if (count === 0) {
+      items.push({ table: target.table, label: target.label, deleted: 0 });
+      continue;
+    }
+
+    const backupTable = cleanupBackupName(target.table);
+    await db.query(
+      `CREATE TABLE \`${backupTable}\` AS SELECT * FROM \`${target.table}\` WHERE ${cond.sql}`,
+      cond.params
+    );
+    const [result] = await db.query(
+      `DELETE FROM \`${target.table}\` WHERE ${cond.sql}`,
+      cond.params
+    );
+    backups.push({ table: target.table, backupTable, rows: count });
+    items.push({
+      table: target.table,
+      label: target.label,
+      deleted: Number(result.affectedRows) || 0,
+    });
+  }
+
+  return {
+    from: range.from,
+    to: range.to,
+    items,
+    backups,
+    total: items.reduce((sum, item) => sum + item.deleted, 0),
+  };
+}
+
 module.exports = {
   getPool,
   getAnchors,
@@ -3731,6 +3859,8 @@ module.exports = {
   importAnchorIncome,
   saveAnchorIncomeProfile,
   deleteAnchorIncome,
+  getDataCleanupSummary,
+  deleteDataByDateRange,
   verifyAppPassword,
   hasAppPassword,
   ensureChannelAnchorBindsTable: () => ensureChannelAnchorBindsTable(getPool()),

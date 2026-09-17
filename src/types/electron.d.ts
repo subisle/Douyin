@@ -1,5 +1,28 @@
 export {};
 
+export interface DataCleanupItem {
+  table: string;
+  label: string;
+  kind: string;
+  count?: number;
+  deleted?: number;
+}
+
+export interface DataCleanupSummary {
+  from: string;
+  to: string;
+  items: DataCleanupItem[];
+  total: number;
+}
+
+export interface DataCleanupResult {
+  from: string;
+  to: string;
+  items: DataCleanupItem[];
+  backups: { table: string; backupTable: string; rows: number }[];
+  total: number;
+}
+
 export interface AnchorRow {
   id: number;
   name: string;
@@ -293,16 +316,6 @@ export interface WeixinBotDailyReportPushSettings {
   } | null;
 }
 
-export interface WeixinBotAiSettings {
-  enabled: boolean;
-  baseUrl: string;
-  model: string;
-  timeoutMs: number;
-  maxToolRounds: number;
-  progressEnabled: boolean;
-  hasApiKey: boolean;
-}
-
 export interface WeixinBotSettings {
   accountId: string | null;
   autoReplyEnabled: boolean;
@@ -311,12 +324,11 @@ export interface WeixinBotSettings {
   allowUserIds: string[];
   allowGroupIds: string[];
   customCommands: WeixinBotCustomCommand[];
-  ai: WeixinBotAiSettings;
   contacts: WeixinBotContact[];
   dailyReportPush: WeixinBotDailyReportPushSettings;
 }
 
-/** 写入设置的载荷：字段均可选；AI Key 只写不读 */
+/** 写入设置的载荷：字段均可选 */
 export interface WeixinBotSettingsSavePayload {
   accountId?: string;
   autoReplyEnabled?: boolean;
@@ -326,16 +338,6 @@ export interface WeixinBotSettingsSavePayload {
   allowGroupIds?: string[];
   customCommands?: WeixinBotCustomCommand[];
   dailyReportPush?: Partial<WeixinBotDailyReportPushSettings>;
-  ai?: {
-    enabled?: boolean;
-    baseUrl?: string;
-    model?: string;
-    timeoutMs?: number;
-    maxToolRounds?: number;
-    progressEnabled?: boolean;
-    apiKey?: string;
-    clearApiKey?: boolean;
-  };
 }
 
 export type QqBotPhase = "idle" | "connecting" | "ready" | "reconnecting" | "error";
@@ -1333,6 +1335,14 @@ declare global {
       month: string,
       gender: string
     ) => Promise<IpcResult<MonthlyReportData>>;
+    getDataCleanupSummary: (
+      from: string,
+      to: string
+    ) => Promise<IpcResult<DataCleanupSummary>>;
+    deleteDataByDateRange: (
+      from: string,
+      to: string
+    ) => Promise<IpcResult<DataCleanupResult>>;
     getPkRoster: (
       period?: string,
       groupSize?: number

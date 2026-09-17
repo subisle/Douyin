@@ -119,6 +119,10 @@ export async function GET(request: Request, context: RouteContext) {
     }
     if (one === "reports" && two === "tier-rules") return apiOk(await call("getTierRules"));
 
+    if (one === "data-cleanup" && two === "preview") {
+      return apiOk(await call("getDataCleanupSummary", str(sp.get("from")), str(sp.get("to"))));
+    }
+
     if (one === "flags" && two === "groups") return apiOk(await call("getFlagGroups", str(sp.get("period"))));
     if (one === "flags" && two === "winner") return apiOk(await call("getFlagWinner", str(sp.get("period"))));
     if (one === "flags" && two === "person" && three) return apiOk(await call("getFlowingFlag", Number(three)));
@@ -254,6 +258,14 @@ export async function DELETE(request: Request, context: RouteContext) {
       const ids = Array.isArray(body.ids) ? body.ids.map(Number).filter(Number.isFinite) : [];
       if (ids.length === 0) return apiFail("缺少要删除的主播 ID", 400, "MISSING_IDS");
       return apiOk(await call("deleteAnchors", ids));
+    }
+
+    if (one === "data-cleanup" && path.length === 1) {
+      const body = await readJson(request);
+      const from = str(String(body.from ?? ""));
+      const to = str(String(body.to ?? ""));
+      if (!from || !to) return apiFail("缺少删除区间 from / to", 400, "BAD_REQUEST");
+      return apiOk(await call("deleteDataByDateRange", from, to));
     }
 
     if (one === "income" && path.length === 1) {

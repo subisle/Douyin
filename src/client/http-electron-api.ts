@@ -1,4 +1,6 @@
 import type {
+  DataCleanupResult,
+  DataCleanupSummary,
   IpcResult,
   QqBotMessage,
   QqBotStatus,
@@ -336,6 +338,10 @@ export function createHttpElectronApi(): ElectronAPI {
     getFlowingFlag: (personId) => request(`/flags/person/${enc(personId)}`),
     getFlagGroups: (period) => request(`/flags/groups${qs({ period })}`),
     settleFlagScores: (period) => request("/flags/settle", { method: "POST", body: { period } }),
+    getDataCleanupSummary: (from, to) =>
+      request<DataCleanupSummary>(`/data-cleanup/preview${qs({ from, to })}`),
+    deleteDataByDateRange: (from, to) =>
+      request<DataCleanupResult>("/data-cleanup", { method: "DELETE", body: { from, to } }),
     getTierRules: () => request("/reports/tier-rules"),
     saveTierRules: (rules) => request("/reports/tier-rules", { method: "PUT", body: { rules } }),
     getDailyWaveReport: (date, gender) => request(`/reports/daily-wave${qs({ date, gender })}`),
