@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # ---------------------------------------------------------------------------
 # RK3318 BOX — Rockchip RK3318 (aarch64 / arm64, 4x Cortex-A53)
 #   Host : Armbian 26.2.0-trunk.488 trixie (Debian 13)
@@ -69,6 +68,19 @@ ENV NODE_OPTIONS="--max-old-space-size=1024" \
     PROJECT_BOTS=0
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/. ./
+# slim 镜像不含 typescript（devDep）。next start 读取 next.config.ts 时会现场
+# npm install typescript，导致启动极慢。这里用等价 JS 配置替换（构建期已用
+# 原配置产出 .next，运行时只需同构的 config）。
+RUN printf '%s\n' \
+      'const isElectron = process.env.ELECTRON === "true";' \
+      'const nextConfig = {' \
+      '  output: isElectron ? "export" : undefined,' \
+      '  images: { unoptimized: true },' \
+      '  assetPrefix: isElectron ? "./" : undefined,' \
+      '};' \
+      'export default nextConfig;' \
+      > next.config.mjs \
+ && rm -f next.config.ts
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/api/v1/health" || exit 1

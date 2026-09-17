@@ -1,4 +1,5 @@
 # 构建上下文瘦身：RK3318 eMMC 有限，别把几百 MB 垃圾送进 daemon
+# 注意：Dockerfile/compose 本身排除掉，避免「改 Dockerfile → COPY . . 缓存全失效」
 .git/
 .gitmodules
 .github/
@@ -6,6 +7,9 @@
 .claude/
 .mimocode/
 DouyinLang/
+Dockerfile*
+docker-compose*.yml
+.dockerignore
 
 node_modules/
 .next/

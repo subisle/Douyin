@@ -162,3 +162,59 @@ docker compose -f docker-compose.rk3318.yml run --rm web node scripts/storage-do
 docker compose -f docker-compose.rk3318.yml down
 # 换回上一版镜像 tag 后重新 up；数据库回滚走 npm run db:backup 的备份
 ```
+
+---
+
+## 9. 实测记录（192.168.0.13，2026-09-17）
+
+实测环境：`rk3318-box` / aarch64 / Armbian 26.11.0-trunk.51 trixie / 内核 6.18.52 /
+3.9 GiB 内存 + 1.9 GiB swap / eMMC 15 GB（余 9.2 GB）/ Docker 29.8.1 arm64 / 4 核。
+
+结果：**Web 服务已跑通**，`healthy`，Ready 6.2 s，空闲占用 CPU 0.15% / 内存 107 MiB。
+
+```bash
+curl http://192.168.0.13:3000/api/v1/health          # {"success":true,...}
+curl http://192.168.0.13:3000/api/v1/dashboard/summary -H 'authorization: Bearer <API_TOKENS>'
+```
+
+### 踩过的四个坑（都已修，别重犯）
+
+1. **拉不动 Docker Hub**。`auth.docker.io` 走 IPv6 直接 i/o timeout。必须配加速：
+   ```json
+   // /etc/docker/daemon.json
+   { "registry-mirrors": ["https://dockerproxy.net", "https://hub.rat.dev"] }
+   ```
+   实测这两个源可达，`docker.m.daocloud.io` / `docker.1ms.run` / `docker.xuanyuan.me` 在
+   该网络下不可达。改完 `systemctl restart docker`。同时 Dockerfile 里**不要**写
+   `# syntax=docker/dockerfile:1.7`，否则还要多拉一个 frontend 镜像。
+2. **`next start` 现场装 typescript 把容器卡死**。slim 镜像没有 typescript（devDep），
+   而 `next.config.ts` 是 TS，Next 会 `npm install typescript` —— A53 上装不完，
+   容器不进 healthy，配了 `restart: unless-stopped` 就变成无限重启，9 次后把 4 核榨干，
+   连带拖死同时进行的 `docker build`。Dockerfile 已在 runtime 阶段用等价 `next.config.mjs`
+   替换 `.ts`，启动从「卡到重启」变成 6.2 s 就绪。
+3. **`COPY . .` 会把 Dockerfile 自己算进构建上下文**，于是「只改 Dockerfile」也会打穿
+   缓存，`next build` 白跑 16 分钟。`.dockerignore` 里已排除 `Dockerfile*`、
+   `docker-compose*.yml`、`.dockerignore`。
+4. **`schema_migrations` 校验和全线不匹配**。远端 sqlpub 库的 4 条迁移记录是另一份代码
+   写入的，与本仓库文件 checksum 不一致，迁移器按设计直接终止（库里表其实都在）。
+   处理方式是对账（只改 `checksum` 字段，不动业务表）：用 `migrate.js status` 拿到
+   `database=` / `local=` 两侧值，确认目标表（`ilink_*` / `outbox_messages` /
+   `anchor_income*`）确实存在后，`UPDATE schema_migrations SET checksum=<local> WHERE version=?`，
+   再 `status` 应全为 `applied`。**注意**：这是历史账目修正，不是 schema 变更。
+
+### 构建耗时（4×A53，实测）
+
+| 阶段 | 耗时 |
+| --- | --- |
+| 首次全量构建 | ~45 分钟（含 deb.debian.org 拉 56 MB 中文字体包，apt 阶段 41 分钟） |
+| 改 Dockerfile 后重建 | ~25 分钟（缓存被打穿 + 旧容器抢 CPU；CPU 让出来后明显变快） |
+| 容器启动 | 6.2 秒 |
+| 镜像体积 | 内容 283 MB / 虚拟 1.18 GB |
+
+### 该网络下的遗留问题
+
+- **AI 网关不通**：盒子（192.168.0.13）访问不到 `192.168.5.12:80`，
+  `AI_BASE_URL` 指向它时 AI 对话/Agent 技能会失败。要么换可达地址，要么在盒子上本地起网关。
+- 远端库 `mysql7.sqlpub.com:3312` 从盒子可达，所以业务数据接口正常。
+- `bot-worker` 未启动（实验性，需 `--profile bot`）；同一微信账号严禁与桌面 Electron 同时在线。
+
