@@ -213,8 +213,83 @@ curl http://192.168.0.13:3000/api/v1/dashboard/summary -H 'authorization: Bearer
 
 ### 该网络下的遗留问题
 
-- **AI 网关不通**：盒子（192.168.0.13）访问不到 `192.168.5.12:80`，
-  `AI_BASE_URL` 指向它时 AI 对话/Agent 技能会失败。要么换可达地址，要么在盒子上本地起网关。
+- **AI 网关不通**：盒子（192.168.0.13）访问不到 `192.168.5.12:80`。
+  本项目已在 `3318` 分支**彻底移除 AI 能力**，因此不再需要该网关（`AI_*` 变量已全部删除）。
 - 远端库 `mysql7.sqlpub.com:3312` 从盒子可达，所以业务数据接口正常。
 - `bot-worker` 未启动（实验性，需 `--profile bot`）；同一微信账号严禁与桌面 Electron 同时在线。
+
+---
+
+## 10. 机器人启动与多 QQ 机器人（2026-09-18）
+
+### 10.1 让微信 + QQ 机器人在盒子上跑起来
+
+`.env` 里设 `PROJECT_BOTS=1`（`deploy/rk3318/.env.example` 已默认），重启容器即可：
+
+```bash
+cd /srv/douyin/app
+DOUYIN_DATA_DIR=/srv/douyin docker compose -f docker-compose.rk3318.yml up -d
+docker logs douyin-web 2>&1 | grep project-bots
+# 期望： [project-bots] weixin + N 个 QQ 机器人已启动
+```
+
+**关键修复**：服务器侧原先只从运行时目录读 bot 存储文件，镜像里内置的
+`data/builtin/*.json`（含微信凭据、QQ AppID）根本读不到，所以 Bot 起不来。
+现在解析顺序为 `环境变量` → `data/builtin`（内置配置）→ 运行时目录，
+可用 `WEIXIN_BOT_STORE` / `QQ_BOT_STORE` 覆盖。
+
+机器人状态会写回配置文件本身，因此 compose 把 `data/builtin` 挂成了卷
+（`/srv/douyin/builtin`），否则容器重建后绑定关系、开关会丢：
+
+```bash
+mkdir -p /srv/douyin/builtin/qq-bots
+cp -n /srv/douyin/app/data/builtin/*.json /srv/douyin/builtin/
+```
+
+### 10.2 多 QQ 机器人：一份配置一个机器人
+
+把配置丢进 `${DOUYIN_DATA_DIR}/builtin/qq-bots/`（容器内即 `data/builtin/qq-bots/`），
+文件名即实例标识：
+
+```json
+{ "appId": "102xxxxx", "clientSecret": "***", "label": "主机器人" }
+```
+
+规则与排查见 [`deploy/rk3318/qq-bots/README.md`](../deploy/rk3318/qq-bots/README.md)：
+
+- 同一 `appId` 只生效一份（文件名排序先命中者胜）
+- 缺 `appId`/`clientSecret`、`enabled: false`、JSON 损坏的配置会被跳过，启动日志会写明原因
+- 兼容旧的单份 `qq-bot.v1.json`；`QQ_BOTS_DIR` 可指向自定义目录（优先级最高）
+
+查看实例：
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/bots/qq/bots -H "authorization: Bearer <API_TOKENS>"
+```
+
+### 10.3 每天两个 CSV 的导入流程
+
+用户侧只需两步：
+
+1. 发日期口令，例如 `9.11`
+2. 依次发 **音浪 CSV** 与 **时长 CSV**
+
+行为细节（`electron/weixin-bot-commands.js`）：
+
+- 日期口令 10 分钟内有效，期间可覆盖 **2 个文件**（音浪 + 时长各一份），两个都落到该日期
+- 每次导入回执会说明：还剩几个文件可用 / 还缺哪一类（例如「还剩 1 个文件可用，还缺：时长」）
+- 两个都用完后，再发的文件回落「昨天」，回执会提示重新发日期
+- 同一日期重复导入同类文件会明确提示「本次覆盖了原数据」
+- 旧实现第一个文件就把口令消费掉了，第二个 CSV 会错误落到昨天——这是本次修掉的 bug
+
+### 10.4 内存优化（面向 3.9 GB / 4 核盒子）
+
+| 措施 | 说明 |
+| --- | --- |
+| 删除 AI 能力 | 去掉模型调用、RAG 检索、会话/记忆存储，常驻内存与代码面同步缩小 |
+| sharp 调优 | 统一走 `electron/sharp-tuning.js`：默认关闭 libvips cache、并发降到 2；可用 `SHARP_CACHE=1` / `SHARP_CONCURRENCY=n` 覆盖 |
+| DB 连接池 | 新增 `DB_POOL_LIMIT` / `DB_POOL_MAX_IDLE` / `DB_POOL_IDLE_TIMEOUT_MS`；盒子上设 `DB_POOL_LIMIT=2` |
+| 容器上限 | compose 保留 `mem_limit`（`DOUYIN_WEB_MEM` 可调）与 json-file 日志轮转 |
+
+实测数据见下一节。
 
