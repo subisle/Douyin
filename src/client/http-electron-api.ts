@@ -2,7 +2,9 @@ import type {
   DataCleanupResult,
   DataCleanupSummary,
   IpcResult,
+  QqBotInstanceStatus,
   QqBotMessage,
+  QqBotSettings,
   QqBotStatus,
   WeixinBotMessage,
   WeixinBotStatus,
@@ -268,6 +270,17 @@ export function createHttpElectronApi(): ElectronAPI {
       }, () => undefined, 2500);
     },
     getQqBotStatus: () => request<QqBotStatus>("/bots/qq"),
+    // ── 多机器人：一份配置一个实例 ──
+    getQqBotInstances: () => request<QqBotInstanceStatus[]>("/bots/qq/bots"),
+    getQqBotInstanceStatus: (key: string) => request<QqBotStatus>(`/bots/qq/bots/${enc(key)}`),
+    getQqBotInstanceSettings: (key: string) =>
+      request<QqBotSettings>(`/bots/qq/bots/${enc(key)}/settings`),
+    saveQqBotInstanceSettings: (key: string, payload) =>
+      request<QqBotSettings>(`/bots/qq/bots/${enc(key)}/settings`, { method: "POST", body: payload }),
+    connectQqBotInstance: (key: string) =>
+      request<QqBotStatus>(`/bots/qq/bots/${enc(key)}/connect`, { method: "POST" }),
+    disconnectQqBotInstance: (key: string) =>
+      request<QqBotStatus>(`/bots/qq/bots/${enc(key)}/disconnect`, { method: "POST" }),
     getQqBotMessages: () => request<QqBotMessage[]>("/bots/qq/messages"),
     getQqBotSettings: () => request("/bots/qq/settings"),
     saveQqBotSettings: (payload) => request("/bots/qq/settings", { method: "POST", body: payload }),

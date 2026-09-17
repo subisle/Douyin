@@ -355,6 +355,12 @@ export interface QqBotStatus {
   tokenExpiresAt?: number | null;
 }
 
+/** 多机器人：一个实例 = data/builtin/qq-bots 下的一份配置（或旧的单份 qq-bot.v1.json） */
+export interface QqBotInstanceStatus extends QqBotStatus {
+  key: string;
+  label: string;
+}
+
 export interface QqBotMessage {
   id: string;
   direction: "in" | "out";
@@ -1193,6 +1199,16 @@ declare global {
     onWeixinBotMessage: (callback: (message: WeixinBotMessage) => void) => () => void;
     onWeixinBotMessagesCleared: (callback: () => void) => () => void;
     getQqBotStatus: () => Promise<IpcResult<QqBotStatus>>;
+    /** 多机器人：全部实例状态（Web 端由 /api/v1/bots/qq/bots 提供；桌面端为可选回退） */
+    getQqBotInstances?: () => Promise<IpcResult<QqBotInstanceStatus[]>>;
+    getQqBotInstanceStatus?: (key: string) => Promise<IpcResult<QqBotStatus>>;
+    getQqBotInstanceSettings?: (key: string) => Promise<IpcResult<QqBotSettings>>;
+    saveQqBotInstanceSettings?: (
+      key: string,
+      payload: QqBotSettingsSavePayload
+    ) => Promise<IpcResult<QqBotSettings>>;
+    connectQqBotInstance?: (key: string) => Promise<IpcResult<QqBotStatus>>;
+    disconnectQqBotInstance?: (key: string) => Promise<IpcResult<QqBotStatus>>;
     getQqBotMessages: () => Promise<IpcResult<QqBotMessage[]>>;
     getQqBotSettings: () => Promise<IpcResult<QqBotSettings>>;
     saveQqBotSettings: (payload: QqBotSettingsSavePayload) => Promise<IpcResult<QqBotSettings>>;
