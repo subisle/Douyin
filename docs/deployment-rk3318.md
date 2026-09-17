@@ -291,5 +291,73 @@ curl -s http://127.0.0.1:3000/api/v1/bots/qq/bots -H "authorization: Bearer <API
 | DB 连接池 | 新增 `DB_POOL_LIMIT` / `DB_POOL_MAX_IDLE` / `DB_POOL_IDLE_TIMEOUT_MS`；盒子上设 `DB_POOL_LIMIT=2` |
 | 容器上限 | compose 保留 `mem_limit`（`DOUYIN_WEB_MEM` 可调）与 json-file 日志轮转 |
 
-实测数据见下一节。
+### 10.5 实测结果（192.168.0.13，2026-09-18）
+
+```
+[project-bots] 诊断 cwd=/app runtimeDir=/app/data/runtime builtinDir=/app/data/builtin
+               微信存储=/app/data/builtin/weixin-bot.v1.json QQ 配置=1 个
+[project-bots] weixin + 1 个 QQ 机器人已启动
+[project-bots] 已启动：微信 + 1 个 QQ 机器人 (qq-bot.v1)
+```
+
+```json
+// GET /api/v1/bots/qq/bots
+[{"key":"qq-bot.v1","appId":"1905…","phase":"ready","connected":true,
+  "hasCredentials":true,"sessionId":"fa3d4b97-…","messageCount":44}]
+```
+
+- 容器 `healthy`，冷启动 5.5 s；**内存 97 MiB / 1 GiB（9.5%）**，CPU 空闲 0.04%
+- QQ 官方通道真实连接成功（拿到 sessionId，可收发）
+
+### 10.6 微信账号在盒子上重新登录（token 从桌面搬不过来）
+
+桌面端把 iLink token 用**系统钥匙串**（Electron safeStorage）加密，服务器用的是
+`BOT_STORE_SECRET` 的 AES —— 两种密文不通用，所以直接把桌面配置拷到盒子上，
+微信会一直是「尚未连接」。正确做法是在盒子上扫码一次：
+
+```bash
+TOKEN=<你的 API_TOKENS>
+# 1. 发起登录，拿二维码（qrDataUrl 是 base64 PNG）
+curl -sS -X POST http://192.168.0.13:3000/api/v1/bots/weixin/login \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d '{}'
+# 2. 轮询状态直到扫码完成
+curl -sS http://192.168.0.13:3000/api/v1/bots/weixin -H "authorization: Bearer $TOKEN"
+# 3. 取消（如果扫不了）
+curl -sS -X POST http://192.168.0.13:3000/api/v1/bots/weixin/login/cancel -H "authorization: Bearer $TOKEN"
+```
+
+扫码成功后凭据写到挂载卷 `/srv/douyin/builtin/weixin-bot.v1.json`（`BOT_STORE_SECRET` 加密），
+容器重建也不会丢。
+
+> **注意**：同一个微信账号不能同时挂在桌面 Electron 和盒子上。
+> 在盒子扫码前，先在桌面端断开该账号。
+
+### 10.7 再加一个 QQ 机器人
+
+```bash
+cat > /srv/douyin/builtin/qq-bots/robot2.json <<'EOF'
+{ "appId": "你的第二个AppID", "clientSecret": "你的第二个Secret", "label": "二号机器人" }
+EOF
+cd /srv/douyin/app && DOUYIN_DATA_DIR=/srv/douyin docker compose -f docker-compose.rk3318.yml up -d
+# 验证
+curl -s http://127.0.0.1:3000/api/v1/bots/qq/bots -H "authorization: Bearer $TOKEN"
+```
+
+重启后应看到两个实例，各自独立连接；`appId` 重复或字段缺失的配置会在启动日志里说明原因并被跳过。
+
+### 10.8 服务器侧踩过的坑（都已修，改代码时别踩回去）
+
+| 现象 | 根因 | 修法 |
+| --- | --- | --- |
+| `PROJECT_BOTS=1` 也不启动机器人 | `src/instrumentation.ts` 原本无条件跳过（写着「Next 只做渲染」） | 统一走 `shouldSkipProjectBots`；**必须静态 import**，动态路径会被 webpack 换成桩函数 |
+| 凭据读不到、QQ appId 为空 | `resolveBuiltinConfigDir` 用 `__dirname` 推项目根，被 webpack 内联到 `.next/server` 后算错 | 优先 `process.cwd()` |
+| QQ 配置明明存在却被跳过 | 配置发现只读顶层 `appId`，实际存储格式是 `settings.appId` | 两种写法都认 |
+| 同一进程里跑出两套机器人（重复连接） | Next 把 `runtime.js` 分别打进 instrumentation 与 route chunk，两份 state | 状态挂 `globalThis[Symbol.for(...)]` 共享单例 |
+| QQ 连上后报 `bufferUtil.mask is not a function` | `ws` 被 webpack 打包，探测不到原生 `bufferutil` | `next.config.ts` 的 `serverExternalPackages` 加 `ws`/`sharp`/`mysql2`/`better-sqlite3` |
+| 每次构建都要多等几分钟 | base 阶段 `NODE_ENV=production` 让 `npm ci` 跳过 devDeps，`next build` 中途联网装 typescript | 构建阶段 `npm ci --include=dev` |
+
+**热更新技巧**（改完产物想立刻验证，省一次 20 分钟构建）：本地 `npm run build` →
+打包 `.next`（排 cache，约 2 MB）→ `docker cp` 进容器 + 容器内 `tar -xzf` 到 `/app/.next` →
+`docker restart`。必须**整包**更新：改了外部依赖后 webpack 会新切 chunk，
+只拷单个文件会报 `Cannot find module './chunks/xxx.js'`。
 
