@@ -1,0 +1,38 @@
+import { useState } from "react";
+import { DailyPage, ImportPage, MonthlyPage, PersonsPage, YearlyPage } from "./pages";
+
+const TABS = [
+  { key: "daily", label: "日榜", Comp: DailyPage },
+  { key: "monthly", label: "月榜", Comp: MonthlyPage },
+  { key: "yearly", label: "年度汇总", Comp: YearlyPage },
+  { key: "persons", label: "主播管理", Comp: PersonsPage },
+  { key: "import", label: "数据导入", Comp: ImportPage },
+] as const;
+
+export default function App() {
+  const [tab, setTab] = useState<string>("daily");
+  const Current = TABS.find((t) => t.key === tab)?.Comp ?? DailyPage;
+
+  return (
+    <>
+      <header className="topbar">
+        <span className="brand">主播数据管理</span>
+        <nav className="tabs">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              className={tab === t.key ? "tab active" : "tab"}
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="layout">
+        <Current />
+      </main>
+    </>
+  );
+}

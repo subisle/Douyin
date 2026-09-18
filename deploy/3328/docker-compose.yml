@@ -1,0 +1,61 @@
+# 3328 前后端分离部署（RK3318 arm64 / 任意 amd64 都适用）
+#
+# 用法：
+#   cd deploy/3328
+#   docker compose up -d --build
+#   打开 http://<盒子IP>:8080/
+#
+# 数据库默认用容器内的 MySQL 8；要接外部库改 DY_DB_* 即可。
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: douyin-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-douyin3328}
+      MYSQL_DATABASE: douyin
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=64
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-douyin3328}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 盒子内存紧张，MySQL 限 512M，超出会被 OOM killer 干掉
+    mem_limit: 512m
+
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/3328/Dockerfile
+    container_name: douyin-server
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DY_ADDR: :8080
+      DY_WEB_DIR: /web/dist
+      DY_LOG_LEVEL: ${DY_LOG_LEVEL:-info}
+      DY_AUTO_MIGRATE: "true"
+      DY_DB_HOST: mysql
+      DY_DB_PORT: "3306"
+      DY_DB_USER: root
+      DY_DB_PASSWORD: ${MYSQL_ROOT_PASSWORD:-douyin3328}
+      DY_DB_NAME: douyin
+      DY_DB_MAX_OPEN: "20"
+      DY_DB_MAX_IDLE: "5"
+    ports:
+      - "${PORT:-8080}:8080"
+    mem_limit: 256m
+
+volumes:
+  mysql-data:

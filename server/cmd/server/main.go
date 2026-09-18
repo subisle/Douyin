@@ -1,0 +1,116 @@
+// Command server 是 3328 分支的后端入口：一个二进制，一个端口。
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"douyin-server/internal/config"
+	"douyin-server/internal/httpapi"
+	"douyin-server/internal/migrate"
+	"douyin-server/internal/repo"
+	"douyin-server/internal/store"
+)
+
+func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("配置加载失败", "err", err)
+		os.Exit(1)
+	}
+	log := newLogger(cfg.LogLevel)
+	slog.SetDefault(log)
+
+	db, err := store.Open(cfg.DB)
+	if err != nil {
+		log.Error("数据库连接失败", "err", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Error("关闭数据库连接失败", "err", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	if cfg.AutoMigrate {
+		applied, err := migrate.Run(ctx, db)
+		if err != nil {
+			log.Error("数据库迁移失败", "err", err)
+			os.Exit(1)
+		}
+		if len(applied) > 0 {
+			log.Info("已应用迁移", "files", applied)
+		}
+	}
+
+	srv := httpapi.New(repo.New(db), cfg, log)
+
+	// 单容器部署时，前端产物交给同一个端口托管，省一层反代。
+	if cfg.WebDir != "" {
+		if _, err := os.Stat(cfg.WebDir); err != nil {
+			log.Warn("WEB_DIR 不可用，跳过静态托管", "dir", cfg.WebDir, "err", err)
+		} else {
+			srv.ServeStatic(cfg.WebDir)
+			log.Info("已托管前端静态文件", "dir", cfg.WebDir)
+		}
+	}
+
+	httpSrv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("服务启动", "addr", cfg.Addr)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-errCh:
+		log.Error("服务异常终止", "err", err)
+		os.Exit(1)
+	case sig := <-stop:
+		log.Info("收到退出信号，开始优雅停机", "signal", sig.String())
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer shutdownCancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Error("优雅停机失败", "err", err)
+	}
+	log.Info("已停机")
+}
+
+func newLogger(level string) *slog.Logger {
+	var lvl slog.Level
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+}
