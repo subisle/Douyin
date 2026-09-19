@@ -135,7 +135,7 @@ const routes = {
   "/api/v1/metrics/yearly": yearly,
 };
 
-createServer((req, res) => {
+createServer(async (req, res) => {
   const { pathname } = new URL(req.url, "http://localhost");
 
   if (req.method === "OPTIONS") {
@@ -144,7 +144,8 @@ createServer((req, res) => {
     return;
   }
 
-  if (req.method === "POST") {
+  // 兜底：其他 POST（如导入）统一回成功。必须放在所有具体路由之后。
+  if (req.method === "POST" && !pathname.startsWith("/api/v1/bots/")) {
     res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
     res.end(JSON.stringify({ data: { batchId: 1, imported: 0, persons: 0, skipped: [] } }));
     return;
@@ -159,6 +160,72 @@ createServer((req, res) => {
       "Access-Control-Allow-Origin": "*",
     });
     res.end(sampleSvg(name));
+    return;
+  }
+
+  // 机器人状态
+  if (pathname === "/api/v1/bots/status") {
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({
+      data: {
+        channels: [
+          { name: "weixin", running: false, connected: false, note: "微信 iLink 适配器待接入" },
+          { name: "qq", running: false, connected: false, note: "QQ 开放平台适配器待接入" },
+        ],
+        push: false,
+      },
+    }));
+    return;
+  }
+
+  // 指令试玩：这里只是够演示的简化版，真实解析在 Go 的 internal/bot（22 个单测覆盖）
+  if (pathname === "/api/v1/bots/parse") {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const input = JSON.parse(body || "{}").text || "";
+    const t = String(input).trim();
+    const intent = { Kind: "person_query", Date: "", Period: "", Year: 0, Query: t, Gender: "" };
+    const now = new Date();
+    const y = now.getFullYear();
+    const pad = (n) => String(n).padStart(2, "0");
+
+    if (/帮助|^help$/.test(t)) { intent.Kind = "help"; intent.Query = ""; }
+    else if (/推送/.test(t)) {
+      intent.Kind = /开启/.test(t) || /关闭/.test(t) ? "push_toggle" : "push_status";
+      intent.Query = "";
+    } else if (/之星/.test(t)) { intent.Kind = "daily_star"; intent.Query = ""; intent.Date = `${y}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`; }
+    else if (/^20\d{2}年?$/.test(t) || /年报/.test(t)) { intent.Kind = "yearly_report"; intent.Year = Number(t.slice(0, 4)) || y; intent.Query = ""; }
+    else if (/(月报)|(\d{1,2}\s*月$)|(20\d{2}\s*[年./-]\s*\d{1,2}\s*月?$)/.test(t)) {
+      intent.Kind = "monthly_report";
+      const m = t.match(/(\d{1,2})\s*月/);
+      intent.Period = `${y}-${pad(m ? Number(m[1]) : now.getMonth() + 1)}`;
+      intent.Query = "";
+    } else if (/(日报|报告)/.test(t)) {
+      intent.Kind = "daily_report";
+      const d = t.match(/(\d{1,2})\s*[日号]/);
+      intent.Date = `${y}-${pad(now.getMonth() + 1)}-${pad(d ? Number(d[1]) : now.getDate())}`;
+      intent.Query = "";
+    } else if (/^(\d{1,2})[.．](\d{1,2})$/.test(t)) {
+      const m = t.match(/^(\d{1,2})[.．](\d{1,2})$/);
+      intent.Kind = "daily_report";
+      intent.Date = `${y}-${pad(Number(m[1]))}-${pad(Number(m[2]))}`;
+      intent.Query = "";
+    } else if (/昨天|昨日/.test(t)) {
+      const d = new Date(now.getTime() - 86400000);
+      intent.Kind = "daily_report";
+      intent.Date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      intent.Query = "";
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({ data: { input: t, intent } }));
+    return;
+  }
+
+  // 启停与推送开关：mock 下只回成功
+  if (/^\/api\/v1\/bots\//.test(pathname)) {
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({ data: { ok: true } }));
     return;
   }
 

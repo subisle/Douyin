@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"douyin-server/internal/bot"
 	"douyin-server/internal/config"
 	"douyin-server/internal/repo"
 )
@@ -16,15 +17,16 @@ import (
 // Server 持有依赖与路由。
 type Server struct {
 	repo   *repo.Repo
+	bots   *bot.Manager
 	cfg    config.Config
 	log    *slog.Logger
 	mux    *http.ServeMux
 	bootAt time.Time
 }
 
-// New 注册全部路由。
-func New(r *repo.Repo, cfg config.Config, log *slog.Logger) *Server {
-	s := &Server{repo: r, cfg: cfg, log: log, mux: http.NewServeMux(), bootAt: time.Now()}
+// New 注册全部路由。bots 为 nil 时机器人接口返回未启用。
+func New(r *repo.Repo, b *bot.Manager, cfg config.Config, log *slog.Logger) *Server {
+	s := &Server{repo: r, bots: b, cfg: cfg, log: log, mux: http.NewServeMux(), bootAt: time.Now()}
 
 	// 健康检查不进业务栈，探针要能在 DB 挂掉时仍然区分出存活与就绪。
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -57,6 +59,14 @@ func New(r *repo.Repo, cfg config.Config, log *slog.Logger) *Server {
 
 	// 导出图片（SVG，样式对齐 615）
 	s.mux.HandleFunc("GET /api/v1/exports/report.svg", s.exportReport)
+
+	// 机器人：双通道状态、启停、推送开关、意图试玩
+	s.mux.HandleFunc("GET /api/v1/bots/status", s.botStatus)
+	s.mux.HandleFunc("POST /api/v1/bots/{name}/start", s.botStart)
+	s.mux.HandleFunc("POST /api/v1/bots/{name}/stop", s.botStop)
+	s.mux.HandleFunc("POST /api/v1/bots/push", s.botSetPush)
+	s.mux.HandleFunc("GET /api/v1/bots/messages", s.botMessages)
+	s.mux.HandleFunc("POST /api/v1/bots/parse", s.botParse)
 
 	return s
 }

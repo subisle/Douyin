@@ -1,0 +1,338 @@
+package bot
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"douyin-server/internal/domain"
+	"douyin-server/internal/render"
+	"douyin-server/internal/repo"
+)
+
+// Inbound 收到的消息。两个通道（微信 / QQ）统一成这个结构。
+type Inbound struct {
+	Channel        string // weixin / qq
+	ConversationID string // 群 ID 或用户 ID
+	SenderID       string
+	Text           string
+	AtMe           bool
+	ReceivedAt     time.Time
+}
+
+// Outbound 要发出去的消息。bot 回复以图为主，文字只是补充。
+type Outbound struct {
+	ConversationID string
+	Text           string
+	Image          []byte
+	ImageName      string
+}
+
+// Transport 是 IM 通道的抽象。微信 iLink 与 QQ 开放平台各实现一份，
+// 共享同一个 Agent（意图解析 + 技能路由），这样两端行为必然一致。
+type Transport interface {
+	Name() string
+	Start(ctx context.Context) error
+	Send(ctx context.Context, out Outbound) error
+	Receive() <-chan Inbound
+	Close() error
+}
+
+// ChannelStatus 一个通道的运行状态。
+type ChannelStatus struct {
+	Name      string `json:"name"`
+	Running   bool   `json:"running"`
+	Connected bool   `json:"connected"`
+	Note      string `json:"note,omitempty"`
+}
+
+// Manager 持有两个通道并驱动技能路由。
+type Manager struct {
+	repo *repo.Repo
+
+	mu       sync.RWMutex
+	channels map[string]*channelState
+	push     bool
+	log      []LoggedMessage
+}
+
+type channelState struct {
+	transport Transport
+	running   bool
+	connected bool
+	note      string
+}
+
+// LoggedMessage 消息日志的一行，供前端查看。
+type LoggedMessage struct {
+	At       time.Time `json:"at"`
+	Channel  string    `json:"channel"`
+	Dir      string    `json:"dir"` // in / out
+	From     string    `json:"from"`
+	Text     string    `json:"text"`
+	Intent   string    `json:"intent,omitempty"`
+	HasImage bool      `json:"hasImage"`
+}
+
+// NewManager 构造。通道需要调用 Register 挂载真实实现。
+func NewManager(r *repo.Repo) *Manager {
+	return &Manager{
+		repo: r,
+		channels: map[string]*channelState{
+			"weixin": {note: "微信 iLink 适配器待接入"},
+			"qq":     {note: "QQ 开放平台适配器待接入"},
+		},
+		log: []LoggedMessage{},
+	}
+}
+
+// Register 挂载一个通道实现。
+func (m *Manager) Register(t Transport) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.channels[t.Name()] = &channelState{transport: t}
+}
+
+// Start 启动通道。没有真实适配器时只标记运行态，避免 /status 说谎。
+func (m *Manager) Start(ctx context.Context, name string) error {
+	m.mu.Lock()
+	st, ok := m.channels[name]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("未知通道: %s", name)
+	}
+	if st.transport == nil {
+		m.mu.Lock()
+		st.running = true
+		st.note = "运行（适配器待接入，仅本地意图解析可用）"
+		m.mu.Unlock()
+		return nil
+	}
+	if err := st.transport.Start(ctx); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	st.running = true
+	st.connected = true
+	st.note = ""
+	m.mu.Unlock()
+	return nil
+}
+
+// Stop 停止通道。
+func (m *Manager) Stop(name string) error {
+	m.mu.Lock()
+	st, ok := m.channels[name]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("未知通道: %s", name)
+	}
+	if st.transport != nil {
+		if err := st.transport.Close(); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	st.running = false
+	st.connected = false
+	m.mu.Unlock()
+	return nil
+}
+
+// Status 返回所有通道状态。
+func (m *Manager) Status() []ChannelStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ChannelStatus, 0, len(m.channels))
+	for name, st := range m.channels {
+		out = append(out, ChannelStatus{Name: name, Running: st.running, Connected: st.connected, Note: st.note})
+	}
+	return out
+}
+
+// PushEnabled 日报推送开关。
+func (m *Manager) PushEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.push
+}
+
+// SetPush 切换日报推送。
+func (m *Manager) SetPush(enabled bool) {
+	m.mu.Lock()
+	m.push = enabled
+	m.mu.Unlock()
+}
+
+// RecentMessages 返回最近的消息（新的在前）。
+func (m *Manager) RecentMessages(limit int) []LoggedMessage {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if limit <= 0 || limit > len(m.log) {
+		limit = len(m.log)
+	}
+	out := make([]LoggedMessage, 0, limit)
+	for i := len(m.log) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, m.log[i])
+	}
+	return out
+}
+
+func (m *Manager) appendLog(msg LoggedMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.log = append(m.log, msg)
+	if len(m.log) > 200 {
+		m.log = m.log[len(m.log)-200:]
+	}
+}
+
+// Handle 处理一条入站消息并给出回复。
+//
+// 这是 Agent 的入口：解析意图 → 路由技能 → 产出文字与图。
+// 目前日报技能能出真实图（复用 internal/render），其余先回文字。
+func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
+	now := time.Now()
+	intent := ParseIntent(in.Text, now)
+
+	m.appendLog(LoggedMessage{
+		At: now, Channel: in.Channel, Dir: "in",
+		From: in.SenderID, Text: in.Text, Intent: string(intent.Kind),
+	})
+
+	out := Outbound{ConversationID: in.ConversationID}
+
+	switch intent.Kind {
+	case IntentHelp:
+		out.Text = HelpText()
+		return out, nil
+
+	case IntentDailyReport:
+		date := parseOrNow(intent.Date, now)
+		svg, err := m.buildDailyReport(ctx, date, intent.Gender)
+		if err != nil {
+			return out, err
+		}
+		out.Image = svg
+		out.ImageName = fmt.Sprintf("日报-%s.svg", date.Format("2006-01-02"))
+		out.Text = fmt.Sprintf("%s 日榜", date.Format("1月2日"))
+
+	case IntentMonthlyReport:
+		period := intent.Period
+		if period == "" {
+			period = now.Format("2006-01")
+		}
+		rows, err := m.repo.ListMonthlyByPeriod(ctx, period, domain.Gender(intent.Gender))
+		if err != nil {
+			return out, err
+		}
+		out.Text = fmt.Sprintf("%s 月榜：%d 人，月音浪合计 %s", period, len(rows), sumWave(rows))
+		out.Text += "\n（月榜图片模板待迁移）"
+
+	case IntentYearlyReport:
+		year := intent.Year
+		if year == 0 {
+			year = now.Year()
+		}
+		out.Text = fmt.Sprintf("%d 年度汇总：图片模板待迁移", year)
+
+	case IntentPersonQuery:
+		out.Text = fmt.Sprintf("查询「%s」（单人卡片模板待迁移）", intent.Query)
+
+	case IntentDailyStar:
+		out.Text = "每日之星：图片模板待迁移"
+
+	case IntentPKGroup:
+		out.Text = "PK 分组：图片模板待迁移"
+
+	case IntentPushToggle:
+		m.SetPush(intent.Enable)
+		if intent.Enable {
+			out.Text = "已开启日报推送"
+		} else {
+			out.Text = "已关闭日报推送"
+		}
+
+	case IntentPushStatus:
+		if m.PushEnabled() {
+			out.Text = "日报推送：已开启"
+		} else {
+			out.Text = "日报推送：已关闭"
+		}
+
+	default:
+		out.Text = "没听懂。发「帮助」看指令。"
+	}
+
+	m.appendLog(LoggedMessage{
+		At: time.Now(), Channel: in.Channel, Dir: "out",
+		From: in.ConversationID, Text: out.Text, Intent: string(intent.Kind),
+		HasImage: len(out.Image) > 0,
+	})
+	return out, nil
+}
+
+// buildDailyReport 复用导出渲染器生成日报 SVG。
+func (m *Manager) buildDailyReport(ctx context.Context, date time.Time, gender string) ([]byte, error) {
+	rows, err := m.repo.ListDailyByDate(ctx, date, domain.Gender(gender))
+	if err != nil {
+		return nil, err
+	}
+	rr := make([]render.Row, 0, len(rows))
+	for _, d := range rows {
+		tier := ""
+		if d.Tier != nil {
+			tier = *d.Tier
+		}
+		master := ""
+		if d.MasterName != nil {
+			master = *d.MasterName
+		}
+		rr = append(rr, render.Row{
+			Name: d.Name, DailyWave: d.Wave, TotalWave: d.CumulativeWave,
+			DurationMinutes: d.Minutes, Tier: tier, IsLive: d.IsLive, MasterName: master,
+		})
+	}
+	report := render.Report{
+		Date: date.Format("2006-01-02"), Gender: gender, Rows: rr, Stats: rr,
+		Columns: render.DefaultColumns(), PageIndex: 1, PageCount: 1, ShowInactiveFooter: true,
+	}
+	return render.RenderSVG(report, render.ResolveStyle(gender, "")), nil
+}
+
+func sumWave(rows []domain.MonthlyMetric) string {
+	var total int64
+	for _, r := range rows {
+		total += r.Wave
+	}
+	return render.FormatWave(total)
+}
+
+func parseOrNow(s string, fallback time.Time) time.Time {
+	if s == "" {
+		return fallback
+	}
+	t, err := time.ParseInLocation("2006-01-02", s, time.Local)
+	if err != nil {
+		return fallback
+	}
+	return t
+}
+
+// HelpText 指令菜单。
+func HelpText() string {
+	return strings.Join([]string{
+		"可用指令：",
+		"· 日报 / 每日报告 —— 今日榜单图",
+		"· 昨天 / 18号报告 / 9.11 —— 指定某天",
+		"· 9月 / 2026年3月 —— 月榜",
+		"· 2026年 —— 年度汇总",
+		"· 艺名 —— 查某位主播",
+		"· 艺名 9月 —— 查该主播某月",
+		"· 开启/关闭日报推送 —— 推送开关",
+		"· 日报推送状态 —— 查看开关",
+		"· 帮助 —— 本菜单",
+	}, "\n")
+}

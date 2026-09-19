@@ -1,0 +1,196 @@
+// Package bot 是机器人的框架层：把两个 IM 通道（微信 iLink / QQ）收敛成
+// 一套意图解析 + 技能路由，与 615 的 project-bots.js 思路一致——
+// 一个 Agent，多种 Transport。
+package bot
+
+import (
+	"regexp"
+	"strings"
+	"time"
+
+	"douyin-server/internal/dateparse"
+)
+
+// IntentKind 指令类型。
+type IntentKind string
+
+const (
+	IntentHelp         IntentKind = "help"
+	IntentDailyReport  IntentKind = "daily_report"
+	IntentMonthlyReport IntentKind = "monthly_report"
+	IntentYearlyReport IntentKind = "yearly_report"
+	IntentDailyStar    IntentKind = "daily_star"
+	IntentPersonQuery  IntentKind = "person_query"
+	IntentPushToggle   IntentKind = "push_toggle"
+	IntentPushStatus   IntentKind = "push_status"
+	IntentPKGroup      IntentKind = "pk_group"
+	IntentUnknown      IntentKind = "unknown"
+)
+
+// Intent 解析后的指令。
+type Intent struct {
+	Kind    IntentKind
+	Date    string // YYYY-MM-DD，日粒度指令用
+	Period  string // YYYY-MM，月粒度用
+	Year    int
+	Gender  string // male / female，留空表示全团
+	Query   string // 艺名
+	Enable  bool   // push_toggle 用
+	Group   string // PK 分组名
+	RawText string
+}
+
+// reAtMention 群消息里 @机器人 的前缀，要整段去掉
+var reAtMention = regexp.MustCompile(`@[^\s@]+`)
+var reGroupIndex = regexp.MustCompile(`第\s*\d+\s*组`)
+
+// NormalizeText 去掉 @ 提及、首尾空白与尾部标点。
+func NormalizeText(s string) string {
+	s = strings.TrimSpace(s)
+	s = reAtMention.ReplaceAllString(s, "")
+	s = strings.TrimSpace(strings.TrimRight(s, "。！!，,；;"))
+	return s
+}
+
+// ParseIntent 解析一条消息。now 用于补全相对日期。
+//
+// 匹配顺序刻意从具体到宽泛：先认"开启日报推送"这类固定指令，
+// 再认日期，最后才当成艺名查询——否则"9月"会被当成艺名。
+func ParseIntent(raw string, now time.Time) Intent {
+	text := NormalizeText(raw)
+	intent := Intent{RawText: text}
+
+	if text == "" {
+		intent.Kind = IntentUnknown
+		return intent
+	}
+
+	lower := strings.ToLower(text)
+
+	// 帮助
+	for _, kw := range []string{"帮助", "help", "菜单", "指令"} {
+		if lower == kw || strings.Contains(lower, kw+"指令") {
+			intent.Kind = IntentHelp
+			return intent
+		}
+	}
+
+	// 日报推送开关
+	if strings.Contains(text, "推送") {
+		switch {
+		case strings.HasPrefix(text, "开启") || strings.HasPrefix(text, "打开") || strings.Contains(text, "开启日报推送"):
+			intent.Kind = IntentPushToggle
+			intent.Enable = true
+			return intent
+		case strings.HasPrefix(text, "关闭") || strings.HasPrefix(text, "关掉"):
+			intent.Kind = IntentPushToggle
+			intent.Enable = false
+			return intent
+		case strings.Contains(text, "状态"):
+			intent.Kind = IntentPushStatus
+			return intent
+		}
+	}
+
+	// PK 分组
+	if strings.Contains(text, "分组") || strings.Contains(text, "PK") ||
+		strings.Contains(text, "pk") || reGroupIndex.MatchString(text) {
+		intent.Kind = IntentPKGroup
+		intent.Group = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(text, "分组"), "PK"))
+		return intent
+	}
+
+	// 每日之星
+	if strings.Contains(text, "每日之星") || strings.Contains(text, "之星") {
+		intent.Kind = IntentDailyStar
+		spec := dateparse.ParseDateSpec(text)
+		if d, err := dateparse.ResolveDate(spec, now); err == nil {
+			intent.Date = d.Format("2006-01-02")
+		}
+		return intent
+	}
+
+	// 年报：年粒度
+	if spec := dateparse.ParseDateSpec(text); spec != nil && spec.Type == dateparse.TypeYear && !strings.Contains(text, "报告") {
+		intent.Kind = IntentYearlyReport
+		intent.Year = dateparse.ResolveYear(spec, now)
+		return intent
+	}
+
+	// 报告类：先把「艺名 + 日期」拆开（日期可能在句尾也可能在句中）
+	query, spec := dateparse.SplitQuery(text)
+	if name := cleanQuery(query); isName(name) {
+		intent.Query = name
+	}
+	intent.Gender = extractGender(text)
+
+	if intent.Query != "" {
+		intent.Kind = IntentPersonQuery
+		if spec != nil {
+			if d, err := dateparse.ResolveDate(spec, now); err == nil {
+				intent.Date = d.Format("2006-01-02")
+			}
+			if p, err := dateparse.ResolveMonth(spec, now); err == nil {
+				intent.Period = p
+			}
+			intent.Year = dateparse.ResolveYear(spec, now)
+		}
+		return intent
+	}
+
+	// 没有艺名：由粒度决定指令类型
+	// 关键词优先于粒度——"月报"两个字就该出月报
+	switch {
+	case strings.Contains(text, "月报") ||
+		(spec != nil && (spec.Type == dateparse.TypeMonth || spec.Type == dateparse.TypeMonthOnly)):
+		intent.Kind = IntentMonthlyReport
+		if p, err := dateparse.ResolveMonth(spec, now); err == nil {
+			intent.Period = p
+		}
+	case strings.Contains(text, "年报") ||
+		(spec != nil && spec.Type == dateparse.TypeYear):
+		intent.Kind = IntentYearlyReport
+		intent.Year = dateparse.ResolveYear(spec, now)
+	default:
+		intent.Kind = IntentDailyReport
+		if d, err := dateparse.ResolveDate(spec, now); err == nil {
+			intent.Date = d.Format("2006-01-02")
+		}
+	}
+	return intent
+}
+
+// nonNameWords 这些词是指令的一部分，不是艺名。
+// 少了这张表，"每日报告"会被解析成查一个叫「每日」的主播。
+var nonNameWords = map[string]bool{
+	"": true, "每日": true, "日": true, "月": true, "年": true, "报告": true,
+	"数据": true, "今日": true, "今天": true, "昨天": true, "昨日": true,
+	"之星": true, "每日之星": true, "的": true, "音浪": true, "时长": true,
+	"分组": true, "组": true, "文件": true,
+}
+
+func isName(s string) bool {
+	if s == "" {
+		return false
+	}
+	return !nonNameWords[s]
+}
+
+// cleanQuery 去掉"报告/音浪/时长/数据"这类尾巴，剩下的才是艺名。
+func cleanQuery(s string) string {
+	s = strings.TrimSpace(s)
+	for _, suffix := range []string{"报告", "日报", "月报", "年报", "音浪", "时长", "数据", "文件", "的"} {
+		s = strings.TrimSuffix(s, suffix)
+	}
+	return strings.TrimSpace(s)
+}
+
+func extractGender(text string) string {
+	switch {
+	case strings.Contains(text, "男团"), strings.Contains(text, "男"):
+		return "male"
+	case strings.Contains(text, "女队"), strings.Contains(text, "女"):
+		return "female"
+	}
+	return ""
+}

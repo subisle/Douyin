@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"douyin-server/internal/bot"
 	"douyin-server/internal/config"
 	"douyin-server/internal/httpapi"
 	"douyin-server/internal/migrate"
@@ -52,7 +53,11 @@ func main() {
 		}
 	}
 
-	srv := httpapi.New(repo.New(db), cfg, log)
+	// 机器人管理器：真实适配器（iLink / QQ WS）接入后 Register 进来，
+	// 现在先起框架，意图解析已经可用。
+	bots := bot.NewManager(repo.New(db))
+
+	srv := httpapi.New(repo.New(db), bots, cfg, log)
 
 	// 单容器部署时，前端产物交给同一个端口托管，省一层反代。
 	if cfg.WebDir != "" {
