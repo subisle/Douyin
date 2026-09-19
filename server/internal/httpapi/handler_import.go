@@ -29,10 +29,10 @@ import (
 // anchor_id 没绑过主播的行会被跳过并计入 skipped，不会静默丢数据。
 func (s *Server) importSnapshots(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Date      string `json:"date"`
-		Source    string `json:"source"`
-		Operator  string `json:"operator"`
-		Waves     []struct {
+		Date     string `json:"date"`
+		Source   string `json:"source"`
+		Operator string `json:"operator"`
+		Waves    []struct {
 			AnchorID  string `json:"anchorId"`
 			WaveValue int64  `json:"waveValue"`
 			Rank      *int   `json:"rank"`
@@ -89,10 +89,10 @@ func (s *Server) importSnapshots(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		waves = append(waves, domain.WaveSnapshot{
-			AnchorID:  item.AnchorID,
-			PersonID:  personID,
-			BizDate:   date,
-			WaveValue: item.WaveValue,
+			AnchorID:    item.AnchorID,
+			PersonID:    personID,
+			BizDate:     date,
+			WaveValue:   item.WaveValue,
 			RankInGuild: item.Rank,
 		})
 		owners[personID] = true
@@ -149,10 +149,10 @@ func (s *Server) importSnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"batchId":   batchID,
-		"imported":  rowCount,
-		"persons":   len(owners),
-		"skipped":   skipped,
+		"batchId":  batchID,
+		"imported": rowCount,
+		"persons":  len(owners),
+		"skipped":  skipped,
 	})
 }
 

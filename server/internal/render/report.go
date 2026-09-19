@@ -60,10 +60,10 @@ func DefaultColumns() ColumnSet {
 
 // Report 一张导出图的全部输入。
 type Report struct {
-	Title      string
-	Date       string // YYYY-MM-DD
-	Gender     string // male / female
-	Rows       []Row  // 本页行
+	Title  string
+	Date   string // YYYY-MM-DD
+	Gender string // male / female
+	Rows   []Row  // 本页行
 	// 统计口径用全量行；分页时 Rows 只是其中一页，但页脚要写全团人数。
 	Stats              []Row
 	Columns            ColumnSet

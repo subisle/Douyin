@@ -31,8 +31,8 @@ func (r *Repo) BatchDeletePersons(ctx context.Context, ids []uint64) (int, error
 
 // DuplicateGroup 是同名主播的一组，用于"重复数据检测"。
 type DuplicateGroup struct {
-	Name     string         `json:"name"`
-	Persons  []domain.Person `json:"persons"`
+	Name    string          `json:"name"`
+	Persons []domain.Person `json:"persons"`
 }
 
 // FindDuplicatePersons 按姓名找重复。同名多半是导入时重复建的人。

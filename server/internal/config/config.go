@@ -37,11 +37,24 @@ func (d DB) DSN() string {
 	)
 }
 
+// Bots 机器人与 IM 通道配置。
+type Bots struct {
+	// 微信 iLink：token 来自扫码登录，baseURL 一般不用改
+	WeixinToken   string
+	WeixinBaseURL string
+
+	// QQ 开放平台：appID + clientSecret 在开放平台后台拿
+	QQAppID        string
+	QQClientSecret string
+	QQAPIBase      string
+}
+
 // Config 是服务完整配置。
 type Config struct {
 	Addr        string
 	LogLevel    string
 	DB          DB
+	Bots        Bots
 	AutoMigrate bool
 	// WebDir 存在时，/ 会直接托管该目录下的静态文件（用于单容器部署前端产物）。
 	WebDir string
@@ -65,6 +78,13 @@ func Load() (Config, error) {
 			MaxIdleConns:    envInt("DB_MAX_IDLE", 5),
 			ConnMaxLifetime: envDuration("DB_CONN_MAX_LIFE", 5*time.Minute),
 			ConnMaxIdleTime: envDuration("DB_CONN_MAX_IDLE", time.Minute),
+		},
+		Bots: Bots{
+			WeixinToken:    envString("WEIXIN_TOKEN", ""),
+			WeixinBaseURL:  envString("WEIXIN_BASE_URL", ""),
+			QQAppID:        envString("QQ_APP_ID", ""),
+			QQClientSecret: envString("QQ_CLIENT_SECRET", ""),
+			QQAPIBase:      envString("QQ_API_BASE", ""),
 		},
 	}
 

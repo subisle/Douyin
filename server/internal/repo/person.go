@@ -26,12 +26,12 @@ func New(db *sqlx.DB) *Repo { return &Repo{db: db} }
 
 // PersonFilter 是主播列表的筛选条件。
 type PersonFilter struct {
-	Gender  domain.Gender
-	Status  domain.PersonStatus
+	Gender   domain.Gender
+	Status   domain.PersonStatus
 	MasterID *uint64
-	Keyword string
-	Limit   int
-	Offset  int
+	Keyword  string
+	Limit    int
+	Offset   int
 }
 
 // ListPersons 返回主播列表。gender/status 为空字符串时表示不筛选。

@@ -9,12 +9,12 @@ func TestParseIntent(t *testing.T) {
 	now := time.Date(2026, 9, 20, 10, 0, 0, 0, time.Local)
 
 	tests := []struct {
-		in    string
-		kind  IntentKind
-		date  string
+		in     string
+		kind   IntentKind
+		date   string
 		period string
-		year  int
-		query string
+		year   int
+		query  string
 	}{
 		{"帮助", IntentHelp, "", "", 0, ""},
 		{"help", IntentHelp, "", "", 0, ""},

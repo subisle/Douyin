@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"douyin-server/internal/bot"
+	"douyin-server/internal/bot/transport/ilink"
+	"douyin-server/internal/bot/transport/qq"
 )
 
 func (s *Server) botManager() (*bot.Manager, bool) {
@@ -94,6 +97,106 @@ func (s *Server) botMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := queryInt(r.URL.Query().Get("limit"), 50)
 	writeJSON(w, http.StatusOK, m.RecentMessages(limit))
+}
+
+// botDetail GET /api/v1/bots/{name}/detail —— 通道的详细状态
+func (s *Server) botDetail(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.botManager()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "BOTS_DISABLED", "机器人未启用")
+		return
+	}
+	switch r.PathValue("name") {
+	case "weixin":
+		if t, ok := m.Raw("weixin").(*ilink.Transport); ok {
+			writeJSON(w, http.StatusOK, t.Detail())
+			return
+		}
+	case "qq":
+		if t, ok := m.Raw("qq").(*qq.Transport); ok {
+			writeJSON(w, http.StatusOK, t.Detail())
+			return
+		}
+	default:
+		badRequest(w, "通道只能是 weixin 或 qq")
+		return
+	}
+	writeError(w, http.StatusServiceUnavailable, "CHANNEL_NOT_MOUNTED", "该通道未挂载")
+}
+
+// weixinQRCode POST /api/v1/bots/weixin/qrcode —— 取登录二维码
+func (s *Server) weixinQRCode(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.botManager()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "BOTS_DISABLED", "机器人未启用")
+		return
+	}
+	t, ok := m.Raw("weixin").(*ilink.Transport)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "CHANNEL_NOT_MOUNTED", "微信通道未挂载")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	qr, err := t.StartLogin(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "QRCODE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, qr)
+}
+
+// weixinLoginStatus GET /api/v1/bots/weixin/qrcode/status —— 轮询扫码结果
+func (s *Server) weixinLoginStatus(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.botManager()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "BOTS_DISABLED", "机器人未启用")
+		return
+	}
+	t, ok := m.Raw("weixin").(*ilink.Transport)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "CHANNEL_NOT_MOUNTED", "微信通道未挂载")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	st, err := t.CheckLogin(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "LOGIN_STATUS_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// qqCredentials POST /api/v1/bots/qq/credentials —— 运行时配置 QQ 凭证
+//
+// 前端填完 AppID/Secret 就立刻挂载可用，不必重启服务。
+func (s *Server) qqCredentials(w http.ResponseWriter, r *http.Request) {
+	m, ok := s.botManager()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "BOTS_DISABLED", "机器人未启用")
+		return
+	}
+	var req struct {
+		AppID        string `json:"appId"`
+		ClientSecret string `json:"clientSecret"`
+		APIBase      string `json:"apiBase"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "请求体不是合法 JSON")
+		return
+	}
+	if strings.TrimSpace(req.AppID) == "" || strings.TrimSpace(req.ClientSecret) == "" {
+		badRequest(w, "appId 与 clientSecret 都不能为空")
+		return
+	}
+
+	// 覆盖挂载（先停旧的，避免两个连接同时跑）
+	_ = m.Stop("qq")
+	m.Register(qq.New(m, req.AppID, req.ClientSecret, req.APIBase))
+	writeJSON(w, http.StatusOK, map[string]any{"mounted": true})
 }
 
 // botParse POST /api/v1/bots/parse  {"text":"柚子 9月"}

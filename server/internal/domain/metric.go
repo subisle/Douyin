@@ -33,47 +33,47 @@ type DurationSnapshot struct {
 
 // DailyMetric 日粒度物化指标。导出日报直接读这张表，不做现场 JOIN。
 type DailyMetric struct {
-	ID                uint64    `db:"id"                 json:"id"`
-	PersonID          uint64    `db:"person_id"          json:"personId"`
-	AnchorID          string    `db:"anchor_id"          json:"anchorId"`
-	BizDate           time.Time `db:"biz_date"           json:"bizDate"`
+	ID       uint64    `db:"id"                 json:"id"`
+	PersonID uint64    `db:"person_id"          json:"personId"`
+	AnchorID string    `db:"anchor_id"          json:"anchorId"`
+	BizDate  time.Time `db:"biz_date"           json:"bizDate"`
 
-	Wave              int64     `db:"wave"               json:"wave"`
-	CumulativeWave    int64     `db:"cumulative_wave"    json:"cumulativeWave"`
+	Wave              int64      `db:"wave"               json:"wave"`
+	CumulativeWave    int64      `db:"cumulative_wave"    json:"cumulativeWave"`
 	PrevSnapshotDate  *time.Time `db:"prev_snapshot_date" json:"prevSnapshotDate,omitempty"`
-	WaveSpan          int       `db:"wave_span"          json:"waveSpan"`
-	WaveReliable      bool      `db:"wave_reliable"      json:"waveReliable"`
-	Minutes           int       `db:"minutes"            json:"minutes"`
-	CumulativeMinutes int       `db:"cumulative_minutes" json:"cumulativeMinutes"`
-	MinutesSpan       int       `db:"minutes_span"       json:"minutesSpan"`
-	MinutesReliable   bool      `db:"minutes_reliable"   json:"minutesReliable"`
-	IsLive            bool      `db:"is_live"            json:"isLive"`
-	Tier              *string   `db:"tier"               json:"tier,omitempty"`
+	WaveSpan          int        `db:"wave_span"          json:"waveSpan"`
+	WaveReliable      bool       `db:"wave_reliable"      json:"waveReliable"`
+	Minutes           int        `db:"minutes"            json:"minutes"`
+	CumulativeMinutes int        `db:"cumulative_minutes" json:"cumulativeMinutes"`
+	MinutesSpan       int        `db:"minutes_span"       json:"minutesSpan"`
+	MinutesReliable   bool       `db:"minutes_reliable"   json:"minutesReliable"`
+	IsLive            bool       `db:"is_live"            json:"isLive"`
+	Tier              *string    `db:"tier"               json:"tier,omitempty"`
 
 	// 导出要用的派生字段，由 repo 层 JOIN person 补齐，不落库。
-	Name   string        `db:"name"   json:"name,omitempty"`
-	Gender Gender        `db:"gender" json:"gender,omitempty"`
-	MasterName *string   `db:"master_name" json:"masterName,omitempty"`
+	Name       string  `db:"name"   json:"name,omitempty"`
+	Gender     Gender  `db:"gender" json:"gender,omitempty"`
+	MasterName *string `db:"master_name" json:"masterName,omitempty"`
 }
 
 // MonthlyMetric 月粒度物化：月音浪 + 月直播时长。
 type MonthlyMetric struct {
-	ID                uint64    `db:"id"                  json:"id"`
-	PersonID          uint64    `db:"person_id"           json:"personId"`
-	Period            string    `db:"period"              json:"period"`
-	Wave              int64     `db:"wave"                json:"wave"`
-	Minutes           int       `db:"minutes"             json:"minutes"`
-	FormattedDuration string    `db:"formatted_duration"  json:"formattedDuration"`
-	LiveDays          int       `db:"live_days"           json:"liveDays"`
-	AbsentDays        int       `db:"absent_days"         json:"absentDays"`
-	BestDayWave       int64     `db:"best_day_wave"       json:"bestDayWave"`
+	ID                uint64     `db:"id"                  json:"id"`
+	PersonID          uint64     `db:"person_id"           json:"personId"`
+	Period            string     `db:"period"              json:"period"`
+	Wave              int64      `db:"wave"                json:"wave"`
+	Minutes           int        `db:"minutes"             json:"minutes"`
+	FormattedDuration string     `db:"formatted_duration"  json:"formattedDuration"`
+	LiveDays          int        `db:"live_days"           json:"liveDays"`
+	AbsentDays        int        `db:"absent_days"         json:"absentDays"`
+	BestDayWave       int64      `db:"best_day_wave"       json:"bestDayWave"`
 	BestDayDate       *time.Time `db:"best_day_date"       json:"bestDayDate,omitempty"`
-	AvgWavePerLiveDay int64     `db:"avg_wave_per_live_day" json:"avgWavePerLiveDay"`
-	Tier              *string   `db:"tier"                json:"tier,omitempty"`
-	UnreliableDays    int       `db:"unreliable_days"     json:"unreliableDays"`
+	AvgWavePerLiveDay int64      `db:"avg_wave_per_live_day" json:"avgWavePerLiveDay"`
+	Tier              *string    `db:"tier"                json:"tier,omitempty"`
+	UnreliableDays    int        `db:"unreliable_days"     json:"unreliableDays"`
 
-	Name   string  `db:"name"   json:"name,omitempty"`
-	Gender Gender  `db:"gender" json:"gender,omitempty"`
+	Name   string `db:"name"   json:"name,omitempty"`
+	Gender Gender `db:"gender" json:"gender,omitempty"`
 }
 
 // Year 从 "YYYY-MM" 形式的 period 取出年份，年度聚合用。

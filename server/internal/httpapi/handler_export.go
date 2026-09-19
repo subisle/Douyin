@@ -13,7 +13,8 @@ import (
 // exportReport GET /api/v1/exports/report.svg
 //
 // 参数：date=YYYY-MM-DD & gender=male|female & style=auto|classic|apple
-//       & page=1 & pageSize=30 & duration=0|1 & master=0|1 & tier=0|1
+//
+//	& page=1 & pageSize=30 & duration=0|1 & master=0|1 & tier=0|1
 //
 // 返回 615 同等样式的 SVG。之所以先出 SVG 而不是 PNG：
 // SVG 是矢量、可无损缩放，而且前端能用浏览器渲染成 PNG（那时字体与 emoji 一定正确）。

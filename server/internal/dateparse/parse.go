@@ -19,13 +19,13 @@ import (
 type SpecType string
 
 const (
-	TypeRelative  SpecType = "relative"  // 今天 / 昨天
-	TypeDate      SpecType = "date"      // 完整年月日
-	TypeMonth     SpecType = "month"     // 年月
-	TypeYear      SpecType = "year"      // 仅年
-	TypeMonthDay  SpecType = "month-day" // 月日（9月18日 / 9.18）
+	TypeRelative  SpecType = "relative"   // 今天 / 昨天
+	TypeDate      SpecType = "date"       // 完整年月日
+	TypeMonth     SpecType = "month"      // 年月
+	TypeYear      SpecType = "year"       // 仅年
+	TypeMonthDay  SpecType = "month-day"  // 月日（9月18日 / 9.18）
 	TypeMonthOnly SpecType = "month-only" // 仅月（9月）
-	TypeDay       SpecType = "day"       // 仅日（18号）
+	TypeDay       SpecType = "day"        // 仅日（18号）
 )
 
 // Spec 解析结果。字段是否生效取决于 Type。

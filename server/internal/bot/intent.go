@@ -15,16 +15,16 @@ import (
 type IntentKind string
 
 const (
-	IntentHelp         IntentKind = "help"
-	IntentDailyReport  IntentKind = "daily_report"
+	IntentHelp          IntentKind = "help"
+	IntentDailyReport   IntentKind = "daily_report"
 	IntentMonthlyReport IntentKind = "monthly_report"
-	IntentYearlyReport IntentKind = "yearly_report"
-	IntentDailyStar    IntentKind = "daily_star"
-	IntentPersonQuery  IntentKind = "person_query"
-	IntentPushToggle   IntentKind = "push_toggle"
-	IntentPushStatus   IntentKind = "push_status"
-	IntentPKGroup      IntentKind = "pk_group"
-	IntentUnknown      IntentKind = "unknown"
+	IntentYearlyReport  IntentKind = "yearly_report"
+	IntentDailyStar     IntentKind = "daily_star"
+	IntentPersonQuery   IntentKind = "person_query"
+	IntentPushToggle    IntentKind = "push_toggle"
+	IntentPushStatus    IntentKind = "push_status"
+	IntentPKGroup       IntentKind = "pk_group"
+	IntentUnknown       IntentKind = "unknown"
 )
 
 // Intent 解析后的指令。

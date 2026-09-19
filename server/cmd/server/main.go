@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"douyin-server/internal/bot"
+	"douyin-server/internal/bot/transport/ilink"
+	"douyin-server/internal/bot/transport/qq"
 	"douyin-server/internal/config"
 	"douyin-server/internal/httpapi"
 	"douyin-server/internal/migrate"
@@ -53,11 +55,30 @@ func main() {
 		}
 	}
 
-	// 机器人管理器：真实适配器（iLink / QQ WS）接入后 Register 进来，
-	// 现在先起框架，意图解析已经可用。
-	bots := bot.NewManager(repo.New(db))
+	// 机器人管理器：两个通道各自 Register，共享同一个 Agent
+	r := repo.New(db)
+	bots := bot.NewManager(r)
 
-	srv := httpapi.New(repo.New(db), bots, cfg, log)
+	wx, err := ilink.New(bots, cfg.Bots.WeixinBaseURL, cfg.Bots.WeixinToken)
+	if err != nil {
+		log.Warn("微信通道初始化失败", "err", err)
+	} else {
+		bots.Register(wx)
+		if cfg.Bots.WeixinToken != "" {
+			log.Info("微信通道已挂载（含 token）")
+		} else {
+			log.Info("微信通道已挂载（待扫码登录）")
+		}
+	}
+
+	if cfg.Bots.QQAppID != "" {
+		bots.Register(qq.New(bots, cfg.Bots.QQAppID, cfg.Bots.QQClientSecret, cfg.Bots.QQAPIBase))
+		log.Info("QQ 通道已挂载", "appId", cfg.Bots.QQAppID)
+	} else {
+		log.Info("QQ 通道未配置 AppID，可在网页里填写")
+	}
+
+	srv := httpapi.New(r, bots, cfg, log)
 
 	// 单容器部署时，前端产物交给同一个端口托管，省一层反代。
 	if cfg.WebDir != "" {

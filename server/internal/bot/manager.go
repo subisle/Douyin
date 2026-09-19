@@ -95,6 +95,17 @@ func (m *Manager) Register(t Transport) {
 	m.channels[t.Name()] = &channelState{transport: t}
 }
 
+// Raw 返回通道的具体实现，供上层查详情或走扫码登录流程。
+// 返回 any 是有意的：两个通道的状态结构不同，由调用方断言。
+func (m *Manager) Raw(name string) any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if st, ok := m.channels[name]; ok {
+		return st.transport
+	}
+	return nil
+}
+
 // Start 启动通道。没有真实适配器时只标记运行态，避免 /status 说谎。
 func (m *Manager) Start(ctx context.Context, name string) error {
 	m.mu.Lock()

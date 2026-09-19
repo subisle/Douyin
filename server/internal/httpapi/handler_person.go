@@ -38,14 +38,14 @@ func (s *Server) listPersons(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createPerson(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string             `json:"name"`
-		Gender     domain.Gender      `json:"gender"`
+		Name       string              `json:"name"`
+		Gender     domain.Gender       `json:"gender"`
 		Status     domain.PersonStatus `json:"status"`
-		MasterID   *uint64            `json:"masterId"`
-		Generation *int               `json:"generation"`
-		GroupName  *string            `json:"groupName"`
-		AvatarURL  *string            `json:"avatarUrl"`
-		Hide       bool               `json:"hideInDailyReport"`
+		MasterID   *uint64             `json:"masterId"`
+		Generation *int                `json:"generation"`
+		GroupName  *string             `json:"groupName"`
+		AvatarURL  *string             `json:"avatarUrl"`
+		Hide       bool                `json:"hideInDailyReport"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "请求体不是合法 JSON")
@@ -121,14 +121,14 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request) {
 
 	// 部分更新：只覆盖请求里出现过的字段，未出现的保持原值。
 	var req struct {
-		Name       *string             `json:"name"`
-		Gender     *domain.Gender      `json:"gender"`
+		Name       *string              `json:"name"`
+		Gender     *domain.Gender       `json:"gender"`
 		Status     *domain.PersonStatus `json:"status"`
-		MasterID   *uint64             `json:"masterId"`
-		Generation *int                `json:"generation"`
-		GroupName  *string             `json:"groupName"`
-		AvatarURL  *string             `json:"avatarUrl"`
-		Hide       *bool               `json:"hideInDailyReport"`
+		MasterID   *uint64              `json:"masterId"`
+		Generation *int                 `json:"generation"`
+		GroupName  *string              `json:"groupName"`
+		AvatarURL  *string              `json:"avatarUrl"`
+		Hide       *bool                `json:"hideInDailyReport"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "请求体不是合法 JSON")
@@ -338,11 +338,11 @@ func (s *Server) saveSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Date    string `json:"date"`
+		Date     string `json:"date"`
 		AnchorID string `json:"anchorId"`
-		Wave    int64  `json:"wave"`
-		Minutes int    `json:"minutes"`
-		Rank    *int   `json:"rank"`
+		Wave     int64  `json:"wave"`
+		Minutes  int    `json:"minutes"`
+		Rank     *int   `json:"rank"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		badRequest(w, "请求体不是合法 JSON")

@@ -62,11 +62,11 @@ func TestRenderGolden(t *testing.T) {
 			style:  StyleApple,
 			gender: "male",
 			want: []string{
-				`#007AFF`,           // 进度条填充（apple 主色）
-				`#EAF3FF`,           // 进度条轨道
-				`#F2F4F7`,           // 表头
-				`#FFF7F7`,           // 未播行
-				`#F04438`,           // 未播左侧标记
+				`#007AFF`,     // 进度条填充（apple 主色）
+				`#EAF3FF`,     // 进度条轨道
+				`#F2F4F7`,     // 表头
+				`#FFF7F7`,     // 未播行
+				`#F04438`,     // 未播左侧标记
 				`内部数据 · 请勿外传`, // 水印
 				`星嗨艺创主播数据统计`,
 			},
@@ -91,7 +91,10 @@ func TestRenderGolden(t *testing.T) {
 }
 
 func TestFormatWave(t *testing.T) {
-	tests := []struct{ in int64; want string }{
+	tests := []struct {
+		in   int64
+		want string
+	}{
 		{0, "0"},
 		{-5, "0"},
 		{9999, "9,999"},

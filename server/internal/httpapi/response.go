@@ -13,7 +13,7 @@ type apiError struct {
 }
 
 type envelope struct {
-	Data  any      `json:"data,omitempty"`
+	Data  any       `json:"data,omitempty"`
 	Error *apiError `json:"error,omitempty"`
 }
 

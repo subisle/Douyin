@@ -326,14 +326,14 @@ func classicDate(date string) string {
 
 func renderApple(r Report) string {
 	const (
-		headerH      = 86.0
-		tableHeaderH = 34.0
-		rowH         = 48.0
-		rowGap       = 6.0
+		headerH       = 86.0
+		tableHeaderH  = 34.0
+		rowH          = 48.0
+		rowGap        = 6.0
 		footerTextGap = 8.0
-		footerTextH  = 18.0
-		warnGap      = 20.0
-		warnH        = 42.0
+		footerTextH   = 18.0
+		warnGap       = 20.0
+		warnH         = 42.0
 	)
 
 	hasInactive := r.ShowInactiveFooter && len(r.InactiveLines) > 0
@@ -513,7 +513,7 @@ func appleWaveBar(c col, cy float64, row Row, maxWave float64) string {
 	const barH = 22.0
 	barX := c.x + padX
 	barW := math.Max(48, c.width-padX*2)
-	barY := cy - barH / 2
+	barY := cy - barH/2
 
 	var b strings.Builder
 	if !row.IsLive {
