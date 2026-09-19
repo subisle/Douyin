@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -260,8 +261,14 @@ func (t *Transport) heartbeatLoop(ctx context.Context, conn *websocket.Conn,
 
 // dispatchData 群/私聊消息的事件体。
 type dispatchData struct {
-	ID          string `json:"id"` // 消息 id，被动回复要带
-	Content     string `json:"content"`
+	ID      string `json:"id"` // 消息 id，被动回复要带
+	Content string `json:"content"`
+	// 富媒体消息的 content 可能是 file:// 前缀或空，不当作正文
+	Attachments []struct {
+		URL      string `json:"url"`
+		Filename string `json:"filename"`
+		Size     int64  `json:"size"`
+	} `json:"attachments"`
 	GroupOpenID string `json:"group_openid"`
 	Author      struct {
 		ID         string `json:"id"`
@@ -306,7 +313,28 @@ func (t *Transport) handleDispatch(ctx context.Context, eventType string, raw js
 	t.lastText = d.Content
 	t.mu.Unlock()
 
-	if d.Content == "" {
+	// 富媒体消息的 content 常是 "file://…" 或空，不当正文（615 同款清理）
+	text := d.Content
+	text = strings.TrimSpace(strings.TrimPrefix(text, "/"))
+	if i := strings.Index(text, "file://"); i >= 0 {
+		text = strings.TrimSpace(text[:i])
+	}
+
+	// 附件直链（自带 rkey 鉴权参数）。URL 可能是协议相对的 "//…"。
+	atts := make([]bot.Attachment, 0, len(d.Attachments))
+	for _, a := range d.Attachments {
+		if a.URL == "" {
+			continue
+		}
+		atts = append(atts, bot.Attachment{
+			URL:      a.URL,
+			FileName: a.Filename,
+			Size:     a.Size,
+		})
+	}
+
+	// 空文本但带附件也要进：CSV 文件消息的 content 往往就是 file://
+	if text == "" && len(atts) == 0 {
 		return
 	}
 
@@ -314,8 +342,9 @@ func (t *Transport) handleDispatch(ctx context.Context, eventType string, raw js
 		Channel:        t.Name(),
 		ConversationID: conversationID,
 		SenderID:       conversationID,
-		Text:           d.Content,
+		Text:           text,
 		AtMe:           true,
+		Attachments:    atts,
 		ReceivedAt:     time.Now(),
 	})
 	if err != nil {

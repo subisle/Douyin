@@ -248,8 +248,9 @@ createServer(async (req, res) => {
       intent.Date = `${y}-${pad(now.getMonth() + 1)}-${pad(d ? Number(d[1]) : now.getDate())}`;
       intent.Query = "";
     } else if (/^(\d{1,2})[.．](\d{1,2})$/.test(t)) {
+      // 裸日期 = 预告导入日（615 语义），不再是日报
       const m = t.match(/^(\d{1,2})[.．](\d{1,2})$/);
-      intent.Kind = "daily_report";
+      intent.Kind = "import_date";
       intent.Date = `${y}-${pad(Number(m[1]))}-${pad(Number(m[2]))}`;
       intent.Query = "";
     } else if (/昨天|昨日/.test(t)) {

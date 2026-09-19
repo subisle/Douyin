@@ -4,6 +4,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -171,6 +172,43 @@ func (r *Repo) ResolveAnchorOwner(ctx context.Context, anchorID string) (uint64,
 		return 0, translateNotFound(err, "反查账号归属")
 	}
 	return personID, nil
+}
+
+// ResolveAnchorOwnerFlexible 弹性归属匹配：anchor_id → 抖音号 → 唯一艺名。
+// 与 615 的 matchImportRows 对齐——运营的 CSV 经常只有艺名列，
+// 只认 ID 会让整张表全部「未匹配」。艺名撞名（多人同名）时不猜，返回未匹配。
+func (r *Repo) ResolveAnchorOwnerFlexible(ctx context.Context, anchorID, name string) (uint64, error) {
+	if anchorID != "" {
+		var personID uint64
+		err := r.db.GetContext(ctx, &personID,
+			"SELECT person_id FROM account WHERE anchor_id = ?", anchorID)
+		if err == nil {
+			return personID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("反查账号归属: %w", err)
+		}
+		// ID 列里常被填抖音号，再试一次
+		err = r.db.GetContext(ctx, &personID,
+			"SELECT person_id FROM account WHERE douyin_no = ?", anchorID)
+		if err == nil {
+			return personID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("按抖音号反查: %w", err)
+		}
+	}
+	if name != "" {
+		var ids []uint64
+		if err := r.db.SelectContext(ctx, &ids,
+			"SELECT id FROM person WHERE name = ? AND deleted_at IS NULL", name); err != nil {
+			return 0, fmt.Errorf("按艺名反查: %w", err)
+		}
+		if len(ids) == 1 {
+			return ids[0], nil
+		}
+	}
+	return 0, ErrNotFound
 }
 
 // ListTierRules 取某粒度的等级规则，按门槛从高到低排。

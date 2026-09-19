@@ -24,6 +24,7 @@ const (
 	IntentPushToggle    IntentKind = "push_toggle"
 	IntentPushStatus    IntentKind = "push_status"
 	IntentPKGroup       IntentKind = "pk_group"
+	IntentImportDate    IntentKind = "import_date"
 	IntentUnknown       IntentKind = "unknown"
 )
 
@@ -43,6 +44,17 @@ type Intent struct {
 // reAtMention 群消息里 @机器人 的前缀，要整段去掉
 var reAtMention = regexp.MustCompile(`@[^\s@]+`)
 var reGroupIndex = regexp.MustCompile(`第\s*\d+\s*组`)
+
+// reImportDateToken 整条消息就是一个日期（照抄 615 的 importDateToken 正则）。
+// 「9.11 / 9月11日 / 11号 / 2026-09-11 / 2026年9月11日」→ 预告导入日。
+// 刻意不含「昨天/今天」和「2026年9月」：前者走日报，后者是月报。
+var reImportDateToken = regexp.MustCompile(
+	`^/?(\d{1,2}[.．]\d{1,3}[日号]?|\d{1,2}月\d{1,3}[日号]?|\d{1,2}[日号]|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?)$`)
+
+// isDayGranularity 三种"天"粒度：完整年月日、月日、仅日。
+func isDayGranularity(t dateparse.SpecType) bool {
+	return t == dateparse.TypeDate || t == dateparse.TypeMonthDay || t == dateparse.TypeDay
+}
 
 // NormalizeText 去掉 @ 提及、首尾空白与尾部标点。
 func NormalizeText(s string) string {
@@ -117,6 +129,20 @@ func ParseIntent(raw string, now time.Time) Intent {
 		return intent
 	}
 
+	// 预告导入日期：「9.11」「9月11日」「11号」「2026-09-11」单发
+	// → 记住日期，10 分钟内连传的 CSV 都导入该日（615 同款语义）。
+	// 注意与日报的边界：只有**纯数字日期**才算，「昨天」「今天」仍走日报；
+	// 带报告/之星等关键词的（如「18号报告」）也不算。
+	if reImportDateToken.MatchString(text) {
+		if spec := dateparse.ParseDateSpec(text); spec != nil && isDayGranularity(spec.Type) {
+			if d, err := dateparse.ResolveDate(spec, now); err == nil {
+				intent.Kind = IntentImportDate
+				intent.Date = d.Format("2006-01-02")
+				return intent
+			}
+		}
+	}
+
 	// 报告类：先把「艺名 + 日期」拆开（日期可能在句尾也可能在句中）
 	query, spec := dateparse.SplitQuery(text)
 	if name := cleanQuery(query); isName(name) {
@@ -164,6 +190,7 @@ func ParseIntent(raw string, now time.Time) Intent {
 // 少了这张表，"每日报告"会被解析成查一个叫「每日」的主播。
 var nonNameWords = map[string]bool{
 	"": true, "每日": true, "日": true, "月": true, "年": true, "报告": true,
+	"报": true, // 日期剥落后可能剩单字（"9月11日报"→"报"），不会有人叫这个
 	"数据": true, "今日": true, "今天": true, "昨天": true, "昨日": true,
 	"之星": true, "每日之星": true, "的": true, "音浪": true, "时长": true,
 	"分组": true, "组": true, "文件": true,

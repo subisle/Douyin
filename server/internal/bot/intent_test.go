@@ -23,8 +23,10 @@ func TestParseIntent(t *testing.T) {
 		{"日报", IntentDailyReport, "2026-09-20", "", 0, ""},
 		{"昨天", IntentDailyReport, "2026-09-19", "", 0, ""},
 		{"18号报告", IntentDailyReport, "2026-09-18", "", 0, ""},
-		{"9.11", IntentDailyReport, "2026-09-11", "", 0, ""},
-		{"2026年9月19日", IntentDailyReport, "2026-09-19", "", 0, ""},
+
+		// 裸数字日期 = 预告导入日（615 语义），不是日报
+		{"9.11", IntentImportDate, "2026-09-11", "", 0, ""},
+		{"2026年9月19日", IntentImportDate, "2026-09-19", "", 0, ""},
 
 		{"9月", IntentMonthlyReport, "", "2026-09", 0, ""},
 		{"2026年3月", IntentMonthlyReport, "", "2026-03", 0, ""},

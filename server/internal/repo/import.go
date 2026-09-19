@@ -101,16 +101,18 @@ func (r *Repo) BuildImportPreview(ctx context.Context, rows []csvparse.Row,
 		case row.Err != "":
 			pr.Status = StatusSkipped
 			out.Skipped++
-		case row.AnchorID == "":
+		case row.AnchorID == "" && row.Name == "":
+			// ID 和艺名都没有，确实没法匹配（615 同款）。
+			// 只有艺名列的 CSV 是合法的：走 default 用艺名弹性匹配。
 			pr.Status = StatusSkipped
-			pr.Err = "缺少主播 ID"
+			pr.Err = "缺少主播 ID 和艺名"
 			out.Skipped++
-		case seen[row.AnchorID]:
+		case seen[row.AnchorID] && row.AnchorID != "":
 			pr.Status = StatusDuplicate
 			out.Duplicate++
 		default:
 			seen[row.AnchorID] = true
-			personID, err := r.ResolveAnchorOwner(ctx, row.AnchorID)
+			personID, err := r.ResolveAnchorOwnerFlexible(ctx, row.AnchorID, row.Name)
 			if err != nil {
 				pr.Status = StatusUnmatched
 				out.Unmatched++

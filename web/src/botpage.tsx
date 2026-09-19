@@ -49,6 +49,7 @@ const INTENT_LABEL: Record<string, string> = {
   push_toggle: "推送开关",
   push_status: "推送状态",
   pk_group: "PK 分组",
+  import_date: "导入日期预告",
   unknown: "没听懂",
 };
 

@@ -12,6 +12,13 @@ import (
 	"douyin-server/internal/repo"
 )
 
+// Attachment 消息里的文件附件（CSV 导入用）。
+type Attachment struct {
+	URL      string // 下载直链（QQ 事件自带 rkey 鉴权参数，无需额外头）
+	FileName string
+	Size     int64
+}
+
 // Inbound 收到的消息。两个通道（微信 / QQ）统一成这个结构。
 type Inbound struct {
 	Channel        string // weixin / qq
@@ -19,6 +26,7 @@ type Inbound struct {
 	SenderID       string
 	Text           string
 	AtMe           bool
+	Attachments    []Attachment
 	ReceivedAt     time.Time
 }
 
@@ -56,7 +64,22 @@ type Manager struct {
 	channels map[string]*channelState
 	push     bool
 	log      []LoggedMessage
+	pending  map[string]*pendingImport // 导入日期口令，key 是会话 ID
 }
+
+// pendingImport 615 同款：先发「9.11」记住日期，10 分钟内连传的 CSV 都进该日。
+// 最多 2 个文件（音浪 + 时长各一），用满即失效，防止很久后误导入旧日期。
+type pendingImport struct {
+	date      time.Time
+	kinds     map[string]bool
+	remaining int
+	expiresAt time.Time
+}
+
+const (
+	pendingImportTTL      = 10 * time.Minute
+	pendingImportMaxFiles = 2
+)
 
 type channelState struct {
 	transport Transport
@@ -84,7 +107,8 @@ func NewManager(r *repo.Repo) *Manager {
 			"weixin": {note: "微信 iLink 适配器待接入"},
 			"qq":     {note: "QQ 开放平台适配器待接入"},
 		},
-		log: []LoggedMessage{},
+		log:     []LoggedMessage{},
+		pending: map[string]*pendingImport{},
 	}
 }
 
@@ -214,6 +238,23 @@ func (m *Manager) appendLog(msg LoggedMessage) {
 // 目前日报技能能出真实图（复用 internal/render），其余先回文字。
 func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
 	now := time.Now()
+
+	// 有文件附件：CSV 导入流程优先于文字意图（615 同款顺序）。
+	if len(in.Attachments) > 0 {
+		out, err := m.handleInboundFile(ctx, in, now)
+		m.appendLog(LoggedMessage{
+			At: now, Channel: in.Channel, Dir: "in",
+			From: in.SenderID, Text: strings.TrimSpace(in.Text + " [文件]"), Intent: "import_csv",
+		})
+		if err == nil {
+			m.appendLog(LoggedMessage{
+				At: time.Now(), Channel: in.Channel, Dir: "out",
+				From: in.ConversationID, Text: out.Text, Intent: "import_csv",
+			})
+		}
+		return out, err
+	}
+
 	intent := ParseIntent(in.Text, now)
 
 	m.appendLog(LoggedMessage{
@@ -227,6 +268,12 @@ func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
 	case IntentHelp:
 		out.Text = HelpText()
 		return out, nil
+
+	case IntentImportDate:
+		m.rememberImportDate(in.ConversationID, intent.Date)
+		out.Text = fmt.Sprintf(
+			"已记住导入日期 %s（10 分钟内有效，可连传 %d 个文件）。请依次发送音浪与时长 CSV。",
+			friendlyDate(intent.Date), pendingImportMaxFiles)
 
 	case IntentDailyReport:
 		date := parseOrNow(intent.Date, now)
