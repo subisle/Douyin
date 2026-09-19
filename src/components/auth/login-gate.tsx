@@ -14,7 +14,6 @@ interface LoginGateProps {
 export function LoginGate({ children }: LoginGateProps) {
   const [state, setState] = useState<AuthState>("checking");
   const [isDesktop, setIsDesktop] = useState(false);
-  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +47,7 @@ export function LoginGate({ children }: LoginGateProps) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ password }),
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok || !payload?.success) {
@@ -98,14 +97,10 @@ export function LoginGate({ children }: LoginGateProps) {
             主
           </div>
           <CardTitle>主播数据管理系统</CardTitle>
-          <p className="text-sm text-muted-foreground">请输入账号和密码登录网站后台</p>
+          <p className="text-sm text-muted-foreground">请输入密码登录网站后台</p>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={submit}>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">账号</label>
-              <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-            </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">密码</label>
               <Input

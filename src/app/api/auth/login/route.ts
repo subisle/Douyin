@@ -9,32 +9,21 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function configuredUsername() {
-  return (process.env.ADMIN_USERNAME || process.env.WEB_USERNAME || "").trim();
-}
-
 function configuredPassword() {
-  return process.env.ADMIN_PASSWORD || process.env.WEB_PASSWORD || "";
+  const value = (process.env.ADMIN_PASSWORD || process.env.WEB_PASSWORD || "").trim();
+  // 未配置时回落到固定密码，单密码登录，无账号概念。
+  return value || "200309";
 }
 
 export async function POST(request: Request) {
   try {
-    const usernameExpected = configuredUsername();
     const passwordExpected = configuredPassword();
-    if (!usernameExpected || !passwordExpected) {
-      return apiFail(
-        "服务端未配置 ADMIN_USERNAME/ADMIN_PASSWORD，拒绝登录",
-        503,
-        "AUTH_NOT_CONFIGURED"
-      );
-    }
 
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const username = String(body.username || "").trim();
     const password = String(body.password || "");
 
-    if (!username || !password) return apiFail("请输入账号和密码", 400, "BAD_REQUEST");
-    const rateLimitKeys = loginRateLimitKeys(request, username);
+    if (!password) return apiFail("请输入密码", 400, "BAD_REQUEST");
+    const rateLimitKeys = loginRateLimitKeys(request, "web");
     const limited = loginRateLimiter.current(rateLimitKeys);
     if (limited.limited) {
       const response = apiFail("登录尝试过多，请稍后重试", 429, "RATE_LIMITED");
@@ -44,7 +33,7 @@ export async function POST(request: Request) {
     }
 
     const passwordValid = verifyPassword(password, passwordExpected);
-    if (username !== usernameExpected || !passwordValid) {
+    if (!passwordValid) {
       const failed = loginRateLimiter.recordFailure(rateLimitKeys);
       if (failed.limited) {
         const response = apiFail("登录尝试过多，请稍后重试", 429, "RATE_LIMITED");
@@ -52,13 +41,13 @@ export async function POST(request: Request) {
         response.headers.set("Cache-Control", "no-store");
         return response;
       }
-      return apiFail("账号或密码错误", 401, "UNAUTHORIZED");
+      return apiFail("密码错误", 401, "UNAUTHORIZED");
     }
 
     loginRateLimiter.clear(rateLimitKeys);
-    const token = createSessionToken(username);
+    const token = createSessionToken("admin");
     return NextResponse.json(
-      { success: true, data: { username } },
+      { success: true, data: { username: "admin" } },
       {
         headers: {
           "Set-Cookie": sessionCookieValue(token),
