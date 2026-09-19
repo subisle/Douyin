@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"douyin-server/internal/domain"
+	"douyin-server/internal/metric"
 )
 
 const isoDate = "2006-01-02"
@@ -63,7 +64,46 @@ func (s *Server) monthlyMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
-// yearlyMetrics GET /api/v1/metrics/yearly?year=2026&gender=
+// dashboard GET /api/v1/metrics/dashboard?date=YYYY-MM-DD&days=30&top=5
+//
+// 首页一次拿全：KPI、趋势曲线、未播预警、榜单前 N。
+// 后端一次查询算完，前端不必为了一个页面打四次接口。
+func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("date")
+	if raw == "" {
+		raw = time.Now().Format(isoDate)
+	}
+	date, err := time.ParseInLocation(isoDate, raw, time.Local)
+	if err != nil {
+		badRequest(w, "date 格式应为 YYYY-MM-DD")
+		return
+	}
+
+	days := queryInt(r.URL.Query().Get("days"), 30)
+	if days < 7 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	topN := queryInt(r.URL.Query().Get("top"), 5)
+	if topN < 1 {
+		topN = 1
+	}
+	if topN > 20 {
+		topN = 20
+	}
+
+	rows, err := s.repo.ListDailyRange(r.Context(), date.AddDate(0, 0, -(days-1)), date)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, metric.BuildDashboard(rows, date, days, topN))
+}
+
+// yearlyMetrics GET /api/v1/metrics/yearly?year=2026&gender=gender=
 func (s *Server) yearlyMetrics(w http.ResponseWriter, r *http.Request) {
 	yearRaw := r.URL.Query().Get("year")
 	if yearRaw == "" {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, fmtMinutes, fmtWave, type MonthlyRow, type Person, type YearlyRow } from "./api";
 
 // 统一的加载态封装：每个页面都要 loading / error / reload，别复制五遍。
-function useLoad<T>(loader: () => Promise<T>, deps: unknown[]) {
+export function useLoad<T>(loader: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

@@ -84,6 +84,47 @@ export interface ImportResult {
   skipped: string[];
 }
 
+export interface DayPoint {
+  date: string;
+  female: number;
+  male: number;
+  total: number;
+}
+
+export interface AbsentRow {
+  personId: number;
+  name: string;
+  gender: string;
+  days: number;
+}
+
+export interface TopRow {
+  personId: number;
+  name: string;
+  gender: string;
+  wave: number;
+  minutes: number;
+  tier?: string;
+}
+
+export interface Summary {
+  date: string;
+  totalWave: number;
+  prevWave: number;
+  liveCount: number;
+  totalCount: number;
+  monthWave: number;
+  monthMinutes: number;
+  monthProgress: number;
+}
+
+export interface Dashboard {
+  summary: Summary;
+  trend: DayPoint[];
+  absent: AbsentRow[];
+  top: TopRow[];
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -134,6 +175,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  dashboard: (params: { date?: string; days?: string; top?: string } = {}) =>
+    request<Dashboard>("/metrics/dashboard" + qs(params)),
 
   daily: (date: string, gender?: string) =>
     request<DailyRow[]>(`/metrics/daily${qs({ date, gender })}`),

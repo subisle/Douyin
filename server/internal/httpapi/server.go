@@ -38,6 +38,7 @@ func New(r *repo.Repo, cfg config.Config, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /api/v1/persons/{id}/accounts", s.listAccounts)
 	s.mux.HandleFunc("POST /api/v1/persons/{id}/accounts", s.bindAccount)
 
+	s.mux.HandleFunc("GET /api/v1/metrics/dashboard", s.dashboard)
 	s.mux.HandleFunc("GET /api/v1/metrics/daily", s.dailyMetrics)
 	s.mux.HandleFunc("GET /api/v1/metrics/monthly", s.monthlyMetrics)
 	s.mux.HandleFunc("GET /api/v1/metrics/yearly", s.yearlyMetrics)

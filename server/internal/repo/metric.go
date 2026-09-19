@@ -407,6 +407,27 @@ func (r *Repo) ListYearlyByYear(ctx context.Context, year int, gender domain.Gen
 	return out, nil
 }
 
+// ListDailyRange 取 [from, to] 区间内全员的日指标，JOIN 出姓名与性别。
+// 首页的四份数据（KPI/趋势/预警/榜单）全部由这一份结果算出。
+func (r *Repo) ListDailyRange(ctx context.Context, from, to time.Time) ([]domain.DailyMetric, error) {
+	const query = `SELECT d.person_id, d.anchor_id, d.biz_date, d.wave, d.cumulative_wave,
+	                      d.wave_span, d.wave_reliable, d.minutes, d.cumulative_minutes,
+	                      d.is_live, d.tier,
+	                      p.name AS name, p.gender AS gender, m.name AS master_name
+	               FROM daily_metric d
+	               JOIN person p ON p.id = d.person_id
+	               LEFT JOIN person m ON m.id = p.master_id
+	               WHERE d.biz_date BETWEEN ? AND ?
+	                 AND p.deleted_at IS NULL AND p.status = 'active'
+	               ORDER BY d.biz_date ASC`
+
+	var out []domain.DailyMetric
+	if err := r.db.SelectContext(ctx, &out, query, from, to); err != nil {
+		return nil, fmt.Errorf("查询区间日指标: %w", err)
+	}
+	return out, nil
+}
+
 // ListMonthlyOfYear 取某主播某年全部月指标，用于汇总年度。
 func (r *Repo) ListMonthlyOfYear(ctx context.Context, personID uint64, year int) ([]domain.MonthlyMetric, error) {
 	var out []domain.MonthlyMetric

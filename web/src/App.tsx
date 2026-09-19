@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { DashboardPage } from "./dashboard";
 import { DailyPage, ImportPage, MonthlyPage, PersonsPage, YearlyPage } from "./pages";
 
 const TABS = [
+  { key: "home", label: "首页", Comp: DashboardPage },
   { key: "daily", label: "日榜", Comp: DailyPage },
   { key: "monthly", label: "月榜", Comp: MonthlyPage },
   { key: "yearly", label: "年度汇总", Comp: YearlyPage },
@@ -10,8 +12,8 @@ const TABS = [
 ] as const;
 
 export default function App() {
-  const [tab, setTab] = useState<string>("daily");
-  const Current = TABS.find((t) => t.key === tab)?.Comp ?? DailyPage;
+  const [tab, setTab] = useState<string>("home");
+  const Current = TABS.find((t) => t.key === tab)?.Comp ?? DashboardPage;
 
   return (
     <>

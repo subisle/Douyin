@@ -82,8 +82,48 @@ const yearly = persons.slice(0, 5).map((p, i) => ({
   gender: p.gender,
 }));
 
+// 首页：30 天趋势 + KPI + 预警 + 榜单
+const trend = Array.from({ length: 30 }, (_, i) => {
+  const d = day(29 - i);
+  const female = Math.round(280000 + Math.sin(i / 3) * 70000 + (i % 7 === 0 ? -90000 : 0));
+  const male = Math.round(430000 + Math.cos(i / 4) * 95000 + (i % 5 === 0 ? -120000 : 0));
+  return { date: d, female, male, total: female + male };
+});
+
+const totalToday = trend[29].total;
+const totalPrev = trend[28].total;
+
+const dashboard = {
+  summary: {
+    date: day(0),
+    totalWave: totalToday,
+    prevWave: totalPrev,
+    liveCount: 42,
+    totalCount: 48,
+    monthWave: trend.reduce((s, p) => s + p.total, 0),
+    monthMinutes: 748800,
+    monthProgress: 0.63,
+  },
+  trend,
+  absent: [
+    { personId: 6, name: "大鹏", gender: "male", days: 5 },
+    { personId: 7, name: "青禾", gender: "female", days: 3 },
+    { personId: 8, name: "南风", gender: "female", days: 2 },
+    { personId: 9, name: "木子", gender: "male", days: 2 },
+    { personId: 10, name: "阿岩", gender: "male", days: 1 },
+  ],
+  top: [
+    { personId: 4, name: "阿泽", gender: "male", wave: 512000, minutes: 410, tier: "A" },
+    { personId: 1, name: "柚子", gender: "female", wave: 386000, minutes: 320, tier: "B" },
+    { personId: 2, name: "小满", gender: "female", wave: 214000, minutes: 280, tier: "B" },
+    { personId: 5, name: "老K", gender: "male", wave: 143000, minutes: 240, tier: "C" },
+    { personId: 3, name: "初夏", gender: "female", wave: 96000, minutes: 190, tier: "C" },
+  ],
+};
+
 const routes = {
   "/api/v1/persons": persons,
+  "/api/v1/metrics/dashboard": dashboard,
   "/api/v1/metrics/daily": daily,
   "/api/v1/metrics/monthly": monthly,
   "/api/v1/metrics/yearly": yearly,
