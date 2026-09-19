@@ -60,11 +60,12 @@ type ChannelStatus struct {
 type Manager struct {
 	repo *repo.Repo
 
-	mu       sync.RWMutex
-	channels map[string]*channelState
-	push     bool
-	log      []LoggedMessage
-	pending  map[string]*pendingImport // 导入日期口令，key 是会话 ID
+	mu         sync.RWMutex
+	channels   map[string]*channelState
+	push       bool
+	log        []LoggedMessage
+	pending    map[string]*pendingImport // 导入日期口令，key 是会话 ID
+	pendingOps map[string]*pendingOp     // 改名/改号对话，key 是会话 ID
 }
 
 // pendingImport 615 同款：先发「9.11」记住日期，10 分钟内连传的 CSV 都进该日。
@@ -262,12 +263,37 @@ func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
 
 	intent := ParseIntent(in.Text, now)
 
+	out := Outbound{ConversationID: in.ConversationID}
+
+	// 改名/改号流程：进行中的对话优先消费消息；然后是入口关键词；
+	// 最后裸抖音号（命中库内账号）触发改名。
+	if reply, handled := m.handlePendingOp(ctx, in.ConversationID, in.Text); handled {
+		out.Text = reply
+		m.appendLog(LoggedMessage{At: time.Now(), Channel: in.Channel, Dir: "out",
+			From: in.ConversationID, Text: reply, Intent: "rename_flow"})
+		return out, nil
+	}
+	if reply, handled := m.tryOpStart(ctx, in.ConversationID, in.Text); handled {
+		m.appendLog(LoggedMessage{At: now, Channel: in.Channel, Dir: "in",
+			From: in.SenderID, Text: in.Text, Intent: "rename_flow"})
+		out.Text = reply
+		m.appendLog(LoggedMessage{At: time.Now(), Channel: in.Channel, Dir: "out",
+			From: in.ConversationID, Text: reply, Intent: "rename_flow"})
+		return out, nil
+	}
+	if reply, handled := m.tryStartRenameByNumber(ctx, in.ConversationID, in.Text); handled {
+		out.Text = reply
+		m.appendLog(LoggedMessage{At: now, Channel: in.Channel, Dir: "in",
+			From: in.SenderID, Text: in.Text, Intent: "rename_flow"})
+		m.appendLog(LoggedMessage{At: time.Now(), Channel: in.Channel, Dir: "out",
+			From: in.ConversationID, Text: reply, Intent: "rename_flow"})
+		return out, nil
+	}
+
 	m.appendLog(LoggedMessage{
 		At: now, Channel: in.Channel, Dir: "in",
 		From: in.SenderID, Text: in.Text, Intent: string(intent.Kind),
 	})
-
-	out := Outbound{ConversationID: in.ConversationID}
 
 	switch intent.Kind {
 	case IntentHelp:
@@ -412,6 +438,8 @@ func HelpText() string {
 		"· 艺名 9月 —— 查该主播某月",
 		"· 姓名-抖音号 —— 添加主播（如 柚子-123456）",
 		"· 直接发 CSV 文件 —— 默认导入昨天",
+		"· 改名 —— 发抖音号，再回复新名字",
+		"· 改号 —— 发姓名（多个号会让你挑），再回复新抖音号",
 		"· 开启/关闭日报推送 —— 推送开关",
 		"· 帮助 —— 本菜单",
 	}, "\n")

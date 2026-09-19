@@ -147,6 +147,41 @@ func (r *Repo) SoftDeletePerson(ctx context.Context, id uint64) error {
 	return ensureAffected(res, "删除主播")
 }
 
+// FindAccountByDouyinNo 按抖音号找账号（anchor_id 或 douyin_no 任一命中）。
+// 改名流程用它：用户只发一个抖音号，先定位到人与账号。
+func (r *Repo) FindAccountByDouyinNo(ctx context.Context, no string) (*domain.Account, error) {
+	var a domain.Account
+	err := r.db.GetContext(ctx, &a,
+		`SELECT id, person_id, anchor_id, douyin_no, anchor_name, is_primary, status, created_at
+		   FROM account WHERE anchor_id = ? OR douyin_no = ? LIMIT 1`, no, no)
+	if err != nil {
+		return nil, translateNotFound(err, "按抖音号查账号")
+	}
+	return &a, nil
+}
+
+// UpdateAccountIDs 改账号的 anchor_id 与抖音号（改抖音号流程）。
+// anchor_id 唯一键冲突由调用方通过返回的 MySQL 错误文案转达人话。
+func (r *Repo) UpdateAccountIDs(ctx context.Context, accountID uint64, newAnchorID, newDouyinNo string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE account SET anchor_id = ?, douyin_no = ? WHERE id = ?`,
+		newAnchorID, newDouyinNo, accountID)
+	if err != nil {
+		return fmt.Errorf("更新账号: %w", err)
+	}
+	return ensureAffected(res, "更新账号")
+}
+
+// RenamePerson 改主播姓名（改名流程）。历史数据引用 person.id，改名安全。
+func (r *Repo) RenamePerson(ctx context.Context, personID uint64, newName string) error {
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE person SET name = ? WHERE id = ? AND deleted_at IS NULL", newName, personID)
+	if err != nil {
+		return fmt.Errorf("改名: %w", err)
+	}
+	return ensureAffected(res, "改名")
+}
+
 // ListAccounts 返回某主播绑定的全部抖音账号。
 func (r *Repo) ListAccounts(ctx context.Context, personID uint64) ([]domain.Account, error) {
 	var out []domain.Account
