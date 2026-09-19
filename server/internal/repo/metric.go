@@ -343,7 +343,8 @@ func (r *Repo) ListDailyByDate(ctx context.Context, date time.Time, gender domai
 	          FROM daily_metric d
 	          JOIN person p ON p.id = d.person_id
 	          LEFT JOIN person m ON m.id = p.master_id
-	          WHERE d.biz_date = ? AND p.deleted_at IS NULL AND p.status = 'active'`
+	          WHERE d.biz_date = ? AND p.deleted_at IS NULL AND p.status = 'active'
+	            AND p.hide_in_daily_report = 0`
 	args := []any{date}
 
 	if gender != "" {

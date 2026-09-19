@@ -55,6 +55,9 @@ func New(r *repo.Repo, cfg config.Config, log *slog.Logger) *Server {
 	s.mux.HandleFunc("POST /api/v1/imports/csv", s.importCSV)
 	s.mux.HandleFunc("POST /api/v1/imports/recompute", s.recompute)
 
+	// 导出图片（SVG，样式对齐 615）
+	s.mux.HandleFunc("GET /api/v1/exports/report.svg", s.exportReport)
+
 	return s
 }
 

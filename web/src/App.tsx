@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { DashboardPage } from "./dashboard";
+import { ExportPage } from "./exportpage";
 import { ImportPage } from "./importpage";
 import { DailyPage, MonthlyPage, PersonsPage, YearlyPage } from "./pages";
 
@@ -10,6 +11,7 @@ const TABS = [
   { key: "yearly", label: "年度汇总", Comp: YearlyPage },
   { key: "persons", label: "主播管理", Comp: PersonsPage },
   { key: "import", label: "数据导入", Comp: ImportPage },
+  { key: "export", label: "导出图片", Comp: ExportPage },
 ] as const;
 
 export default function App() {

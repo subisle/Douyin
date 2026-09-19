@@ -4,6 +4,12 @@
 // 启动：node web/mock/api.mjs
 
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const sampleSvg = (name) => readFileSync(join(here, "samples", `${name}.svg`), "utf8");
 
 const day = (n) => {
   const d = new Date();
@@ -141,6 +147,18 @@ createServer((req, res) => {
   if (req.method === "POST") {
     res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
     res.end(JSON.stringify({ data: { batchId: 1, imported: 0, persons: 0, skipped: [] } }));
+    return;
+  }
+
+  // 导出图：直接返回 Go 渲染器生成的样例 SVG（internal/render 的 golden 输出）
+  if (pathname === "/api/v1/exports/report.svg") {
+    const style = new URL(req.url, "http://localhost").searchParams.get("style");
+    const name = style === "apple" ? "apple" : "classic";
+    res.writeHead(200, {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(sampleSvg(name));
     return;
   }
 
