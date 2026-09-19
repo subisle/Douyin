@@ -135,6 +135,10 @@ const routes = {
   "/api/v1/metrics/yearly": yearly,
 };
 
+let qqConfigured = false;
+// 微信扫码登录的假流程：取码 → 2 次未扫 → 已扫码 → 登录成功
+let loginPollCount = 0;
+
 createServer(async (req, res) => {
   const { pathname } = new URL(req.url, "http://localhost");
 
@@ -163,18 +167,56 @@ createServer(async (req, res) => {
     return;
   }
 
-  // 机器人状态
+// 机器人状态
   if (pathname === "/api/v1/bots/status") {
     res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
     res.end(JSON.stringify({
       data: {
         channels: [
-          { name: "weixin", running: false, connected: false, note: "微信 iLink 适配器待接入" },
-          { name: "qq", running: false, connected: false, note: "QQ 开放平台适配器待接入" },
+          { name: "weixin", running: loginPollCount >= 3, connected: loginPollCount >= 3, note: loginPollCount >= 3 ? "已登录" : "尚未扫码" },
+          { name: "qq", running: qqConfigured, connected: qqConfigured, note: qqConfigured ? "凭证已配置" : "尚未配置凭证" },
         ],
         push: false,
       },
     }));
+    return;
+  }
+
+  // 微信：取二维码（mock 返回一个假内容，前端本地渲染）
+  if (pathname === "/api/v1/bots/weixin/qrcode") {
+    loginPollCount = 0;
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({
+      data: {
+        qrcode: "https://work.weixin.qq.com/mock-qrcode-demo",
+        url: "",
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      },
+    }));
+    return;
+  }
+
+  // 微信：轮询扫码状态
+  if (pathname === "/api/v1/bots/weixin/qrcode/status") {
+    loginPollCount += 1;
+    const phase = loginPollCount >= 3 ? "running" : loginPollCount === 2 ? "scanned" : "awaiting_scan";
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({
+      data: {
+        phase,
+        scanned: loginPollCount >= 2,
+        loggedIn: loginPollCount >= 3,
+        nickname: phase === "running" ? "演示账号" : undefined,
+      },
+    }));
+    return;
+  }
+
+  // QQ：保存凭证（mock 只记个开关）
+  if (pathname === "/api/v1/bots/qq/credentials") {
+    qqConfigured = true;
+    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.end(JSON.stringify({ data: { mounted: true } }));
     return;
   }
 
