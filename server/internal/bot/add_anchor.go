@@ -8,7 +8,6 @@ package bot
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"douyin-server/internal/domain"
 )
@@ -25,12 +24,12 @@ func (m *Manager) handleAddAnchor(ctx context.Context, name, douyinNo string) (O
 		}
 	}
 
-	// 2. 姓名已存在？唯一则直接加账号，重名则不猜
+	// 2. 姓名已存在 → 不新建，直接加账号（库里不会有重名，取唯一那条）
 	persons, err := m.repo.FindPersonsByName(ctx, name)
 	if err != nil {
 		return out, err
 	}
-	if len(persons) == 1 {
+	if len(persons) > 0 {
 		p := persons[0]
 		if err := m.repo.BindAccount(ctx, &domain.Account{
 			PersonID:   p.ID,
@@ -43,15 +42,6 @@ func (m *Manager) handleAddAnchor(ctx context.Context, name, douyinNo string) (O
 			return out, fmt.Errorf("绑定账号: %w", err)
 		}
 		out.Text = fmt.Sprintf("已把抖音号 %s 绑到已有主播「%s」。现在发 CSV 就能匹配了。", douyinNo, p.Name)
-		return out, nil
-	}
-	if len(persons) > 1 {
-		var ids []string
-		for _, p := range persons {
-			ids = append(ids, fmt.Sprintf("#%d(%s)", p.ID, string(p.Status)))
-		}
-		out.Text = fmt.Sprintf("库里有 %d 个叫「%s」的主播（%s），不确定加给谁。请换一个更独特的名字，或在网页上手动绑定。",
-			len(persons), name, strings.Join(ids, "、"))
 		return out, nil
 	}
 

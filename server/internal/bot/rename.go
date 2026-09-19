@@ -43,7 +43,7 @@ type pendingOp struct {
 var rePureDouyinNo = regexp.MustCompile(`^[a-zA-Z0-9._]{4,64}$`)
 var reNewDouyinNo = regexp.MustCompile(`^[a-zA-Z0-9._]{4,64}$`)
 
-const pendingOpTTL = 10 * time.Minute
+const pendingOpTTL = 90 * time.Second
 
 func (m *Manager) setPendingOp(conv string, op *pendingOp) {
 	op.expiresAt = time.Now().Add(pendingOpTTL)
@@ -161,9 +161,7 @@ func (m *Manager) redouyinLocate(ctx context.Context, conv, name string) (string
 	if len(persons) == 0 {
 		return fmt.Sprintf("库里没有叫「%s」的主播。要新增的话发「姓名-抖音号」。", name), true
 	}
-	if len(persons) > 1 {
-		return fmt.Sprintf("有 %d 个叫「%s」的主播，先在网页上合并或改名，再来改号。", len(persons), name), true
-	}
+	// 库里不会有重名，直接取唯一那条
 	p := persons[0]
 	accounts, err := m.repo.ListAccounts(ctx, p.ID)
 	if err != nil || len(accounts) == 0 {
