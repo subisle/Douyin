@@ -85,6 +85,20 @@ func (r *Repo) GetPerson(ctx context.Context, id uint64) (*domain.Person, error)
 	return &p, nil
 }
 
+// FindPersonsByName 按姓名精确查找（可能重名）。加主播指令用它判断
+// 是「新建」还是「给已有主播绑号」。
+func (r *Repo) FindPersonsByName(ctx context.Context, name string) ([]domain.Person, error) {
+	const query = `SELECT id, name, gender, master_id, generation, group_name, avatar_url,
+	                      hide_in_daily_report, status, joined_at, created_at, updated_at
+	               FROM person WHERE name = ? AND deleted_at IS NULL ORDER BY id`
+
+	var out []domain.Person
+	if err := r.db.SelectContext(ctx, &out, query, name); err != nil {
+		return nil, fmt.Errorf("按姓名查询主播: %w", err)
+	}
+	return out, nil
+}
+
 // CreatePerson 新建主播，返回自增 ID。
 func (r *Repo) CreatePerson(ctx context.Context, p *domain.Person) error {
 	const query = `INSERT INTO person

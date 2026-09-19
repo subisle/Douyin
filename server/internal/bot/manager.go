@@ -280,6 +280,13 @@ func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
 			"已记住导入日期 %s（10 分钟内有效，可连传 %d 个文件）。请依次发送音浪与时长 CSV。",
 			friendlyDate(intent.Date), pendingImportMaxFiles)
 
+	case IntentAddAnchor:
+		o, aerr := m.handleAddAnchor(ctx, intent.Query, intent.DouyinNo)
+		if aerr != nil {
+			return o, aerr
+		}
+		out = o
+
 	case IntentDailyReport:
 		date := parseOrNow(intent.Date, now)
 		svg, err := m.buildDailyReport(ctx, date, intent.Gender)
@@ -397,13 +404,15 @@ func HelpText() string {
 	return strings.Join([]string{
 		"可用指令：",
 		"· 日报 / 每日报告 —— 今日榜单图",
-		"· 昨天 / 18号报告 / 9.11 —— 指定某天",
+		"· 昨天 / 18号报告 / 9月11日报 —— 指定某天",
+		"· 9.11 —— 预告导入日，10 分钟内传 CSV 进该日",
 		"· 9月 / 2026年3月 —— 月榜",
 		"· 2026年 —— 年度汇总",
 		"· 艺名 —— 查某位主播",
 		"· 艺名 9月 —— 查该主播某月",
+		"· 姓名-抖音号 —— 添加主播（如 柚子-123456）",
+		"· 直接发 CSV 文件 —— 默认导入昨天",
 		"· 开启/关闭日报推送 —— 推送开关",
-		"· 日报推送状态 —— 查看开关",
 		"· 帮助 —— 本菜单",
 	}, "\n")
 }

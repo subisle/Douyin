@@ -113,3 +113,29 @@ func TestDecodeCSV(t *testing.T) {
 		t.Errorf("GBK 解码结果不对: %q", got)
 	}
 }
+
+func TestParseAddAnchor(t *testing.T) {
+	cases := []struct {
+		text     string
+		name     string
+		douyinNo string
+	}{
+		{"柚子-123456", "柚子", "123456"},
+		{"柚子－123456", "柚子", "123456"},   // 全角连字符
+		{"柚子—123456", "柚子", "123456"},   // em dash
+		{"柚子 - 123456", "柚子", "123456"}, // 带空格
+		{"小K-douyin.888", "小K", "douyin.888"},
+		// 不该命中
+		{"9.11", "", ""},      // 日期
+		{"柚子 9月", "", ""},     // 无连字符
+		{"柚子-abc", "", ""},    // 抖音号太短
+		{"123456-柚子", "", ""}, // 姓名含数字开头部分不合法
+		{"18号报告", "", ""},     // 日报
+	}
+	for _, c := range cases {
+		name, no := ParseAddAnchor(c.text)
+		if name != c.name || no != c.douyinNo {
+			t.Errorf("ParseAddAnchor(%q) = (%q,%q), want (%q,%q)", c.text, name, no, c.name, c.douyinNo)
+		}
+	}
+}

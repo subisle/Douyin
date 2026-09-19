@@ -25,20 +25,22 @@ const (
 	IntentPushStatus    IntentKind = "push_status"
 	IntentPKGroup       IntentKind = "pk_group"
 	IntentImportDate    IntentKind = "import_date"
+	IntentAddAnchor     IntentKind = "add_anchor"
 	IntentUnknown       IntentKind = "unknown"
 )
 
 // Intent 解析后的指令。
 type Intent struct {
-	Kind    IntentKind
-	Date    string // YYYY-MM-DD，日粒度指令用
-	Period  string // YYYY-MM，月粒度用
-	Year    int
-	Gender  string // male / female，留空表示全团
-	Query   string // 艺名
-	Enable  bool   // push_toggle 用
-	Group   string // PK 分组名
-	RawText string
+	Kind     IntentKind
+	Date     string // YYYY-MM-DD，日粒度指令用
+	Period   string // YYYY-MM，月粒度用
+	Year     int
+	Gender   string // male / female，留空表示全团
+	Query    string // 艺名 / 新主播姓名
+	Enable   bool   // push_toggle 用
+	Group    string // PK 分组名
+	DouyinNo string // add_anchor 用：要绑的抖音号
+	RawText  string
 }
 
 // reAtMention 群消息里 @机器人 的前缀，要整段去掉
@@ -50,6 +52,20 @@ var reGroupIndex = regexp.MustCompile(`第\s*\d+\s*组`)
 // 刻意不含「昨天/今天」和「2026年9月」：前者走日报，后者是月报。
 var reImportDateToken = regexp.MustCompile(
 	`^/?(\d{1,2}[.．]\d{1,3}[日号]?|\d{1,2}月\d{1,3}[日号]?|\d{1,2}[日号]|20\d{2}[年./-]\d{1,2}[月./-]\d{1,2}[日号]?)$`)
+
+// reAddAnchor 「姓名-抖音号」→ 新增主播。姓名不含数字与连字符（防误吞日期），
+// 抖音号是字母数字下划线点（≥4 位）。连字符支持全角、em/en dash 等变体。
+var reAddAnchor = regexp.MustCompile(
+	`^([^\d\-—–－―_]{1,32})\s*[-—–－―]\s*([a-zA-Z0-9._]{4,64})$`)
+
+// ParseAddAnchor 从文本解析「姓名-抖音号」，不匹配返回 nil。
+func ParseAddAnchor(text string) (name, douyinNo string) {
+	m := reAddAnchor.FindStringSubmatch(strings.TrimSpace(text))
+	if m == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(m[1]), strings.TrimSpace(m[2])
+}
 
 // isDayGranularity 三种"天"粒度：完整年月日、月日、仅日。
 func isDayGranularity(t dateparse.SpecType) bool {
@@ -141,6 +157,15 @@ func ParseIntent(raw string, now time.Time) Intent {
 				return intent
 			}
 		}
+	}
+
+	// 「姓名-抖音号」→ 新增主播。放在 import_date 之后（日期无连字符不冲突），
+	// SplitQuery 之前（否则姓名会被当成艺名查询）。
+	if name, douyinNo := ParseAddAnchor(text); name != "" {
+		intent.Kind = IntentAddAnchor
+		intent.Query = name
+		intent.DouyinNo = douyinNo
+		return intent
 	}
 
 	// 报告类：先把「艺名 + 日期」拆开（日期可能在句尾也可能在句中）

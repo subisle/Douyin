@@ -137,8 +137,9 @@ func (m *Manager) handleInboundFile(ctx context.Context, in Inbound, now time.Ti
 	validRows := len(preview.Rows) - preview.Skipped
 	matched := validRows - preview.Unmatched - preview.Duplicate
 	if matched <= 0 {
-		out.Text = fmt.Sprintf("文件已解析，但没有匹配到主播。有效行 %d，未匹配 %d。",
-			validRows, preview.Unmatched)
+		out.Text = fmt.Sprintf(
+			"文件已解析，但没有匹配到主播。有效行 %d，未匹配 %d。\n%s",
+			validRows, preview.Unmatched, addAnchorHint())
 		return out, nil
 	}
 
@@ -205,6 +206,10 @@ func (m *Manager) handleInboundFile(ctx context.Context, in Inbound, now time.Ti
 		fmt.Sprintf("已导入 %s 的%s数据%s：%d 条；未匹配 %d 条，重复行 %d 条，非法行 %d 条。",
 			friendlyDate(date.Format("2006-01-02")), label, sourceHint,
 			affected, preview.Unmatched, preview.Duplicate, preview.Skipped),
+	}
+	// 有未匹配的行：引导用「姓名-抖音号」补录，补完重发文件
+	if preview.Unmatched > 0 {
+		lines = append(lines, addAnchorHint())
 	}
 	if pending != nil {
 		got := map[string]bool{}
@@ -314,6 +319,11 @@ func decodeCSV(data []byte) (string, error) {
 		return "", err
 	}
 	return string(decoded), nil
+}
+
+// addAnchorHint 未匹配时的引导文案。
+func addAnchorHint() string {
+	return "如果想添加主播，请按「姓名-抖音号」的格式发给我（例如：柚子-123456），添加后重发文件即可匹配。"
 }
 
 // friendlyDate 2026-09-11 → 「11号」（当年当月）/「9月11号」/「2026年9月11号」。
