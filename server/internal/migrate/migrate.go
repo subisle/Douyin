@@ -24,7 +24,10 @@ const migrationsDir = "migrations"
 // Run 按文件名顺序执行尚未应用过的迁移。每个文件在自己的事务里跑，
 // 失败则整体回滚并留下版本号为空，下次启动会重试。
 func Run(ctx context.Context, db *sqlx.DB) (applied []string, err error) {
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	// 表名带 server 后缀：Electron 的 migration-runner 也用 schema_migrations，
+	// 但它的表多了 name/checksum 两个 NOT NULL 列，且两边迁移文件完全不同
+	// （JS vs SQL）。共用一张表会互相插坏记录，各记各的账。
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations_server (
 		version    VARCHAR(255) NOT NULL PRIMARY KEY,
 		applied_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
 	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`); err != nil {
@@ -46,7 +49,7 @@ func Run(ctx context.Context, db *sqlx.DB) (applied []string, err error) {
 	for _, name := range names {
 		var count int
 		if err := db.QueryRowxContext(ctx,
-			"SELECT COUNT(*) FROM schema_migrations WHERE version = ?", name,
+			"SELECT COUNT(*) FROM schema_migrations_server WHERE version = ?", name,
 		).Scan(&count); err != nil {
 			return applied, fmt.Errorf("检查迁移状态 %s: %w", name, err)
 		}
@@ -84,7 +87,7 @@ func applyFile(ctx context.Context, db *sqlx.DB, name string, stmts []string) er
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO schema_migrations (version) VALUES (?)", name); err != nil {
+		"INSERT INTO schema_migrations_server (version) VALUES (?)", name); err != nil {
 		return fmt.Errorf("记录迁移版本 %s: %w", name, err)
 	}
 	if err := tx.Commit(); err != nil {

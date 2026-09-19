@@ -115,7 +115,9 @@ func (t *Transport) Start(ctx context.Context) error {
 		t.mu.Unlock()
 		return errors.New("微信未登录：请先扫码连接")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// 同 QQ 通道：不能用 r.Context()，start 接口返回后它会被取消，
+	// 长轮询会静默死亡。
+	runCtx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	t.running = true
 	t.connected = true
@@ -354,6 +356,13 @@ type Detail struct {
 	LastMsg   string    `json:"lastMessage,omitempty"`
 	LastPoll  time.Time `json:"lastPollAt,omitempty"`
 	LoggedIn  bool      `json:"loggedIn"`
+}
+
+// Connected 实时连接状态（是否在长轮询中）。Manager 汇总 /bots/status 用。
+func (t *Transport) Connected() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.phase == PhaseRunning
 }
 
 // Detail 返回当前状态。

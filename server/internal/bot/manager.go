@@ -124,9 +124,10 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 	if err := st.transport.Start(ctx); err != nil {
 		return err
 	}
+	// connected 不在这里标 true：连接是异步建立的（WS 握手/长轮询首轮），
+	// Status() 会实时问通道要，标早了 /status 就说谎。
 	m.mu.Lock()
 	st.running = true
-	st.connected = true
 	st.note = ""
 	m.mu.Unlock()
 	return nil
@@ -153,12 +154,19 @@ func (m *Manager) Stop(name string) error {
 }
 
 // Status 返回所有通道状态。
+//
+// connected 优先问通道本身（WS/长轮询是异步建立的，Start 返回时往往还没连上），
+// 通道没实现 Connected() 的才退回 Start 时的快照。
 func (m *Manager) Status() []ChannelStatus {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]ChannelStatus, 0, len(m.channels))
 	for name, st := range m.channels {
-		out = append(out, ChannelStatus{Name: name, Running: st.running, Connected: st.connected, Note: st.note})
+		connected := st.connected
+		if cc, ok := st.transport.(interface{ Connected() bool }); ok {
+			connected = cc.Connected()
+		}
+		out = append(out, ChannelStatus{Name: name, Running: st.running, Connected: connected, Note: st.note})
 	}
 	return out
 }

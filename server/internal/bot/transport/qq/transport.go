@@ -103,7 +103,9 @@ func (t *Transport) Start(ctx context.Context) error {
 		t.mu.Unlock()
 		return errors.New("请先在设置里填写 QQ 机器人 AppID")
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// 不能用调用方的 ctx：HTTP handler 传进来的是 r.Context()，
+	// start 接口一返回它就被取消，WS 会在后台静默死亡。
+	runCtx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
 	t.running = true
 	t.phase = "connecting"
@@ -360,6 +362,14 @@ type Detail struct {
 	LastText   string `json:"lastMessage,omitempty"`
 	HasCred    bool   `json:"hasCredentials"`
 	Connected  bool   `json:"connected"`
+}
+
+// Connected 实时连接状态。Manager 汇总 /bots/status 时要用这个，
+// 不能用 Start() 返回时的快照——WS 是异步连的，Start 返回 ≠ 已连上。
+func (t *Transport) Connected() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.connected
 }
 
 // Detail 返回当前状态。
