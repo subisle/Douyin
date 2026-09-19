@@ -65,12 +65,14 @@ func (r *Repo) BuildImportPreview(ctx context.Context, rows []csvparse.Row,
 		}
 	}
 	if len(ids) > 0 {
+		// 两个 ? 都要给 sqlx.In：它扫到没有参数可绑的 ? 会报
+		// "number of bindVars exceeds arguments"（bot 导入首跑就栽在这）。
 		query, args, err := sqlxIn(
-			`SELECT anchor_id, wave_value FROM wave_snapshot WHERE anchor_id IN (?) AND biz_date = ?`, ids)
+			`SELECT anchor_id, wave_value FROM wave_snapshot WHERE anchor_id IN (?) AND biz_date = ?`,
+			ids, bizDate)
 		if err != nil {
 			return out, err
 		}
-		args = append(args, bizDate)
 
 		type snap struct {
 			AnchorID  string `db:"anchor_id"`

@@ -15,13 +15,14 @@ func (r *Repo) Ping(ctx context.Context) error {
 }
 
 // sqlxIn 展开 IN (?) 占位符。手写拼接有注入风险，必须用 sqlx.In。
-// 注意：整个 slice 作为**单个**参数传给 sqlx.In，不要展开。
-func sqlxIn(query string, ids []string) (string, []any, error) {
-	q, args, err := sqlx.In(query, ids)
+// 注意：整个 slice 作为**单个**参数传给 sqlx.In，不要展开；
+// 查询里 IN 之外的其他 ? 也要一并传参，sqlx.In 会按顺序绑定。
+func sqlxIn(query string, args ...any) (string, []any, error) {
+	q, a, err := sqlx.In(query, args...)
 	if err != nil {
 		return "", nil, fmt.Errorf("展开 IN 子句: %w", err)
 	}
-	return q, args, nil
+	return q, a, nil
 }
 
 // translateNotFound 把 sql.ErrNoRows 翻译成领域错误，其余原样包装。
