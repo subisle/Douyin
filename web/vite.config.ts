@@ -5,6 +5,8 @@ import { defineConfig } from "vite";
 export default defineConfig({
   server: {
     port: 5173,
+    // host: true 让局域网内的手机也能访问，否则只绑 localhost、手机打不开
+    host: true,
     proxy: {
       "/api": {
         target: process.env.VITE_API_TARGET ?? "http://127.0.0.1:8080",

@@ -7,10 +7,15 @@
   --accent: #2563eb;
   --danger: #dc2626;
   --ok: #15803d;
+  --radius: 10px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -18,8 +23,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-size: 14px;
+  line-height: 1.6;
 }
 
 .layout {
@@ -27,6 +33,8 @@ body {
   margin: 0 auto;
   padding: 20px;
 }
+
+/* ------------------------------ 顶栏 ------------------------------ */
 
 .topbar {
   display: flex;
@@ -37,12 +45,13 @@ body {
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
 }
 
 .brand {
-  font-weight: 700;
+  font-weight: 500;
   font-size: 15px;
+  white-space: nowrap;
 }
 
 .tabs {
@@ -65,13 +74,15 @@ body {
   background: #eff6ff;
   border-color: #bfdbfe;
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 500;
 }
+
+/* ------------------------------ 面板 ------------------------------ */
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 16px;
   margin-top: 16px;
 }
@@ -119,8 +130,18 @@ button.danger {
   border-color: var(--danger);
 }
 
-table {
-  width: 100%;
+/* ------------------------------ 表格 ------------------------------ */
+
+/*
+ * 榜单列多（月榜 9 列），手机上必然放不下。
+ * 用 max-content + 容器滚动，而不是把列挤成一团。
+ */
+.panel table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
 }
 
@@ -135,7 +156,7 @@ td {
 th {
   background: #f1f5f9;
   color: #475569;
-  font-weight: 600;
+  font-weight: 500;
   font-size: 12px;
 }
 
@@ -166,7 +187,7 @@ tr.inactive td:first-child {
   background: #e0f2fe;
   color: #0369a1;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .muted {
@@ -196,8 +217,117 @@ tr.inactive td:first-child {
   gap: 16px;
 }
 
+/* --------------------------- 趋势图容器 --------------------------- */
+
+.chart-wrap {
+  width: 100%;
+  height: 240px;
+}
+
+.chart-wrap svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================== 移动端 ============================== */
+
 @media (max-width: 860px) {
   .grid2 {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .layout {
+    padding: 12px;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  /* 标签横向滚动，避免挤成三行 */
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tab {
+    flex: 0 0 auto;
+    /* 触摸目标至少 40px 高 */
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+
+  .panel {
+    padding: 14px;
+    margin-top: 12px;
+  }
+
+  /*
+   * iOS 上输入框字号小于 16px 会在聚焦时自动放大页面，
+   * 导致布局跳动。移动端统一提到 16px。
+   */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+    padding: 9px 10px;
+  }
+
+  button {
+    padding: 10px 14px;
+  }
+
+  .toolbar > * {
+    flex: 1 1 auto;
+  }
+
+  .toolbar select,
+  .toolbar input {
+    min-width: 0;
+  }
+
+  th,
+  td {
+    padding: 9px 10px;
+  }
+
+  .chart-wrap {
+    height: 200px;
+  }
+
+  /* KPI 两列一列：小屏最多两列，四列会挤到读不清数字 */
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px;
+  }
+
+  .kpi-grid > div {
+    padding: 12px;
+  }
+
+  .kpi-grid p:first-child {
+    font-size: 12px;
+  }
+
+  .kpi-grid p:nth-child(2) {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 380px) {
+  .kpi-grid {
+    grid-template-columns: 1fr !important;
   }
 }

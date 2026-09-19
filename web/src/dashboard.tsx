@@ -72,8 +72,13 @@ function TrendChart({ points }: { points: DayPoint[] }) {
         )}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img"
-           aria-label="近 30 天全团日音浪趋势曲线">
+      <div className="chart-wrap">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="全团日音浪趋势曲线，女队与男团两条线"
+        >
         {ticks.map((t) => (
           <g key={t}>
             <line x1={PAD.left} x2={W - PAD.right} y1={yAt(t)} y2={yAt(t)}
@@ -117,9 +122,11 @@ function TrendChart({ points }: { points: DayPoint[] }) {
             fill="transparent"
             onMouseEnter={() => setHover(i)}
             onMouseLeave={() => setHover(null)}
+            onTouchStart={() => setHover(i)}
           />
         ))}
       </svg>
+      </div>
     </div>
   );
 }
@@ -203,12 +210,15 @@ export function DashboardPage() {
 
       {s && (
         <>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-            gap: 12,
-            marginBottom: 20,
-          }}>
+          <div
+            className="kpi-grid"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: 12,
+              marginBottom: 20,
+            }}
+          >
             <Kpi
               label="今日总音浪"
               value={wan(s.totalWave)}
