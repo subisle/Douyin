@@ -378,3 +378,14 @@ func queryInt(raw string, fallback int) int {
 	}
 	return v
 }
+
+// syncFrom615 POST /api/v1/persons/sync-615 —— 从 615 的 persons/accounts 表全量同步。
+// 幂等，可反复执行；以 615 为准，Go 侧独有字段（分组/头像/状态）保留原值。
+func (s *Server) syncFrom615(w http.ResponseWriter, r *http.Request) {
+	result, err := s.repo.SyncPersonsFrom615(r.Context())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}

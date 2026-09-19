@@ -190,7 +190,7 @@ func ParseIntent(raw string, now time.Time) Intent {
 // 少了这张表，"每日报告"会被解析成查一个叫「每日」的主播。
 var nonNameWords = map[string]bool{
 	"": true, "每日": true, "日": true, "月": true, "年": true, "报告": true,
-	"报": true, // 日期剥落后可能剩单字（"9月11日报"→"报"），不会有人叫这个
+	"报":  true, // 日期剥落后可能剩单字（"9月11日报"→"报"），不会有人叫这个
 	"数据": true, "今日": true, "今天": true, "昨天": true, "昨日": true,
 	"之星": true, "每日之星": true, "的": true, "音浪": true, "时长": true,
 	"分组": true, "组": true, "文件": true,

@@ -242,17 +242,22 @@ func (m *Manager) Handle(ctx context.Context, in Inbound) (Outbound, error) {
 	// 有文件附件：CSV 导入流程优先于文字意图（615 同款顺序）。
 	if len(in.Attachments) > 0 {
 		out, err := m.handleInboundFile(ctx, in, now)
+		intent := "import_csv"
+		if err != nil {
+			// 出错也必须回复：用户发了文件石沉大海比报错更糟。
+			// 细节进日志，回复给一句人话。
+			intent = "import_error"
+			out.Text = "处理失败：" + err.Error()
+		}
 		m.appendLog(LoggedMessage{
 			At: now, Channel: in.Channel, Dir: "in",
-			From: in.SenderID, Text: strings.TrimSpace(in.Text + " [文件]"), Intent: "import_csv",
+			From: in.SenderID, Text: strings.TrimSpace(in.Text + " [文件]"), Intent: intent,
 		})
-		if err == nil {
-			m.appendLog(LoggedMessage{
-				At: time.Now(), Channel: in.Channel, Dir: "out",
-				From: in.ConversationID, Text: out.Text, Intent: "import_csv",
-			})
-		}
-		return out, err
+		m.appendLog(LoggedMessage{
+			At: time.Now(), Channel: in.Channel, Dir: "out",
+			From: in.ConversationID, Text: out.Text, Intent: intent,
+		})
+		return out, nil
 	}
 
 	intent := ParseIntent(in.Text, now)

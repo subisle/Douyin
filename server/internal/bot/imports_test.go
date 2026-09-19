@@ -29,7 +29,7 @@ func TestImportDateIntent(t *testing.T) {
 		{"9月", IntentMonthlyReport, ""},      // 月粒度 → 月报
 		{"2026年9月", IntentMonthlyReport, ""}, // 月粒度 → 月报
 		{"柚子 9月", IntentPersonQuery, ""},     // 艺名优先
-		{"9月11日报", IntentDailyReport, ""},  // 日粒度 + 报告 → 指定日日报
+		{"9月11日报", IntentDailyReport, ""},    // 日粒度 + 报告 → 指定日日报
 	}
 	for _, c := range cases {
 		got := ParseIntent(c.text, now)

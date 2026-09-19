@@ -42,6 +42,7 @@ func New(r *repo.Repo, b *bot.Manager, cfg config.Config, log *slog.Logger) *Ser
 
 	// 615 主播管理里的批量操作：批量删除、合并账号、重复检测、设师傅、改快照
 	s.mux.HandleFunc("POST /api/v1/persons/batch-delete", s.batchDeletePersons)
+	s.mux.HandleFunc("POST /api/v1/persons/sync-615", s.syncFrom615)
 	s.mux.HandleFunc("GET /api/v1/persons/duplicates", s.duplicatePersons)
 	s.mux.HandleFunc("POST /api/v1/persons/merge", s.mergePersons)
 	s.mux.HandleFunc("PATCH /api/v1/persons/{id}/master", s.setMaster)
