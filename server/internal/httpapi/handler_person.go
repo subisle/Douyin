@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"douyin-server/internal/domain"
 	"douyin-server/internal/repo"
@@ -249,6 +250,122 @@ func pathID(w http.ResponseWriter, r *http.Request) (uint64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+/* ------------------------- 615 主播管理的其余操作 ------------------------- */
+
+// batchDeletePersons POST /api/v1/persons/batch-delete
+func (s *Server) batchDeletePersons(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []uint64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "请求体不是合法 JSON")
+		return
+	}
+	if len(req.IDs) == 0 {
+		badRequest(w, "ids 不能为空")
+		return
+	}
+	n, err := s.repo.BatchDeletePersons(r.Context(), req.IDs)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
+// duplicatePersons GET /api/v1/persons/duplicates —— 重复数据检测（按姓名分组）
+func (s *Server) duplicatePersons(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.repo.FindDuplicatePersons(r.Context())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, groups)
+}
+
+// mergePersons POST /api/v1/persons/merge
+func (s *Server) mergePersons(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PrimaryPersonID   uint64 `json:"primaryPersonId"`
+		SecondaryPersonID uint64 `json:"secondaryPersonId"`
+		MergeDuration     bool   `json:"mergeDuration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "请求体不是合法 JSON")
+		return
+	}
+	if req.PrimaryPersonID == 0 || req.SecondaryPersonID == 0 {
+		badRequest(w, "primaryPersonId 与 secondaryPersonId 都不能为空")
+		return
+	}
+	if err := s.repo.MergePersons(r.Context(), req.PrimaryPersonID, req.SecondaryPersonID, req.MergeDuration); err != nil {
+		writeError(w, http.StatusBadRequest, "MERGE_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, nil)
+}
+
+// setMaster PATCH /api/v1/persons/{id}/master —— 传 masterId 为 null 表示清空
+func (s *Server) setMaster(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		MasterID *uint64 `json:"masterId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "请求体不是合法 JSON")
+		return
+	}
+	if err := s.repo.SetMaster(r.Context(), id, req.MasterID); err != nil {
+		if isNotFound(err) {
+			notFound(w, "主播不存在")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "SET_MASTER_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, nil)
+}
+
+// saveSnapshot POST /api/v1/persons/{id}/snapshot —— 手工改某天的音浪/时长
+func (s *Server) saveSnapshot(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Date    string `json:"date"`
+		AnchorID string `json:"anchorId"`
+		Wave    int64  `json:"wave"`
+		Minutes int    `json:"minutes"`
+		Rank    *int   `json:"rank"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		badRequest(w, "请求体不是合法 JSON")
+		return
+	}
+	date, err := time.ParseInLocation(isoDate, req.Date, time.Local)
+	if err != nil {
+		badRequest(w, "date 格式应为 YYYY-MM-DD")
+		return
+	}
+	if req.AnchorID == "" {
+		badRequest(w, "anchorId 不能为空")
+		return
+	}
+	if err := s.repo.SaveDailySnapshot(r.Context(), req.AnchorID, id, date, req.Wave, req.Minutes, req.Rank); err != nil {
+		internalError(w, err)
+		return
+	}
+	if err := s.repo.RecomputePerson(r.Context(), id, date, date); err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, nil)
 }
 
 func queryInt(raw string, fallback int) int {

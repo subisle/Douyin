@@ -38,12 +38,21 @@ func New(r *repo.Repo, cfg config.Config, log *slog.Logger) *Server {
 	s.mux.HandleFunc("GET /api/v1/persons/{id}/accounts", s.listAccounts)
 	s.mux.HandleFunc("POST /api/v1/persons/{id}/accounts", s.bindAccount)
 
+	// 615 主播管理里的批量操作：批量删除、合并账号、重复检测、设师傅、改快照
+	s.mux.HandleFunc("POST /api/v1/persons/batch-delete", s.batchDeletePersons)
+	s.mux.HandleFunc("GET /api/v1/persons/duplicates", s.duplicatePersons)
+	s.mux.HandleFunc("POST /api/v1/persons/merge", s.mergePersons)
+	s.mux.HandleFunc("PATCH /api/v1/persons/{id}/master", s.setMaster)
+	s.mux.HandleFunc("POST /api/v1/persons/{id}/snapshot", s.saveSnapshot)
+
 	s.mux.HandleFunc("GET /api/v1/metrics/dashboard", s.dashboard)
 	s.mux.HandleFunc("GET /api/v1/metrics/daily", s.dailyMetrics)
 	s.mux.HandleFunc("GET /api/v1/metrics/monthly", s.monthlyMetrics)
 	s.mux.HandleFunc("GET /api/v1/metrics/yearly", s.yearlyMetrics)
 
 	s.mux.HandleFunc("POST /api/v1/imports/snapshots", s.importSnapshots)
+	s.mux.HandleFunc("POST /api/v1/imports/preview", s.previewImport)
+	s.mux.HandleFunc("POST /api/v1/imports/csv", s.importCSV)
 	s.mux.HandleFunc("POST /api/v1/imports/recompute", s.recompute)
 
 	return s

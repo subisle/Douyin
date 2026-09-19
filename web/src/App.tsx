@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { DashboardPage } from "./dashboard";
-import { DailyPage, ImportPage, MonthlyPage, PersonsPage, YearlyPage } from "./pages";
+import { ImportPage } from "./importpage";
+import { DailyPage, MonthlyPage, PersonsPage, YearlyPage } from "./pages";
 
 const TABS = [
   { key: "home", label: "首页", Comp: DashboardPage },

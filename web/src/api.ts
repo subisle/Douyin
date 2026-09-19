@@ -125,6 +125,54 @@ export interface Dashboard {
   top: TopRow[];
 }
 
+export interface PreviewRow {
+  status: "new" | "changed" | "unchanged" | "unmatched" | "duplicate" | "skipped";
+  anchorId: string;
+  name: string;
+  personId?: number;
+  current?: number;
+  next: number;
+  rank?: number;
+  err?: string;
+}
+
+export interface ImportPreview {
+  kind: string;
+  rowCount: number;
+  rows: PreviewRow[];
+  newCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  unmatchedCount: number;
+  duplicateCount: number;
+  skippedCount: number;
+}
+
+export interface PreviewResponse {
+  filename: string;
+  date: string;
+  preview: ImportPreview;
+}
+
+// 上传走 FormData，不能套 request()（它强制 application/json，
+// 会让浏览器设不上 multipart boundary）。
+async function upload<T>(path: string, fd: FormData): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { method: "POST", body: fd });
+  } catch {
+    throw new Error("连不上后端，确认 Go 服务已启动（默认 :8080）");
+  }
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: T;
+    error?: { code: string; message: string };
+  };
+  if (!res.ok) {
+    throw new Error(json.error?.message ?? `请求失败（${res.status}）`);
+  }
+  return json.data as T;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -198,6 +246,48 @@ export const api = {
     request<{ persons: number }>("/imports/recompute", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+
+  previewCSV: (file: File, date: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("date", date);
+    return upload<PreviewResponse>("/imports/preview", fd);
+  },
+
+  importCSV: (file: File, date: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("date", date);
+    return upload<{
+      batchId: number;
+      kind: string;
+      imported: number;
+      persons: number;
+      skipped: string[];
+      counts: { new: number; changed: number; unchanged: number; unmatched: number };
+    }>("/imports/csv", fd);
+  },
+
+  batchDeletePersons: (ids: number[]) =>
+    request<{ deleted: number }>("/persons/batch-delete", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
+  duplicatePersons: () =>
+    request<{ name: string; persons: Person[] }[]>("/persons/duplicates"),
+
+  mergePersons: (primaryPersonId: number, secondaryPersonId: number, mergeDuration: boolean) =>
+    request<unknown>("/persons/merge", {
+      method: "POST",
+      body: JSON.stringify({ primaryPersonId, secondaryPersonId, mergeDuration }),
+    }),
+
+  setMaster: (personId: number, masterId: number | null) =>
+    request<unknown>(`/persons/${personId}/master`, {
+      method: "PATCH",
+      body: JSON.stringify({ masterId }),
     }),
 };
 

@@ -3,9 +3,12 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"douyin-server/internal/csvparse"
 	"douyin-server/internal/domain"
 	"douyin-server/internal/repo"
 )
@@ -188,6 +191,153 @@ func (s *Server) recompute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"persons": n})
+}
+
+/* ------------------------------ CSV 导入 ------------------------------ */
+
+// maxUploadBytes 上传大小上限。运营的 CSV 最多几百行，20MB 绰绰有余。
+const maxUploadBytes = 20 << 20
+
+// readCSV 从 multipart 表单里读出文件并解析。
+func readCSV(r *http.Request) (csvparse.Kind, []csvparse.Row, string, error) {
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		return "", nil, "", fmt.Errorf("解析上传表单失败: %w", err)
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		return "", nil, "", fmt.Errorf("读取上传文件失败: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	kind, rows, err := csvparse.Parse(file)
+	if err != nil {
+		return "", nil, "", err
+	}
+	return kind, rows, header.Filename, nil
+}
+
+// previewImport POST /api/v1/imports/preview （multipart: file, date）
+//
+// 只回答"导进去会发生什么"，不写任何数据。覆盖已有数据是危险操作，
+// 必须让人先看清楚新增/覆盖/无变化的分布再点确认。
+func (s *Server) previewImport(w http.ResponseWriter, r *http.Request) {
+	kind, rows, filename, err := readCSV(r)
+	if err != nil {
+		badRequest(w, err.Error())
+		return
+	}
+	if kind == csvparse.KindUnknown {
+		badRequest(w, "看不出这是音浪表还是时长表：表头里没有「音浪」或「时长」字样")
+		return
+	}
+
+	rawDate := strings.TrimSpace(r.FormValue("date"))
+	if rawDate == "" {
+		badRequest(w, "date 不能为空")
+		return
+	}
+	// 时长按月导入（YYYY-MM），音浪按日（YYYY-MM-DD）
+	if kind == csvparse.KindDuration && len(rawDate) == 7 {
+		rawDate += "-01"
+	}
+	date, err := time.ParseInLocation(isoDate, rawDate, time.Local)
+	if err != nil {
+		badRequest(w, "date 格式应为 YYYY-MM-DD（时长表可用 YYYY-MM）")
+		return
+	}
+
+	preview, err := s.repo.BuildImportPreview(r.Context(), rows, kind, date)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"filename": filename,
+		"date":     date.Format(isoDate),
+		"preview":  preview,
+	})
+}
+
+// importCSV POST /api/v1/imports/csv （multipart: file, date）
+func (s *Server) importCSV(w http.ResponseWriter, r *http.Request) {
+	kind, rows, _, err := readCSV(r)
+	if err != nil {
+		badRequest(w, err.Error())
+		return
+	}
+	if kind == csvparse.KindUnknown {
+		badRequest(w, "看不出这是音浪表还是时长表")
+		return
+	}
+
+	rawDate := strings.TrimSpace(r.FormValue("date"))
+	if kind == csvparse.KindDuration && len(rawDate) == 7 {
+		rawDate += "-01"
+	}
+	date, err := time.ParseInLocation(isoDate, rawDate, time.Local)
+	if err != nil {
+		badRequest(w, "date 格式应为 YYYY-MM-DD（时长表可用 YYYY-MM）")
+		return
+	}
+
+	preview, err := s.repo.BuildImportPreview(r.Context(), rows, kind, date)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+
+	batchID, err := s.repo.CreateBatch(r.Context(), date, "csv", "web")
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+
+	var affected int
+	var skipped []string
+	if kind == csvparse.KindDuration {
+		affected, err = s.repo.ApplyDurationImport(r.Context(), preview.Rows, date, batchID)
+	} else {
+		affected, skipped, err = s.repo.ApplyImport(r.Context(), preview.Rows, kind, date, batchID)
+	}
+	if err != nil {
+		_ = s.repo.FinishBatch(r.Context(), batchID, 0, err.Error())
+		internalError(w, err)
+		return
+	}
+
+	// 只重算这一天
+	personIDs := map[uint64]bool{}
+	for _, row := range preview.Rows {
+		if row.PersonID != nil {
+			personIDs[*row.PersonID] = true
+		}
+	}
+	for id := range personIDs {
+		if err := s.repo.RecomputePerson(r.Context(), id, date, date); err != nil {
+			_ = s.repo.FinishBatch(r.Context(), batchID, affected, err.Error())
+			internalError(w, err)
+			return
+		}
+	}
+
+	if err := s.repo.FinishBatch(r.Context(), batchID, affected, ""); err != nil {
+		internalError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"batchId":  batchID,
+		"kind":     kind,
+		"imported": affected,
+		"persons":  len(personIDs),
+		"skipped":  skipped,
+		"counts": map[string]int{
+			"new":       preview.NewCount,
+			"changed":   preview.ChgCount,
+			"unchanged": preview.SameCount,
+			"unmatched": preview.Unmatched,
+		},
+	})
 }
 
 func parseRange(w http.ResponseWriter, rawFrom, rawTo string) (time.Time, time.Time, bool) {
