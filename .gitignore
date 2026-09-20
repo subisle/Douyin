@@ -92,6 +92,11 @@ checkra1n
 chi_sim.traineddata
 *.js.backup
 
+# Compiled binaries (never commit build outputs)
+*.exe
+*.exe~
+server/douyin-server*
+
 # Generated exports (ranking images etc.)
 /data/exports/
 build-certs/
