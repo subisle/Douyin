@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -379,7 +381,9 @@ func queryInt(raw string, fallback int) int {
 	return v
 }
 
-// syncFrom615 POST /api/v1/persons/sync-615 —— 从 615 的 persons/accounts 表全量同步。
+// syncFrom615 POST /api/v1/persons/sync-615 —— 从 615 全量同步：
+// 主播/账号 + 音浪快照 + 时长快照同步是同步返回的；指标重算（100+ 人 ×
+// 逐人多条 SQL，打远端库要好几分钟）丢进后台 goroutine，完成/失败进日志。
 // 幂等，可反复执行；以 615 为准，Go 侧独有字段（分组/头像/状态）保留原值。
 func (s *Server) syncFrom615(w http.ResponseWriter, r *http.Request) {
 	result, err := s.repo.SyncPersonsFrom615(r.Context())
@@ -387,5 +391,36 @@ func (s *Server) syncFrom615(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
+	result.WavesSynced, result.WavesSkipped, err = s.repo.SyncWavesFrom615(r.Context())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	result.DurationsSynced, result.DurationsSkipped, err = s.repo.SyncDurationsFrom615(r.Context())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	ranges, err := s.repo.PersonsToRecompute(r.Context())
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	result.PeopleRecomputed = len(ranges)
+
+	go func() {
+		ctx := context.Background()
+		for i, pr := range ranges {
+			if err := s.repo.RecomputePerson(ctx, pr.ID, pr.From, pr.To); err != nil {
+				slog.Error("615 同步重算失败", "personID", pr.ID, "err", err)
+				return
+			}
+			if (i+1)%20 == 0 {
+				slog.Info("615 重算进度", "done", i+1, "total", len(ranges))
+			}
+		}
+		slog.Info("615 同步重算完成", "people", len(ranges))
+	}()
+
 	writeJSON(w, http.StatusOK, result)
 }

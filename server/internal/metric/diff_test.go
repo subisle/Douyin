@@ -12,61 +12,47 @@ func day(y, m, d int) time.Time {
 }
 
 func TestComputeDaily(t *testing.T) {
+	// 615 语义：快照值即当日值，不做差分。prev 不参与计算。
 	tests := []struct {
-		name         string
-		cur          Point
-		prev         *Point
-		wantWave     int64
-		wantMinutes  int
-		wantReliable bool
-		wantSpan     int
-		wantLive     bool
-		wantAnomaly  bool
+		name        string
+		cur         Point
+		wantWave    int64
+		wantMinutes int
+		wantLive    bool
 	}{
 		{
-			name:     "首条快照没有基线，日音浪记 0 而不是把累计值当单日成绩",
-			cur:      Point{Date: day(2026, 9, 1), Wave: 500000, Minutes: 3000},
-			prev:     nil,
-			wantWave: 0, wantMinutes: 0, wantReliable: true, wantSpan: 1, wantLive: false,
+			name:        "首条快照：当日音浪直接生效",
+			cur:         Point{Date: day(2026, 9, 1), Wave: 500000, Minutes: 3000},
+			wantWave:    500000,
+			wantMinutes: 3000,
+			wantLive:    true,
 		},
 		{
-			name:     "连续两天正常差分",
-			cur:      Point{Date: day(2026, 9, 2), Wave: 12000, Minutes: 480},
-			prev:     &Point{Date: day(2026, 9, 1), Wave: 10000, Minutes: 300},
-			wantWave: 2000, wantMinutes: 180, wantReliable: true, wantSpan: 1, wantLive: true,
+			name:        "连续两天：各取各的日值",
+			cur:         Point{Date: day(2026, 9, 2), Wave: 12000, Minutes: 480},
+			wantWave:    12000,
+			wantMinutes: 480,
+			wantLive:    true,
 		},
 		{
-			name:         "漏采三天：量记下来但标记为不可信",
-			cur:          Point{Date: day(2026, 9, 5), Wave: 10500, Minutes: 700},
-			prev:         &Point{Date: day(2026, 9, 1), Wave: 10000, Minutes: 600},
-			wantWave:     500,
-			wantMinutes:  100,
-			wantReliable: false,
-			wantSpan:     4,
-			wantLive:     true,
+			name:        "数值回退只是数据本身，不报异常不清零",
+			cur:         Point{Date: day(2026, 9, 2), Wave: 8000, Minutes: 300},
+			wantWave:    8000,
+			wantMinutes: 300,
+			wantLive:    true,
 		},
 		{
-			name:         "平台回退：累计值变小，日音浪记 0 并报异常",
-			cur:          Point{Date: day(2026, 9, 2), Wave: 8000, Minutes: 300},
-			prev:         &Point{Date: day(2026, 9, 1), Wave: 10000, Minutes: 300},
-			wantWave:     0,
-			wantMinutes:  0,
-			wantReliable: false,
-			wantSpan:     1,
-			wantLive:     false,
-			wantAnomaly:  true,
-		},
-		{
-			name:     "当天没开播：音浪与时长都没增长",
-			cur:      Point{Date: day(2026, 9, 2), Wave: 10000, Minutes: 300},
-			prev:     &Point{Date: day(2026, 9, 1), Wave: 10000, Minutes: 300},
-			wantWave: 0, wantMinutes: 0, wantReliable: true, wantSpan: 1, wantLive: false,
+			name:        "零值快照：未开播",
+			cur:         Point{Date: day(2026, 9, 2), Wave: 0, Minutes: 0},
+			wantWave:    0,
+			wantMinutes: 0,
+			wantLive:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, anomalies := ComputeDaily(1, "anchor-1", tt.cur, tt.prev)
+			got, anomalies := ComputeDaily(1, "anchor-1", tt.cur, nil)
 
 			if got.Wave != tt.wantWave {
 				t.Errorf("日音浪 = %d, 期望 %d", got.Wave, tt.wantWave)
@@ -74,20 +60,20 @@ func TestComputeDaily(t *testing.T) {
 			if got.Minutes != tt.wantMinutes {
 				t.Errorf("日时长 = %d, 期望 %d", got.Minutes, tt.wantMinutes)
 			}
-			if got.WaveReliable != tt.wantReliable {
-				t.Errorf("wave reliable = %v, 期望 %v", got.WaveReliable, tt.wantReliable)
+			if !got.WaveReliable || !got.MinutesReliable {
+				t.Error("日值语义下永远可信")
 			}
-			if got.WaveSpan != tt.wantSpan {
-				t.Errorf("wave span = %d, 期望 %d", got.WaveSpan, tt.wantSpan)
+			if got.WaveSpan != 1 || got.MinutesSpan != 1 {
+				t.Errorf("span 应为 1, 实得 %d/%d", got.WaveSpan, got.MinutesSpan)
 			}
 			if got.IsLive != tt.wantLive {
 				t.Errorf("is_live = %v, 期望 %v", got.IsLive, tt.wantLive)
 			}
 			if got.CumulativeWave != tt.cur.Wave {
-				t.Errorf("累计音浪应保留快照原值 %d，实得 %d", tt.cur.Wave, got.CumulativeWave)
+				t.Errorf("累计字段应保留快照原值 %d，实得 %d", tt.cur.Wave, got.CumulativeWave)
 			}
-			if (len(anomalies) > 0) != tt.wantAnomaly {
-				t.Errorf("异常数 = %d, wantAnomaly = %v", len(anomalies), tt.wantAnomaly)
+			if len(anomalies) != 0 {
+				t.Errorf("不应有异常, 实得 %d", len(anomalies))
 			}
 		})
 	}

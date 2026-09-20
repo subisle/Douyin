@@ -26,14 +26,19 @@ type Anomaly struct {
 	Detail string
 }
 
-// ComputeDaily 由当天快照与上一次快照算出日指标。
+// ComputeDaily 由快照算出日指标。
 //
-// 差分规则（业务约定，改动前先确认）：
-//   - 首条快照：没有基线可比，日音浪记 0，绝不能把累计值当成单日成绩
-//   - 跨 1 天：正常差分，reliable = true
-//   - 跨 N > 1 天：中间漏采，差值记下来但 reliable = false
-//   - 出现负增量：平台回退或换号，日音浪记 0 并报 anomaly
-func ComputeDaily(personID uint64, anchorID string, cur Point, prev *Point) (domain.DailyMetric, []Anomaly) {
+// 口径（2026-09 实证对齐 615 生产库）：快照值就是**当日值**，不做差分——
+//   - 音浪快照 = 当日音浪。实测 615 的 wave_snapshots 同一账号逐日数值
+//     几百到几万、非单调，是运营 CSV 的日值，不是平台累计值。
+//   - 时长快照 = 当期月度时长（615 每月末一条，月内只有这一行有值）。
+//
+// 日报直接取快照值；月报按日求和（时长一个月只有月末一行，求和即月总量）。
+//
+// 原「累计值差分」设计建立在错误的数据假设上（数据源给的从来是日值），
+// 差分会把正常日值算成负增量→清零，产生海量假异常。彻底废弃。
+// prev 参数保留是为了调用方签名稳定，已不参与计算。
+func ComputeDaily(personID uint64, anchorID string, cur Point, _ *Point) (domain.DailyMetric, []Anomaly) {
 	m := domain.DailyMetric{
 		PersonID:          personID,
 		AnchorID:          anchorID,
@@ -42,64 +47,13 @@ func ComputeDaily(personID uint64, anchorID string, cur Point, prev *Point) (dom
 		CumulativeMinutes: cur.Minutes,
 		WaveSpan:          1,
 		MinutesSpan:       1,
+		Wave:              cur.Wave,
+		Minutes:           cur.Minutes,
 		WaveReliable:      true,
 		MinutesReliable:   true,
+		IsLive:            cur.Wave > 0 || cur.Minutes > 0,
 	}
-
-	if prev == nil {
-		// 首条：没有基线，日增量不可知，但也不算"不可信"——
-		// 只是这一天没有可比的昨天，记为 0 即可。
-		m.Wave = 0
-		m.Minutes = 0
-		m.IsLive = false
-		return m, nil
-	}
-
-	m.PrevSnapshotDate = &prev.Date
-	span := int(cur.Date.Sub(prev.Date).Truncate(time.Hour).Hours() / 24)
-	if span < 1 {
-		span = 1
-	}
-	m.WaveSpan = span
-	m.MinutesSpan = span
-
-	var anomalies []Anomaly
-
-	// 音浪：累计值理论上单调不减，出现负增量一定是数据有问题。
-	delta := cur.Wave - prev.Wave
-	switch {
-	case delta < 0:
-		m.Wave = 0
-		m.WaveReliable = false
-		anomalies = append(anomalies, Anomaly{
-			Kind:   "negative_delta",
-			Detail: "累计音浪回退：" + itoa(prev.Wave) + " -> " + itoa(cur.Wave),
-		})
-	case span > 1:
-		m.Wave = delta
-		m.WaveReliable = false
-	default:
-		m.Wave = delta
-		m.WaveReliable = true
-	}
-
-	// 时长同理，但平台偶尔会修正时长，小幅回退容忍度更高：
-	// 只要不是负数就按差分走，负数同样记 0。
-	deltaMinutes := cur.Minutes - prev.Minutes
-	switch {
-	case deltaMinutes < 0:
-		m.Minutes = 0
-		m.MinutesReliable = false
-	case span > 1:
-		m.Minutes = deltaMinutes
-		m.MinutesReliable = false
-	default:
-		m.Minutes = deltaMinutes
-		m.MinutesReliable = true
-	}
-
-	m.IsLive = m.Minutes > 0 || m.Wave > 0
-	return m, anomalies
+	return m, nil
 }
 
 // AggregateMonthly 由一组日指标汇总出月指标。
