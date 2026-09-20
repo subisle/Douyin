@@ -39,20 +39,32 @@ export function ImportPage() {
   const [done, setDone] = useState("");
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("all");
+  const [dragging, setDragging] = useState(false);
 
-  const runPreview = async () => {
-    if (!file) return;
+  const runPreview = async (f: File | null) => {
+    if (!f) return;
     setBusy(true);
     setErr("");
     setDone("");
     try {
-      setPreview(await api.previewCSV(file, date));
+      setPreview(await api.previewCSV(f, date));
     } catch (e) {
       setErr((e as Error).message);
       setPreview(null);
     } finally {
       setBusy(false);
     }
+  };
+
+  const pickFile = (f: File | null) => {
+    if (f && !/\.(csv|txt)$/i.test(f.name) && f.type !== "text/csv") {
+      setErr("只支持 CSV 文件");
+      return;
+    }
+    setFile(f);
+    setPreview(null);
+    setDone("");
+    if (f) void runPreview(f); // 拖进来/选完就自动解析预览
   };
 
   const commit = async () => {
@@ -89,20 +101,41 @@ export function ImportPage() {
         表头支持「主播id / 抖音号 / anchor_id / uid」等别名，数值支持「12.5万」「2:30:45」「150分钟」。
       </p>
 
-      <div className="toolbar">
+      <div
+        className={`dropzone${dragging ? " active" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          pickFile(e.dataTransfer.files?.[0] ?? null);
+        }}
+        onClick={() => document.getElementById("csv-file-input")?.click()}
+      >
         <input
+          id="csv-file-input"
           type="file"
           accept=".csv,text/csv"
-          onChange={(e) => {
-            setFile(e.target.files?.[0] ?? null);
-            setPreview(null);
-            setDone("");
-          }}
-          style={{ fontSize: 13 }}
+          onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+          style={{ display: "none" }}
         />
+        {file ? (
+          <span>
+            📄 <b>{file.name}</b>（{(file.size / 1024).toFixed(1)} KB）
+            {busy ? " — 解析中…" : preview ? " — 已解析，可直接确认导入" : ""}
+          </span>
+        ) : (
+          <span className="muted">把 CSV 文件拖到这里，或点击选择文件</span>
+        )}
+      </div>
+
+      <div className="toolbar">
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <button onClick={() => void runPreview()} disabled={!file || busy}>
-          解析预览
+        <button onClick={() => void runPreview(file)} disabled={!file || busy}>
+          重新解析
         </button>
         {preview && (
           <button className="ghost" onClick={() => void commit()} disabled={busy}>

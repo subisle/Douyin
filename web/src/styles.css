@@ -202,6 +202,28 @@ tr.inactive td:first-child {
   color: var(--ok);
 }
 
+
+.dropzone {
+  border: 2px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 18px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.dropzone:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.dropzone.active {
+  border-color: var(--accent, #2563eb);
+  background: #eff6ff;
+}
+
 .notice {
   background: #fff7ed;
   border: 1px solid #fed7aa;
