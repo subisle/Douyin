@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# RK3318 盒子用 linux/arm64 镜像 —— GitHub 原生 arm64 runner 构建
+#
+#   触发：推送 3328 分支（忽略纯文档改动）或手动 workflow_dispatch
+#   产物：artifact `douyin-arm64`（docker load 格式的 tar，保留 3 天）
+#
+#   盒子更新流程：
+#     下载 artifact → 上传到盒子 → docker load -i douyin-arm64.tar
+#     → docker tag douyin-data-manager:arm64 ... → up -d --force-recreate
+#
+#   注：仓库为 public，ubuntu-24.04-arm 原生 arm64 runner 免费；
+#       若仓库转 private，把 runs-on 改回 ubuntu-latest 并加
+#       docker/setup-qemu-action@v3（QEMU 模拟，构建慢 5-10 倍）。
+# ---------------------------------------------------------------------------
+
+name: Docker ARM64 (RK3318 box)
+
+on:
+  push:
+    branches:
+      - "3328"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build linux/arm64 image → tar
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          tags: douyin-data-manager:arm64
+          outputs: type=docker,dest=/tmp/douyin-arm64.tar
+          build-args: |
+            BUILD_NODE_OPTIONS=--max-old-space-size=2048
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-arm64
+          path: /tmp/douyin-arm64.tar
+          retention-days: 3
+          compression-level: 0
