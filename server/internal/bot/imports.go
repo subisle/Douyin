@@ -11,14 +11,10 @@ package bot
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +22,7 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"douyin-server/internal/csvparse"
+	"douyin-server/internal/repo"
 )
 
 const maxDownloadBytes = 20 << 20 // 20MB，QQ 附件直链也按这个限
@@ -118,8 +115,8 @@ func (m *Manager) handleInboundFile(ctx context.Context, in Inbound, now time.Ti
 	date, source, pending := m.resolveInboundImportDate(in.ConversationID)
 
 	// 去重：文件 MD5 + 规范化数据 SHA256，与 615 共用 import_records 账本。
-	// 同一文件重复发、或换个文件名但数据一模一样，都拦下。
-	fileHash, dataHash := importHashes(data, rows, kind)
+	// 口径：同一文件/同一内容对**同一日期**只导一次；换个日期再导允许。
+	fileHash, dataHash := repo.ComputeImportHashes(data, rows, kind)
 	if rec, err := m.repo.FindImportRecord(ctx, string(kind), date, fileHash, dataHash); err == nil && rec != nil {
 		out.Text = fmt.Sprintf("这个文件在 %s 已导入过（%s，%d 行），已阻止重复导入。",
 			friendlyDate(date.Format("2006-01-02")),
@@ -245,35 +242,6 @@ func (m *Manager) handleInboundFile(ctx context.Context, in Inbound, now time.Ti
 	}
 	out.Text = strings.Join(lines, "\n")
 	return out, nil
-}
-
-// importHashes 与 615 的 buildImportMeta 对齐：文件 MD5 + 规范化数据 SHA256。
-// 规范化 = 匹配到的行取 {anchorId, value, rank(wave)}，按 anchorId 排序后序列化。
-func importHashes(fileBytes []byte, rows []csvparse.Row, kind csvparse.Kind) (string, string) {
-	fileHash := fmt.Sprintf("%x", md5.Sum(fileBytes))
-
-	type canonicalRow struct {
-		AnchorID string `json:"anchorId"`
-		Value    int64  `json:"value"`
-		Rank     int    `json:"rank"`
-	}
-	canonical := make([]canonicalRow, 0, len(rows))
-	for _, row := range rows {
-		if row.AnchorID == "" || row.Err != "" {
-			continue
-		}
-		item := canonicalRow{AnchorID: row.AnchorID, Value: row.Wave}
-		if kind == csvparse.KindDuration {
-			item.Value = int64(row.Minutes)
-		} else if row.Rank != nil {
-			item.Rank = *row.Rank
-		}
-		canonical = append(canonical, item)
-	}
-	sort.Slice(canonical, func(i, j int) bool { return canonical[i].AnchorID < canonical[j].AnchorID })
-	blob, _ := json.Marshal(canonical)
-	dataHash := fmt.Sprintf("%x", sha256.Sum256(blob))
-	return fileHash, dataHash
 }
 
 // downloadAttachment 下载附件直链。QQ 事件里的 URL 自带 rkey 鉴权参数，

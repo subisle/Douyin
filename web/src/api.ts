@@ -152,6 +152,8 @@ export interface PreviewResponse {
   filename: string;
   date: string;
   preview: ImportPreview;
+  /** 非 null：该文件/同内容在此日期已导入过，导入会被拦截 */
+  duplicate: { import_date: string; file_name: string; row_count: number } | null;
 }
 
 // 上传走 FormData，不能套 request()（它强制 application/json，

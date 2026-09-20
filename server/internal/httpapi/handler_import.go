@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -199,21 +201,23 @@ func (s *Server) recompute(w http.ResponseWriter, r *http.Request) {
 const maxUploadBytes = 20 << 20
 
 // readCSV 从 multipart 表单里读出文件并解析。
-func readCSV(r *http.Request) (csvparse.Kind, []csvparse.Row, string, error) {
+func readCSV(r *http.Request) (csvparse.Kind, []csvparse.Row, string, []byte, error) {
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
-		return "", nil, "", fmt.Errorf("解析上传表单失败: %w", err)
+		return "", nil, "", nil, fmt.Errorf("解析上传表单失败: %w", err)
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		return "", nil, "", fmt.Errorf("读取上传文件失败: %w", err)
+		return "", nil, "", nil, fmt.Errorf("读取上传文件失败: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
-	kind, rows, err := csvparse.Parse(file)
+	// 原始字节留着算 MD5（去重账本用），解析走 tee
+	var buf bytes.Buffer
+	kind, rows, err := csvparse.Parse(io.TeeReader(file, &buf))
 	if err != nil {
-		return "", nil, "", err
+		return "", nil, "", nil, err
 	}
-	return kind, rows, header.Filename, nil
+	return kind, rows, header.Filename, buf.Bytes(), nil
 }
 
 // previewImport POST /api/v1/imports/preview （multipart: file, date）
@@ -221,7 +225,7 @@ func readCSV(r *http.Request) (csvparse.Kind, []csvparse.Row, string, error) {
 // 只回答"导进去会发生什么"，不写任何数据。覆盖已有数据是危险操作，
 // 必须让人先看清楚新增/覆盖/无变化的分布再点确认。
 func (s *Server) previewImport(w http.ResponseWriter, r *http.Request) {
-	kind, rows, filename, err := readCSV(r)
+	kind, rows, filename, raw, err := readCSV(r)
 	if err != nil {
 		badRequest(w, err.Error())
 		return
@@ -251,16 +255,25 @@ func (s *Server) previewImport(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
+
+	// 去重提示：同一文件/同内容在该日期已导入过就提前告诉前端（导入时会硬拦）
+	var duplicate *repo.ImportRecord
+	fileHash, dataHash := repo.ComputeImportHashes(raw, rows, kind)
+	if rec, err := s.repo.FindImportRecord(r.Context(), string(kind), date, fileHash, dataHash); err == nil {
+		duplicate = rec
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"filename": filename,
-		"date":     date.Format(isoDate),
-		"preview":  preview,
+		"filename":  filename,
+		"date":      date.Format(isoDate),
+		"preview":   preview,
+		"duplicate": duplicate,
 	})
 }
 
 // importCSV POST /api/v1/imports/csv （multipart: file, date）
 func (s *Server) importCSV(w http.ResponseWriter, r *http.Request) {
-	kind, rows, _, err := readCSV(r)
+	kind, rows, filename, raw, err := readCSV(r)
 	if err != nil {
 		badRequest(w, err.Error())
 		return
@@ -277,6 +290,20 @@ func (s *Server) importCSV(w http.ResponseWriter, r *http.Request) {
 	date, err := time.ParseInLocation(isoDate, rawDate, time.Local)
 	if err != nil {
 		badRequest(w, "date 格式应为 YYYY-MM-DD（时长表可用 YYYY-MM）")
+		return
+	}
+
+	// 去重（与 bot/615 共用 import_records 账本）：同一文件/同内容对同一日期只导一次，
+	// 换个日期再导同一文件是允许的。
+	fileHash, dataHash := repo.ComputeImportHashes(raw, rows, kind)
+	if rec, err := s.repo.FindImportRecord(r.Context(), string(kind), date, fileHash, dataHash); err == nil && rec != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": map[string]any{
+				"code": "DUPLICATE_IMPORT",
+				"message": fmt.Sprintf("该文件在 %s 已导入过（%d 行），同一日期不允许重复导入。要导入其他日期请修改日期后再传。",
+					rec.ImportAt.Format("2006-01-02"), rec.RowCount),
+			},
+		})
 		return
 	}
 
@@ -323,6 +350,13 @@ func (s *Server) importCSV(w http.ResponseWriter, r *http.Request) {
 	if err := s.repo.FinishBatch(r.Context(), batchID, affected, ""); err != nil {
 		internalError(w, err)
 		return
+	}
+
+	// 记一笔去重账（与 bot/615 共用）。失败不算失败：数据已入库，最多下次再拦一次
+	if err := s.repo.InsertImportRecord(r.Context(), string(kind), date,
+		fileHash, dataHash, filename, affected); err != nil {
+		// 只进日志，不影响响应
+		_ = err
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
